@@ -60,7 +60,11 @@ Crate layout (`crates/golem-p2p/src`):
 | `endpoint` | `Endpoint`, `Builder`, `Connection`, `IncomingStream`, `Event` |
 
 `crates/golem-p2p-cli` is a small CLI (`golem-p2p`) for trying it between two
-machines.
+machines. It is also the per-machine client of the network test harness:
+`probe` measures reachability, path (direct or relay), round-trip times and
+throughput, and `--json` prints machine-readable events
+([cli-events.md](cli-events.md)). It uses only the public library API; there
+is no test-only mode in the library.
 
 ## 3. Identities
 
@@ -355,6 +359,10 @@ peer signed.
 * The endpoint is configured with any number of relays (iroh `RelayMap`).
   iroh's net report picks the home relay with the best latency. The record
   lists the current home relay.
+* **Address discovery.** iroh asks relays for the node's public address over
+  QUIC (QAD), on UDP port 7842 of the relay host unless the relay's
+  `RelayConfig` names another port (`Builder::relay_config`; CLI:
+  `--relay URL,quic=PORT` or `--relay-quic-port`).
 * **Cross-relay reachability.** A dialer connects to the relay listed in the
   peer's record on demand, also if that relay is not in its own relay map.
   Tested: node A homed on relay 1 only, node B on relay 2 only, traffic in both

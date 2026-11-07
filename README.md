@@ -33,8 +33,9 @@ design, the decisions taken, and the open questions.
 
 ```
 crates/golem-p2p       core library
-crates/golem-p2p-cli   `golem-p2p` command line tool (directory, listen, send)
+crates/golem-p2p-cli   `golem-p2p` command line tool (directory, listen, send, probe)
 docs/design.md         design document
+docs/cli-events.md     JSON events of the CLI (`--json`), for test harnesses
 ```
 
 ## Build and test
@@ -63,7 +64,9 @@ What the tests cover:
 | `encryption.rs` | peers offering another ALPN refused in the TLS handshake; a relay (plain HTTP behind a recording TLS-terminating proxy) sees endpoint IDs but neither a plaintext marker nor the Ethereum identities; non-https relay URLs rejected by the builder; a signed record with an `http://` relay refused and never dialed |
 | `crash_restart.rs` (CLI) | real process killed with SIGKILL and restarted with the same identity, homed on an https relay with a self-signed certificate (`--relay-ca`) |
 | `relay_url.rs` (CLI) | `http://` and other non-https relay URLs rejected on the command line |
-| unit tests | yagna/ethsign compatibility vectors, record verification (including https-only relay URLs), record store rules and bounds |
+| `probe.rs` (CLI) | `--json` output of `listen`, `probe` and `send` as child processes: relay-only probe with bulk transfer (every line parses, common fields, summary consistent with the replies, listener saw every request and the bulk bytes over the relay); probe that ends on a direct path with `time_to_direct_ms`; unknown node fails with exit code 1; SIGTERM ends a probe with a summary; `keygen`/`directory` with `--json`, error event and exit code |
+| `relay_quic.rs` (CLI) | the relay's QUIC address discovery port (`--relay-quic-port`, per relay `,quic=PORT`, `off`) reaches iroh: a local relay with QAD on a random port sees QAD connections; invalid ports rejected |
+| unit tests | yagna/ethsign compatibility vectors, record verification (including https-only relay URLs), record store rules and bounds; CLI: argument parsers, timestamps, percentiles |
 
 ## Trying it between two machines
 
@@ -115,6 +118,39 @@ golem-p2p send --key bob.key \
 `--alias-key` adds secondary identities, `--relay-only` disables direct UDP.
 `listen` prints the relays it is homed on in its `READY` line. An empty list
 usually means the relay's certificate is not trusted.
+
+**QUIC address discovery (QAD).** iroh learns its public address from
+relays over QUIC, by default on UDP port 7842 of the relay host. iroh-relay
+serves QAD with `enable_quic_addr_discovery = true`, on `quic_bind_addr` in
+its `[tls]` section. If that is not port 7842, set the port per relay with
+`--relay https://RELAY_IP:3341,quic=PORT`, or for all relays with
+`--relay-quic-port PORT`; `off` disables QAD. A per-relay setting wins.
+
+## Measuring connectivity: `probe` and `--json`
+
+`probe` connects to a node running `listen` and measures for `--duration`
+(default 30 s): one request per `--interval` (default 1 s, size
+`--payload-size`, default 64 bytes), the time to the first reply, whether and
+when the path became direct, and round-trip time percentiles. `--bulk 4M`
+then sends 4 MB in one stream to the listener and reports the throughput.
+The exit code is 0 if at least one request got a correct reply (1 if none, 3
+if only the bulk transfer failed).
+
+```sh
+golem-p2p probe --key bob.key \
+    --relay https://RELAY_IP:3341 --relay-ca relay.crt \
+    --directory http://DIR_HOST:8080/ \
+    --to 0xALICE_NODE_ID --duration 30s --interval 1s --bulk 4M
+```
+
+With the global option `--json` every command prints machine-readable events
+on stdout, one JSON object per line (logs stay on stderr): `ready`, `conn`,
+`path_change`, `home_relay`, `request`, `reply`, `summary`, `error` and more,
+each with a timestamp and the values of `--run-id` and `--node-name`. This is
+how a test harness controller drives the CLI on many machines. The events,
+their fields and the exit codes are described in
+[docs/cli-events.md](docs/cli-events.md). `listen --duration` stops a
+listener on its own, and SIGTERM ends a probe early with a summary.
 
 ## Library example
 
