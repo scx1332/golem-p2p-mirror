@@ -47,7 +47,13 @@ pub async fn check(ep: &Endpoint, args: &NodeArgs) -> Local {
     let tls = Arc::new(tls);
     let relays = args.relay.iter().map(|r| {
         let cfg = r.config(args.relay_quic_port);
-        check_relay(cfg.url.clone(), cfg.quic.map(|q| q.port), tls.clone())
+        let explicit = r.quic.or(args.relay_quic_port).is_some();
+        check_relay(
+            cfg.url.clone(),
+            cfg.quic.map(|q| q.port),
+            explicit,
+            tls.clone(),
+        )
     });
     let dirs = args
         .directory
@@ -203,11 +209,17 @@ fn local_source_ip(dest: SocketAddr) -> Option<IpAddr> {
 }
 
 /// Checks one relay: DNS, TCP, TLS (with the endpoint's trust roots) and
-/// `GET /ping`.
-async fn check_relay(url: RelayUrl, quic_port: Option<u16>, tls: Arc<ClientConfig>) -> RelayCheck {
+/// `GET /ping`. `explicit`: the QAD setting was given, not iroh's default.
+async fn check_relay(
+    url: RelayUrl,
+    quic_port: Option<u16>,
+    explicit: bool,
+    tls: Arc<ClientConfig>,
+) -> RelayCheck {
     let mut c = RelayCheck {
         url: url.to_string(),
         quic_port,
+        quic_port_explicit: explicit,
         ..Default::default()
     };
     let mut stage = "dns";

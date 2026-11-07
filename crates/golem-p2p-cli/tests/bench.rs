@@ -151,6 +151,7 @@ async fn bench_relay_only() {
     assert_eq!(rc["ok"], true, "{rc:#}");
     assert_eq!(rc["http_status"], 200);
     assert_eq!(rc["quic_port"].as_u64(), Some(infra.quic_port as u64));
+    assert_eq!(rc["quic_port_explicit"], true, "{rc:#}");
     assert!(num(rc, "tcp_ms") > 0.0 && num(rc, "tls_ms") > 0.0 && num(rc, "http_ms") > 0.0);
     assert!(rc["dns_ms"].is_null(), "an IP address needs no DNS: {rc:#}");
     assert_eq!(l["directories"][0]["own_record"], "published");

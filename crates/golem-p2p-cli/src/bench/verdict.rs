@@ -74,6 +74,11 @@ struct Facts<'a> {
     /// QAD configured, a relay reachable over HTTPS, a net report, and still
     /// no relay answered over UDP.
     no_udp_answer: bool,
+    /// The QAD ports probed, e.g. `7842` or `7842, 56001`.
+    qad_ports: String,
+    /// Every QAD port was given explicitly; otherwise at least one relay was
+    /// probed on iroh's default port, which it may not serve.
+    qad_ports_explicit: bool,
     hard_nat: bool,
     peer: Option<&'a Peer>,
     direct_seen: bool,
@@ -91,6 +96,15 @@ impl<'a> Facts<'a> {
             && reachable_relays > 0
             && nr.is_some_and(|n| !n.udp_v4 && !n.udp_v6);
         let peer = r.peer.as_ref();
+        let qad = || {
+            local
+                .into_iter()
+                .flat_map(|l| &l.relays)
+                .filter(|x| x.quic_port.is_some())
+        };
+        let mut ports: Vec<u16> = qad().filter_map(|x| x.quic_port).collect();
+        ports.sort_unstable();
+        ports.dedup();
         Self {
             r,
             relay_only_mode,
@@ -98,9 +112,66 @@ impl<'a> Facts<'a> {
             qad_configured,
             reachable_relays,
             no_udp_answer,
+            qad_ports: ports
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            qad_ports_explicit: qad().all(|x| x.quic_port_explicit),
             hard_nat: nr.and_then(|n| n.mapping_varies_by_dest) == Some(true),
             peer,
             direct_seen: peer.is_some_and(|p| p.path.time_to_direct_ms.is_some()),
+        }
+    }
+
+    /// `UDP port 7842, iroh's default` or `UDP port 56001, as configured`.
+    fn qad_port_words(&self) -> String {
+        format!(
+            "UDP port{} {}, {}",
+            if self.qad_ports.contains(',') {
+                "s"
+            } else {
+                ""
+            },
+            self.qad_ports,
+            if self.qad_ports_explicit {
+                "as configured"
+            } else {
+                "iroh's default"
+            }
+        )
+    }
+
+    /// No relay answered over UDP and nothing else showed that UDP works.
+    /// That is what blocked UDP looks like, and also what a relay looks like
+    /// that does not serve QAD on the probed port. With an explicitly given
+    /// port blocked UDP is named first; with iroh's default port both are
+    /// named as equally likely.
+    fn udp_blocked_text(&self) -> String {
+        let seen = format!(
+            "No relay answered QUIC address discovery ({}), although they answer over HTTPS",
+            self.qad_port_words()
+        );
+        let path = if self.peer.is_some_and(|p| p.connect.ok) {
+            ", and no direct path to the peer was found"
+        } else {
+            ""
+        };
+        if self.qad_ports_explicit {
+            format!(
+                "{seen}{path}: outgoing UDP is probably blocked on your network, so all traffic \
+                 goes through a relay; ask your network admin to allow outgoing UDP. (Or the \
+                 relay does not serve address discovery on port {}: check ,quic=PORT.)",
+                self.qad_ports
+            )
+        } else {
+            format!(
+                "{seen}{path}. Either outgoing UDP is blocked on your network (then all traffic \
+                 goes through a relay; ask your network admin to allow outgoing UDP), or the \
+                 relay does not serve address discovery on port {}: if it uses another port, \
+                 add ,quic=PORT to --relay (or use --relay-quic-port).",
+                self.qad_ports
+            )
         }
     }
 
@@ -192,26 +263,16 @@ impl<'a> Facts<'a> {
             if self.direct_seen {
                 hints.push(finding(
                     "qad_failed",
-                    "No relay answered QUIC address discovery, but the direct connection to the \
-                     peer works, so UDP is not blocked. Check the relays' QAD port \
-                     (--relay URL,quic=PORT).",
-                ));
-            } else {
-                let ports: Vec<String> = l
-                    .relays
-                    .iter()
-                    .filter_map(|c| c.quic_port.map(|p| p.to_string()))
-                    .collect();
-                issues.push(finding(
-                    "udp_blocked",
                     format!(
-                        "No relay answered over UDP (QUIC address discovery, UDP port {}), \
-                         although they answer over HTTPS. Outgoing UDP is probably blocked on \
-                         your network, so connections go through a relay. Ask your network \
-                         admin to allow outgoing UDP.",
-                        ports.join(", ")
+                        "No relay answered QUIC address discovery ({}), but the direct \
+                         connection to the peer works, so UDP is not blocked: the relay probably \
+                         does not serve address discovery on that port. Give its port with \
+                         --relay URL,quic=PORT.",
+                        self.qad_port_words()
                     ),
                 ));
+            } else {
+                issues.push(finding("udp_blocked", self.udp_blocked_text()));
             }
         }
         if self.hard_nat {
@@ -425,12 +486,14 @@ impl<'a> Facts<'a> {
             hints.push(finding(
                 "packet_loss",
                 format!(
-                    "{} of the {} packets this node sent while measuring latency were lost \
-                     ({pct:.1}%). The connection was nearly idle then, so the network lost them \
-                     (for example Wi-Fi, a mobile or an overloaded link), not congestion from \
-                     this test. Random loss like this slows every transfer down: about 1% can \
-                     cut the throughput of a connection by ten times or more.",
-                    q.lost_packets, q.sent_packets
+                    "{} of {} packets this node sent while measuring latency {} lost \
+                     ({pct:.1}%). The connection was nearly idle then, so this is loss on the \
+                     network path (for example Wi-Fi, a mobile or an overloaded link), not \
+                     congestion caused by the test. Random loss slows every transfer down: \
+                     about 1% can cut the throughput of a connection by ten times or more.",
+                    q.lost_packets,
+                    q.sent_packets,
+                    if q.lost_packets == 1 { "was" } else { "were" }
                 ),
             ));
         }
@@ -507,6 +570,14 @@ impl<'a> Facts<'a> {
                 ));
             }
         }
+        if !self.direct_seen
+            && !self.relay_only_mode
+            && !self.no_udp_answer
+            && !self.hard_nat
+            && let Some(text) = self.port_changing_nat()
+        {
+            hints.push(finding("hard_nat_likely", text));
+        }
         if !self.direct_seen && !self.relay_only_mode {
             unknowns.push(unknown(
                 "peer_network",
@@ -581,6 +652,7 @@ impl<'a> Facts<'a> {
                     .map(|r| format!(" ({r})"))
                     .unwrap_or_default();
                 let (reason, code) = self.relay_reason();
+                let reason = reason.as_str();
                 covered = code;
                 format!("Connected to {name}, but only through a relay{via}{perf}. {reason}")
             }
@@ -649,43 +721,86 @@ impl<'a> Facts<'a> {
     }
 
     /// Why there was no direct path, and the finding that says the same.
-    fn relay_reason(&self) -> (&'static str, Option<&'static str>) {
+    fn relay_reason(&self) -> (String, Option<&'static str>) {
+        let udp_works = self.nr.is_some_and(|n| n.udp_v4 || n.udp_v6);
         if self.relay_only_mode {
-            ("This run used --relay-only.", None)
+            ("This run used --relay-only.".into(), None)
         } else if self.no_udp_answer {
-            (
-                "UDP seems to be blocked on your network (no relay answered over UDP), so all \
-                 traffic goes through a relay. Ask your network admin to allow outgoing UDP.",
-                Some("udp_blocked"),
-            )
+            (self.udp_blocked_text(), Some("udp_blocked"))
         } else if self.hard_nat {
             (
                 "Your NAT changes ports per destination (hard NAT); direct connections to \
-                 peers behind similar NATs fall back to relays.",
+                 peers behind similar NATs fall back to relays."
+                    .into(),
                 Some("hard_nat"),
             )
+        } else if let Some(text) = self.port_changing_nat() {
+            (text, Some("hard_nat_likely"))
         } else if let Some(n) = self.nr
-            && (n.udp_v4 || n.udp_v6)
+            && udp_works
         {
             if n.mapping_varies_by_dest == Some(false) {
                 (
                     "Your side looks fine (UDP works, your NAT keeps its port mapping), so the \
-                     peer's network probably blocks UDP or uses a hard NAT.",
+                     peer's network probably blocks UDP or uses a hard NAT."
+                        .into(),
+                    None,
+                )
+            } else if n.behind_nat_v4 == Some(false) {
+                (
+                    format!(
+                        "UDP works, and this machine is not behind a NAT{}, so probably the \
+                         peer's network prevents a direct path (it blocks UDP or uses a hard \
+                         NAT), or a firewall in front of this machine drops incoming UDP from \
+                         the peer (bench cannot see firewalls).",
+                        n.public_v4
+                            .as_ref()
+                            .map(|a| format!(" ({a})"))
+                            .unwrap_or_default()
+                    ),
                     None,
                 )
             } else {
                 (
                     "UDP works on your side; the peer's network may block UDP, or one of the \
-                     two NATs prevents hole punching.",
+                     two NATs prevents hole punching."
+                        .into(),
                     None,
                 )
             }
         } else {
             (
-                "Why no direct path was found is unknown (UDP was not measured).",
+                "Why no direct path was found is unknown (UDP was not measured).".into(),
                 None,
             )
         }
+    }
+
+    /// This side is behind a NAT that did not keep the local UDP port, as
+    /// symmetric (hard) NATs do, and that was not confirmed with a second
+    /// relay: the explanation, if so.
+    fn port_changing_nat(&self) -> Option<String> {
+        let n = self.nr?;
+        if !(n.udp_v4 && n.behind_nat_v4 == Some(true) && n.port_preserved_v4 == Some(false))
+            || n.mapping_varies_by_dest.is_some()
+        {
+            return None;
+        }
+        let local = self.r.local.as_ref()?;
+        let port = local
+            .bound_sockets
+            .iter()
+            .filter_map(|a| a.parse::<std::net::SocketAddr>().ok())
+            .find(|a| a.is_ipv4() && a.port() != 0)
+            .map(|a| format!(" (local port {})", a.port()))
+            .unwrap_or_default();
+        Some(format!(
+            "Your NAT gave this node another public UDP port: {}{port}. NATs that do that \
+             usually take a new port for every destination (symmetric or hard NAT), and then \
+             hole punching fails when the peer is behind a NAT too. (Whether the port really \
+             changes per destination needs answers from two relays; one answered.)",
+            n.public_v4.as_deref().unwrap_or("?"),
+        ))
     }
 }
 
@@ -914,8 +1029,12 @@ mod tests {
 
     #[test]
     fn udp_blocked_relay_only() {
+        // QAD port given explicitly (as in campaign 1's UDP-blocked runs
+        // against the real relay, ,quic=56001): blocked UDP comes first.
         let mut l = local();
         l.net_report = Some(NetReport::default());
+        l.relays[0].quic_port = Some(56001);
+        l.relays[0].quic_port_explicit = true;
         let mut r = report(Some(l), Some(peer(false)));
         analyze(&mut r);
         assert_eq!((r.status, r.exit_code), (Status::RelayOnly, 4));
@@ -924,12 +1043,14 @@ mod tests {
             "{}",
             r.verdict
         );
-        assert!(
-            r.verdict.contains("UDP seems to be blocked"),
-            "{}",
-            r.verdict
-        );
-        assert!(r.verdict.contains("allow outgoing UDP"), "{}", r.verdict);
+        for part in [
+            "No relay answered QUIC address discovery (UDP port 56001, as configured)",
+            "no direct path to the peer was found: outgoing UDP is probably blocked",
+            "ask your network admin to allow outgoing UDP",
+            "check ,quic=PORT",
+        ] {
+            assert!(r.verdict.contains(part), "{part}: {}", r.verdict);
+        }
         assert_eq!(codes(&r.issues), ["udp_blocked"]);
         // The verdict says it already; the human report does not repeat it.
         assert_eq!(r.in_verdict, ["udp_blocked"]);
@@ -937,9 +1058,43 @@ mod tests {
         // The same without a peer: degraded, not "relay only".
         let mut l = local();
         l.net_report = Some(NetReport::default());
+        l.relays[0].quic_port_explicit = true;
         let mut r = report(Some(l), None);
         analyze(&mut r);
         assert_eq!((r.status, r.exit_code), (Status::Degraded, 5));
+        assert!(r.issues[0].message.contains("probably blocked"));
+    }
+
+    #[test]
+    fn unanswered_default_qad_port_is_not_called_blocked_udp() {
+        // iroh's default port, no peer: the relay may simply not serve QAD
+        // there (campaign 1: the real relay serves it on 56001 only).
+        let mut l = local();
+        l.net_report = Some(NetReport::default());
+        let mut r = report(Some(l), None);
+        analyze(&mut r);
+        assert_eq!((r.status, r.exit_code), (Status::Degraded, 5));
+        assert_eq!(codes(&r.issues), ["udp_blocked"]);
+        let m = &r.issues[0].message;
+        for part in [
+            "(UDP port 7842, iroh's default)",
+            "Either outgoing UDP is blocked on your network (",
+            "or the relay does not serve address discovery on port 7842",
+            "add ,quic=PORT to --relay",
+        ] {
+            assert!(m.contains(part), "{part}: {m}");
+        }
+        assert!(!m.contains("probably blocked"), "{m}");
+        // With a relay-only peer the verdict says the same.
+        let mut l = local();
+        l.net_report = Some(NetReport::default());
+        let mut r = report(Some(l), Some(peer(false)));
+        analyze(&mut r);
+        assert!(
+            r.verdict.contains("Either outgoing UDP is blocked"),
+            "{}",
+            r.verdict
+        );
     }
 
     #[test]
@@ -950,6 +1105,69 @@ mod tests {
         analyze(&mut r);
         assert_eq!(r.status, Status::Healthy);
         assert_eq!(codes(&r.hints), ["qad_failed"]);
+        assert!(r.hints[0].message.contains("UDP port 7842, iroh's default"));
+        assert!(r.hints[0].message.contains("quic=PORT"));
+    }
+
+    #[test]
+    fn port_changing_nat_named_when_relay_only() {
+        // Campaign 1: symmetric NAT on the bench side, one relay, relay only.
+        let symmetric = || {
+            let mut l = local();
+            l.bound_sockets = vec!["0.0.0.0:55874".into(), "[::]:53375".into()];
+            let n = l.net_report.as_mut().unwrap();
+            n.public_v4 = Some("198.18.12.2:61234".into());
+            n.behind_nat_v4 = Some(true);
+            n.port_preserved_v4 = Some(false);
+            l
+        };
+        let mut r = report(Some(symmetric()), Some(peer(false)));
+        analyze(&mut r);
+        assert_eq!(r.status, Status::RelayOnly);
+        for part in [
+            "another public UDP port: 198.18.12.2:61234 (local port 55874)",
+            "symmetric or hard NAT",
+        ] {
+            assert!(r.verdict.contains(part), "{part}: {}", r.verdict);
+        }
+        assert!(!r.verdict.contains("two NATs"), "{}", r.verdict);
+        assert_eq!(codes(&r.hints), ["hard_nat_likely"]);
+        assert_eq!(r.in_verdict, ["hard_nat_likely"]);
+
+        // Direct anyway (the peer's NAT accepted the new port): no hint.
+        let mut r = report(Some(symmetric()), Some(peer(true)));
+        analyze(&mut r);
+        assert_eq!(r.status, Status::Healthy);
+        assert!(r.hints.is_empty(), "{:?}", r.hints);
+
+        // Measured with two relays: the measured finding, not the guess.
+        let mut l = symmetric();
+        l.net_report.as_mut().unwrap().mapping_varies_by_dest = Some(true);
+        let mut r = report(Some(l), Some(peer(false)));
+        analyze(&mut r);
+        assert_eq!(codes(&r.hints), ["hard_nat"]);
+    }
+
+    #[test]
+    fn no_nat_relay_only_does_not_blame_two_nats() {
+        // Campaign 1: public address behind a stateful firewall (ufw).
+        let mut l = local();
+        let n = l.net_report.as_mut().unwrap();
+        n.public_v4 = Some("65.109.154.126:41000".into());
+        n.behind_nat_v4 = Some(false);
+        n.port_preserved_v4 = Some(true);
+        let mut r = report(Some(l), Some(peer(false)));
+        analyze(&mut r);
+        assert_eq!(r.status, Status::RelayOnly);
+        assert!(!r.verdict.contains("NATs"), "{}", r.verdict);
+        for part in [
+            "this machine is not behind a NAT (65.109.154.126:41000)",
+            "peer's network prevents a direct path",
+            "a firewall in front of this machine",
+        ] {
+            assert!(r.verdict.contains(part), "{part}: {}", r.verdict);
+        }
+        assert!(r.hints.is_empty(), "{:?}", r.hints);
     }
 
     #[test]
@@ -1157,7 +1375,10 @@ mod tests {
         assert_eq!(r.status, Status::Healthy);
         assert_eq!(codes(&r.hints), ["packet_loss"]);
         assert!(
-            r.hints[0].message.contains("1 of the 112 packets"),
+            r.hints[0].message.contains(
+                "1 of 112 packets this node sent while measuring \
+                                         latency was lost (0.9%)"
+            ),
             "{}",
             r.hints[0].message
         );

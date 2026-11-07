@@ -257,7 +257,8 @@ Issue codes: `relay_unreachable`, `no_home_relay`, `directory_unreachable`,
 `identity_in_use`, `record_not_published`, `udp_blocked`, `connect_failed`,
 `requests_failed`, `transfer_refused`, `transfer_failed`, `parallel_failed`,
 `connection_lost`, `direct_path_lost`, `idle_failed`, `relay_fallback_failed`. Hint codes:
-`qad_failed`, `hard_nat`, `no_relays`, `idle_reconnect`, `idle_path_lost`,
+`qad_failed`, `hard_nat`, `hard_nat_likely`, `no_relays`, `idle_reconnect`,
+`idle_path_lost`,
 `packet_loss`, `jitter`, `latency_under_load`, `relay_fallback`. Unknown
 items: `local_network`, `port_mapping`, `udp`, `nat_mapping`, `peer_network`,
 `download_loss`. `port_mapping` is always listed with the local check:
@@ -297,6 +298,7 @@ discovery (QAD) over UDP, and with HTTPS):
 |---|---|---|
 | `url` | string | relay URL |
 | `quic_port` | number or null | configured QAD port; null if off |
+| `quic_port_explicit` | bool | the QAD setting was given (`,quic=` or `--relay-quic-port`); false for iroh's default port 7842 |
 | `ok` | bool | DNS, TCP, TLS (certificate verified with the configured roots) and `GET /ping` all succeeded within 5 s |
 | `addr` | string or null | address connected to |
 | `dns_ms`, `tcp_ms`, `tls_ms`, `http_ms` | number or null | duration of each step (`dns_ms` is null for an IP address) |
@@ -321,6 +323,25 @@ discovery (QAD) over UDP, and with HTTPS):
 `relay_compare`: `skipped` (string or null: why it did not run), `ok`,
 `relay` (the relay URL used), and `connect`, `latency`, `upload`,
 `download`, `quic` as in `peer`.
+
+**UDP and the NAT.** `udp_blocked` (issue): QAD was configured and a relay
+answered over HTTPS, but no relay answered QAD over UDP, and no direct path
+to the peer showed that UDP works. That is what blocked outgoing UDP looks
+like, and also what a relay looks like that does not serve QAD on the probed
+port. If every QAD port was given explicitly (`quic_port_explicit`), the
+message calls UDP probably blocked and mentions the port as the other
+possibility; on iroh's default port it names both as equally likely (the
+code stays `udp_blocked`). `qad_failed` (hint): no QAD answer either, but a
+direct path to the peer worked, so UDP is not blocked and the QAD port is
+probably wrong. `hard_nat` (hint): two relays saw different public ports
+(`mapping_varies_by_dest`). `hard_nat_likely` (hint, also named in the
+verdict): the connection stayed relayed, this side is behind a NAT that did
+not keep the local UDP port (`behind_nat_v4` true, `port_preserved_v4`
+false), and only one relay answered, so the per-destination behaviour could
+not be measured; NATs that change the port usually are symmetric (hard)
+NATs. Without a NAT on this side (`behind_nat_v4` false) a relay-only verdict
+points at the peer's network or a firewall in front of this machine, not at
+"two NATs".
 
 **Packet loss.** The `packet_loss` hint looks at the latency phase only
 (`peer.latency.quic`): it is given when at least 0.5% of the packets this

@@ -160,6 +160,9 @@ pub struct RelayCheck {
     pub url: String,
     /// QUIC address discovery port; null if off.
     pub quic_port: Option<u16>,
+    /// The QAD setting was given (`,quic=` or `--relay-quic-port`); false
+    /// for iroh's default port.
+    pub quic_port_explicit: bool,
     /// DNS, TCP, TLS (certificate verified) and `GET /ping` all succeeded.
     pub ok: bool,
     /// The address connected to.

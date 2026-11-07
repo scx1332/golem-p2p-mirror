@@ -216,11 +216,22 @@ The report ends with a verdict, for example:
 Verdict: RELAY ONLY (exit code 4)
   Connected to 0x1234...abcd, but only through a relay
     (https://relay.example:3341/): 75 ms round trip, 22.0 Mbps up, 20.1 Mbps
-    down. UDP seems to be blocked on your network (no relay answered over UDP),
-    so all traffic goes through a relay. Ask your network admin to allow
-    outgoing UDP.
+    down. No relay answered QUIC address discovery (UDP port 3342, as
+    configured), although they answer over HTTPS, and no direct path to the
+    peer was found: outgoing UDP is probably blocked on your network, so all
+    traffic goes through a relay; ask your network admin to allow outgoing
+    UDP. (Or the relay does not serve address discovery on port 3342: check
+    ,quic=PORT.)
   Not measured: the peer's NAT and firewall cannot be seen from this side
 ```
+
+When no relay answers QUIC address discovery on iroh's default port 7842
+(no `,quic=PORT` given), the verdict names both possibilities: blocked UDP,
+or a relay that serves address discovery on another port. A direct path to
+the peer proves that UDP works (hint `qad_failed`). With one relay the bench
+cannot measure whether the NAT changes the port per destination, but when
+the connection stays relayed and the NAT did not keep the local port, the
+verdict names a likely symmetric (hard) NAT on this side.
 
 Every statement in the verdict is based on something measured in this run;
 `Problem:` lines are what made the result not healthy, `Hint:` lines are
