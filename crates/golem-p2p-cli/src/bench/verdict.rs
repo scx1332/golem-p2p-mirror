@@ -653,7 +653,6 @@ impl<'a> Facts<'a> {
                     .map(|r| format!(" ({r})"))
                     .unwrap_or_default();
                 let (reason, code) = self.relay_reason();
-                let reason = reason.as_str();
                 covered = code;
                 format!("Connected to {name}, but only through a relay{via}{perf}. {reason}")
             }
