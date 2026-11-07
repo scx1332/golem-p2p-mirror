@@ -1,5 +1,10 @@
 # NAT lab: first results
 
+Later: benchmark campaign 1 with `bench --json` (lab matrix, real world with
+QAD on the real relay, relay-only load, startup timings) is in
+[../results/2026-11-07-campaign1/](../results/2026-11-07-campaign1/)
+(`summary.json`, `table.md`, `notes.json`).
+
 Date: 2026-11-07. Code: branch `harness-lab` on top of `always-encrypted`
 (`1fccda6`). The CLI is the one on that commit (no `--json`, no `probe`, no
 relay QAD-port option). iroh 1.4.1; iroh-relay 1.4.1 is the musl release

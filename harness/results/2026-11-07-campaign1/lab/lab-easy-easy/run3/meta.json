@@ -1,0 +1,23 @@
+{
+ "bench_args": "--relay https://198.18.0.1 --directory http://198.18.0.1:8080/ --relay-ca /run/gpl/relay/relay.crt --to 0x68685ae5b75313bbb36c5b27dfdfa4218963f326 --compare-relay",
+ "bencher": "easy2",
+ "bencher_delay": "10ms",
+ "bencher_jitter": null,
+ "bencher_loss": null,
+ "bencher_profile": "easy",
+ "bencher_rate": null,
+ "bencher_udp_timeout": 120,
+ "bencher_uplink": "lab",
+ "deployed": "9c37664-dirty 2026-11-07T18:22:28Z",
+ "listen_args": "--relay https://198.18.0.1 --directory http://198.18.0.1:8080/ --relay-ca /run/gpl/relay/relay.crt ",
+ "listener": "easy1",
+ "listener_delay": "10ms",
+ "listener_jitter": null,
+ "listener_loss": null,
+ "listener_profile": "easy",
+ "listener_rate": null,
+ "listener_udp_timeout": 120,
+ "listener_uplink": "lab",
+ "run": "lab-easy-easy-r3",
+ "to": "0x68685ae5b75313bbb36c5b27dfdfa4218963f326"
+}

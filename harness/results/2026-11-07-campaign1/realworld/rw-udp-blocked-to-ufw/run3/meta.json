@@ -1,0 +1,14 @@
+{
+ "bench_args": "--relay https://213.163.75.157:56000,quic=56001 --directory http://213.163.75.157:56050/ --relay-ca /home/ubuntu/golem-p2p-lab/certs/real-relay.crt --to 0xf48656a4b6b7b5078ddef552a7e9bdab85f26c87 ",
+ "bencher": "real3",
+ "bencher_delay": null,
+ "bencher_jitter": null,
+ "bencher_loss": null,
+ "bencher_profile": "udp-blocked",
+ "bencher_rate": null,
+ "bencher_udp_timeout": 120,
+ "bencher_uplink": "real",
+ "deployed": "9c37664-dirty 2026-11-07T18:22:28Z",
+ "run": "rw-udp-blocked-to-ufw-r3",
+ "to": "0xf48656a4b6b7b5078ddef552a7e9bdab85f26c87"
+}
