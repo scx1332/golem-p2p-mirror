@@ -1,0 +1,230 @@
+//! Connectivity: direct, relayed, multiple relays, relay failure.
+
+mod common;
+
+use std::time::Duration;
+
+use common::*;
+use golem_p2p::{Identities, InMemorySigner, PathKind, TransportMode, iroh::Watcher};
+
+/// Two nodes without relays reach each other over direct UDP.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn direct_connection() {
+    with_timeout(60, async {
+        let net = TestNet::new(0).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let a = net
+            .node(&signer, Identities::new(a_id), NodeOpts::default())
+            .await;
+        let b = net
+            .node(&signer, Identities::new(b_id), NodeOpts::default())
+            .await;
+        spawn_echo(&b);
+        spawn_echo(&a);
+
+        assert!(b.local_record().record().relay_urls.is_empty());
+        assert!(!b.local_record().record().direct_addrs.is_empty());
+
+        let e = echo(&a, b_id, "hello").await.unwrap();
+        assert_eq!(
+            e,
+            Echo {
+                to: b_id,
+                from: a_id,
+                server_endpoint: b.endpoint_id().to_string(),
+                data: "hello".into()
+            }
+        );
+        assert_eq!(path_to(&a, b_id).await, PathKind::Direct);
+
+        // The connection is usable in the other direction too.
+        let e = echo(&b, a_id, "back").await.unwrap();
+        assert_eq!((e.to, e.from, e.data.as_str()), (a_id, b_id, "back"));
+
+        // A larger payload round-trips intact.
+        let big = "x".repeat(300_000);
+        assert_eq!(echo(&a, b_id, &big).await.unwrap().data, big);
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}
+
+/// With UDP disabled on both sides, traffic must go through the relay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn relay_only_connection() {
+    with_timeout(60, async {
+        let net = TestNet::new(1).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let opts = NodeOpts::relays(&[0], TransportMode::RelayOnly);
+        let a = net.node(&signer, Identities::new(a_id), opts.clone()).await;
+        let b = net.node(&signer, Identities::new(b_id), opts).await;
+        spawn_echo(&b);
+
+        let rec = b.local_record();
+        assert_eq!(rec.relay_urls(), vec![net.relays[0].url.clone()]);
+        assert!(rec.record().direct_addrs.is_empty());
+
+        let e = echo(&a, b_id, "via relay").await.unwrap();
+        assert_eq!((e.to, e.from, e.data.as_str()), (b_id, a_id, "via relay"));
+
+        let conn = a.connect(b_id).await.unwrap();
+        assert_eq!(conn.path(), PathKind::Relay);
+        // Every path of the connection is a relay path.
+        let paths = conn.iroh_connection().paths();
+        assert!(
+            paths.iter().all(|p| p.is_relay()),
+            "unexpected non-relay path"
+        );
+        // And it stays relayed after more traffic.
+        for i in 0..5 {
+            let e = echo(&a, b_id, &format!("msg {i}")).await.unwrap();
+            assert_eq!(e.data, format!("msg {i}"));
+        }
+        assert_eq!(conn.path(), PathKind::Relay);
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}
+
+/// Both nodes have UDP and a relay; the connection starts with the signed
+/// relay and direct addresses and ends up on a direct path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn relay_assisted_becomes_direct() {
+    with_timeout(60, async {
+        let net = TestNet::new(1).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let opts = NodeOpts::relays(&[0], TransportMode::DirectAndRelay);
+        let a = net.node(&signer, Identities::new(a_id), opts.clone()).await;
+        let b = net.node(&signer, Identities::new(b_id), opts).await;
+        spawn_echo(&b);
+
+        let rec = b.local_record();
+        assert_eq!(rec.relay_urls(), vec![net.relays[0].url.clone()]);
+        assert!(!rec.record().direct_addrs.is_empty());
+
+        let e = echo(&a, b_id, "hi").await.unwrap();
+        assert_eq!(e.data, "hi");
+        let conn = a.connect(b_id).await.unwrap();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while conn.path() != PathKind::Direct {
+            assert!(tokio::time::Instant::now() < deadline, "no direct path");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(echo(&a, b_id, "direct").await.unwrap().data, "direct");
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}
+
+/// Node A is homed on relay 0 only, node B on relay 1 only. They still reach
+/// each other, in both directions, with discovery through the HTTP directory.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_relays_different_homes() {
+    with_timeout(60, async {
+        let dir = TestDirectory::spawn().await;
+        let net = TestNet::with_discovery(2, std::sync::Arc::new(dir.client())).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let a = net
+            .node(
+                &signer,
+                Identities::new(a_id),
+                NodeOpts::relays(&[0], TransportMode::RelayOnly),
+            )
+            .await;
+        let b = net
+            .node(
+                &signer,
+                Identities::new(b_id),
+                NodeOpts::relays(&[1], TransportMode::RelayOnly),
+            )
+            .await;
+        spawn_echo(&a);
+        spawn_echo(&b);
+
+        assert_eq!(
+            a.local_record().relay_urls(),
+            vec![net.relays[0].url.clone()]
+        );
+        assert_eq!(
+            b.local_record().relay_urls(),
+            vec![net.relays[1].url.clone()]
+        );
+        // The directory holds both records.
+        assert!(dir.store.resolve(&a_id).is_some());
+        assert!(dir.store.resolve(&b_id).is_some());
+
+        let e = echo(&a, b_id, "a->b").await.unwrap();
+        assert_eq!((e.to, e.from, e.data.as_str()), (b_id, a_id, "a->b"));
+        assert_eq!(path_to(&a, b_id).await, PathKind::Relay);
+
+        // B dials A on its own (fresh connection from B's side).
+        for c in b.connections() {
+            c.close();
+        }
+        for c in a.connections() {
+            c.close();
+        }
+        wait_for(10, "connections closed", || {
+            a.connections().is_empty() && b.connections().is_empty()
+        })
+        .await;
+        let e = echo(&b, a_id, "b->a").await.unwrap();
+        assert_eq!((e.to, e.from, e.data.as_str()), (a_id, b_id, "b->a"));
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}
+
+/// Both nodes know two relays. The relay that B is homed on goes down; B moves
+/// to the other relay, republishes, and A reaches B again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn relay_down_other_stays_up() {
+    with_timeout(120, async {
+        let mut net = TestNet::new(2).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let opts = NodeOpts::relays(&[0, 1], TransportMode::RelayOnly);
+        let a = net.node(&signer, Identities::new(a_id), opts.clone()).await;
+        let b = net.node(&signer, Identities::new(b_id), opts).await;
+        spawn_echo(&b);
+
+        assert_eq!(echo(&a, b_id, "before").await.unwrap().data, "before");
+
+        let b_home = b.local_record().relay_urls();
+        assert_eq!(b_home.len(), 1);
+        let dead = net.relays.iter().position(|r| r.url == b_home[0]).unwrap();
+        let alive_url = net.relays[1 - dead].url.clone();
+        net.relays[dead].shutdown().await;
+
+        // B notices, switches home relay and publishes a new record.
+        let mut w = b.iroh().watch_addr();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        while b.local_record().relay_urls() != vec![alive_url.clone()] {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "B did not move to the live relay"
+            );
+            let _ = tokio::time::timeout(Duration::from_millis(500), w.updated()).await;
+        }
+
+        let e = echo_eventually(&a, b_id, "after", 60).await;
+        assert_eq!((e.to, e.from, e.data.as_str()), (b_id, a_id, "after"));
+        assert_eq!(path_to(&a, b_id).await, PathKind::Relay);
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}

@@ -33,4 +33,10 @@ http-directory = ["dep:reqwest"]
 directory-server = ["dep:axum", "tokio/net"]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+iroh-relay = { workspace = true, features = ["server", "test-utils"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+tracing-subscriber.workspace = true
+rustls-pki-types = "1"
+url.workspace = true
+axum = { workspace = true, features = ["tokio", "http1"] }
+golem-p2p = { path = ".", features = ["directory-server"] }
