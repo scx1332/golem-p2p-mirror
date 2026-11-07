@@ -66,7 +66,7 @@ What the tests cover:
 |---|---|
 | `connectivity.rs` | direct connection; relay-only connection (no UDP, path checked); relay-assisted connection becoming direct; two relays with each node homed on a different one (via HTTP directory); a relay going down while another stays up |
 | `identity_changes.rs` | default switch with and without restart; A to B to A with and without restart; alias added and removed at runtime; locked key blocks updates; restart with a persisted endpoint key |
-| `security.rs` | forged record from a directory; stale record replay; record listing an identity that did not sign it; valid record presented over another endpoint's connection (both directions); spoofed stream sender and receiver; new instance superseding a live old connection |
+| `security.rs` | forged record from a directory; stale record replay; record listing an identity that did not sign it; valid record presented over another endpoint's connection (both directions); spoofed stream sender and receiver; new instance superseding a live old connection; duplicate record updates paced |
 | `encryption.rs` | peers offering another ALPN refused in the TLS handshake; a relay (plain HTTP behind a recording TLS-terminating proxy) sees endpoint IDs but neither a plaintext marker nor the Ethereum identities; non-https relay URLs rejected by the builder; a signed record with an `http://` relay refused and never dialed |
 | `crash_restart.rs` (CLI) | real process killed with SIGKILL and restarted with the same identity, homed on an https relay with a self-signed certificate (`--relay-ca`) |
 | `relay_url.rs` (CLI) | `http://` and other non-https relay URLs rejected on the command line |

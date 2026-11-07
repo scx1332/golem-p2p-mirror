@@ -480,7 +480,8 @@ impl Builder {
 /// Maximum number of incoming handshakes in progress at once.
 const MAX_PENDING_HANDSHAKES: usize = 128;
 
-/// Minimum interval between record updates accepted from one connection.
+/// Minimum interval between two record updates processed from one connection
+/// (accepted, stale or duplicate alike).
 const UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 
 struct LocalState {
@@ -1106,11 +1107,21 @@ async fn control_reader(
     mut recv: RecvStream,
     peer_tx: watch::Sender<VerifiedRecord>,
 ) {
+    let mut next_allowed = tokio::time::Instant::now();
     loop {
+        // Every update costs one signature verification per listed identity,
+        // also one that turns out stale or a duplicate, so every update is
+        // paced, not only accepted ones. QUIC flow control turns the pacing
+        // into backpressure on a chatty peer.
+        tokio::select! {
+            _ = inner.cancel.cancelled() => break,
+            _ = tokio::time::sleep_until(next_allowed) => {}
+        }
         let msg = tokio::select! {
             _ = inner.cancel.cancelled() => break,
             m = wire::read_frame::<Control>(&mut recv, MAX_CONTROL_FRAME) => m,
         };
+        next_allowed = tokio::time::Instant::now() + UPDATE_INTERVAL;
         let record = match msg {
             Ok(Control::Update { record }) => record,
             Ok(_) => {
@@ -1158,8 +1169,6 @@ async fn control_reader(
             previous: current,
             current: new,
         });
-        // QUIC flow control turns this into backpressure on a chatty peer.
-        tokio::time::sleep(UPDATE_INTERVAL).await;
     }
 }
 

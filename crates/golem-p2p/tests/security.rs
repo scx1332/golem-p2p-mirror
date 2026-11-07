@@ -477,3 +477,79 @@ async fn new_instance_supersedes_live_old_connection() {
     })
     .await;
 }
+
+/// Record updates are paced per connection, also when they are stale or
+/// duplicates: each one costs a signature verification per listed identity,
+/// so an authenticated peer cannot make us verify records as fast as it can
+/// send them by resending its current record.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn duplicate_record_updates_are_paced() {
+    with_timeout(60, async {
+        let net = TestNet::new(0).await;
+        let signer = InMemorySigner::new();
+        let v = signer.generate();
+        let victim = net.node(&signer, Identities::new(v), direct()).await;
+        let mut events = victim.subscribe();
+
+        let attacker_signer = InMemorySigner::new();
+        let m = attacker_signer.generate();
+        let key = SecretKey::generate();
+        let attacker = raw_endpoint(key.clone()).await;
+        let first = record_for(&attacker_signer, &key, &attacker, &[m]).await;
+        let mut newer = raw_record(&key, &attacker, &[m]);
+        newer.seq = first.seq() + 1;
+        let newer = sign_record(&newer, &key, &attacker_signer).await.unwrap();
+
+        let conn = attacker
+            .connect(victim.local_record().endpoint_addr(), ALPN)
+            .await
+            .unwrap();
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+        send.write_all(&[KIND_CONTROL]).await.unwrap();
+        let hello = Control::Hello {
+            record: first.to_bytes().to_vec(),
+            target: Some(v),
+        };
+        wire::write_frame(&mut send, &hello).await.unwrap();
+        let welcome = wire::read_frame::<Control>(&mut recv, wire::MAX_CONTROL_FRAME)
+            .await
+            .unwrap();
+        assert!(matches!(welcome, Control::Welcome { .. }));
+
+        // The current record again and again, then a newer one.
+        const DUPLICATES: u32 = 20;
+        let start = tokio::time::Instant::now();
+        for _ in 0..DUPLICATES {
+            let dup = Control::Update {
+                record: first.to_bytes().to_vec(),
+            };
+            wire::write_frame(&mut send, &dup).await.unwrap();
+        }
+        let update = Control::Update {
+            record: newer.to_bytes().to_vec(),
+        };
+        wire::write_frame(&mut send, &update).await.unwrap();
+        loop {
+            match events.recv().await.unwrap() {
+                golem_p2p::Event::PeerUpdated { current, .. } if current.seq() == newer.seq() => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let took = start.elapsed();
+        // 100 ms per update: the newer record is processed after the
+        // duplicates, at least 2 s later (unpaced it takes milliseconds).
+        assert!(
+            took >= Duration::from_millis(100 * u64::from(DUPLICATES) * 3 / 4),
+            "{DUPLICATES} duplicate updates were processed in {took:?}"
+        );
+        // The connection stays up: duplicates are not a protocol violation.
+        assert_eq!(victim.connections().len(), 1);
+
+        conn.close(codes::OK, b"");
+        attacker.close().await;
+        victim.close().await;
+    })
+    .await;
+}
