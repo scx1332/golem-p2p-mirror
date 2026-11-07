@@ -256,10 +256,10 @@ sections of phases that did not run.
 Issue codes: `relay_unreachable`, `no_home_relay`, `directory_unreachable`,
 `identity_in_use`, `record_not_published`, `udp_blocked`, `connect_failed`,
 `requests_failed`, `transfer_refused`, `transfer_failed`, `parallel_failed`,
-`connection_lost`, `direct_path_lost`, `idle_failed`, `relay_fallback_failed`. Hint codes:
-`qad_failed`, `hard_nat`, `hard_nat_likely`, `no_relays`, `idle_reconnect`,
-`idle_path_lost`,
-`packet_loss`, `jitter`, `latency_under_load`, `relay_fallback`. Unknown
+`connection_lost`, `direct_path_lost`, `idle_failed`, `relay_fallback_failed`.
+Hint codes: `qad_failed`, `hard_nat`, `hard_nat_likely`, `no_relays`,
+`idle_reconnect`, `idle_path_lost`, `packet_loss`, `jitter`,
+`latency_under_load`, `relay_fallback`. Unknown
 items: `local_network`, `port_mapping`, `udp`, `nat_mapping`, `peer_network`,
 `download_loss`. `port_mapping` is always listed with the local check:
 golem-p2p deliberately does not use port mapping (UPnP, PCP, NAT-PMP), so
