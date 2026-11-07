@@ -1,0 +1,10 @@
+# One node per NAT profile, no link emulation. Used by `lab.sh selftest selftest`.
+# name   profile
+pub      public
+easy     easy
+rc       restricted
+prc      port-restricted
+sym      symmetric
+udpb     udp-blocked
+dbl      double
+cgn      cgnat

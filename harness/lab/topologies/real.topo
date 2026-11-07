@@ -1,0 +1,8 @@
+# Nodes whose traffic leaves through the VM's real uplink (uplink=real), to
+# reach the real relay and nodes on the internet. Every packet then crosses two
+# more NATs after the emulated one: the VM's own masquerade (lab.sh adds it) and
+# the i3D host's masquerade (213.163.75.157). See README.
+real1    easy             uplink=real
+real2    symmetric        uplink=real
+# A lab-internal node too, so the local relay/directory and selftest still work.
+lab1     easy
