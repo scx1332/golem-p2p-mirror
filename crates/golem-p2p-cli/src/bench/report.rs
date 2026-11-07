@@ -219,8 +219,9 @@ pub struct ConnectionLost {
     /// The phase that was running: `latency`, `upload`, `download`,
     /// `concurrency`, `relay_compare` or `idle`.
     pub phase: &'static str,
-    /// `closed_here` (this node closed it: a request got no answer and
-    /// nothing at all arrived from the peer during the request timeout),
+    /// `closed_here` (this node closed it, usually because a request got no
+    /// answer and nothing at all arrived from the peer during the request
+    /// timeout),
     /// `idle_timeout` (nothing arrived from the peer for QUIC's idle
     /// timeout), `closed_by_peer`, `reset` (the peer no longer knew the
     /// connection, e.g. it restarted) or `error`.

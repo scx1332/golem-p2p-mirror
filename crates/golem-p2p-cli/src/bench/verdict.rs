@@ -410,9 +410,9 @@ impl<'a> Facts<'a> {
         {
             let why = match c.cause {
                 "closed_here" => format!(
-                    "a request got no answer, and nothing at all arrived from the peer for {} \
-                     (it may have crashed or hung, or the network path broke), so this node \
-                     closed the connection",
+                    "this node closed it, usually because a request got no answer and nothing \
+                     at all arrived from the peer for {} (it may have crashed or hung, or the \
+                     network path broke)",
                     self.timeout()
                 ),
                 "idle_timeout" => "nothing arrived from the peer for QUIC's idle timeout (it may \
