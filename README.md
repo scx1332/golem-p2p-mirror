@@ -33,7 +33,7 @@ design, the decisions taken, and the open questions.
 
 ```
 crates/golem-p2p       core library
-crates/golem-p2p-cli   `golem-p2p` command line tool (directory, listen, send, probe)
+crates/golem-p2p-cli   `golem-p2p` command line tool (directory, listen, send, probe, bench)
 docs/design.md         design document
 docs/cli-events.md     JSON events of the CLI (`--json`), for test harnesses
 ```
@@ -64,9 +64,10 @@ What the tests cover:
 | `encryption.rs` | peers offering another ALPN refused in the TLS handshake; a relay (plain HTTP behind a recording TLS-terminating proxy) sees endpoint IDs but neither a plaintext marker nor the Ethereum identities; non-https relay URLs rejected by the builder; a signed record with an `http://` relay refused and never dialed |
 | `crash_restart.rs` (CLI) | real process killed with SIGKILL and restarted with the same identity, homed on an https relay with a self-signed certificate (`--relay-ca`) |
 | `relay_url.rs` (CLI) | `http://` and other non-https relay URLs rejected on the command line |
-| `probe.rs` (CLI) | `--json` output of `listen`, `probe` and `send` as child processes: relay-only probe with bulk transfer (every line parses, common fields, summary consistent with the replies, listener saw every request and the bulk bytes over the relay); probe that ends on a direct path with `time_to_direct_ms`; unknown node fails with exit code 1; SIGTERM ends a probe with a summary; `keygen`/`directory` with `--json`, error event and exit code |
+| `probe.rs` (CLI) | `--json` output of `listen`, `probe` and `send` as child processes: relay-only probe with bulk transfer (every line parses, common fields, summary consistent with the replies, listener saw every request and the bulk bytes over the relay); probe that ends on a direct path with `time_to_direct_ms`; unknown node fails with exit code 1; SIGTERM ends a probe with a summary; a bulk upload above the listener's `--max-transfer-size` is refused (exit code 3, cause `refused`), one within it works; `keygen`/`directory` with `--json`, error event and exit code |
 | `relay_quic.rs` (CLI) | the relay's QUIC address discovery port (`--relay-quic-port`, per relay `,quic=PORT`, `off`) reaches iroh: a local relay with QAD on a random port sees QAD connections; invalid ports rejected |
-| unit tests | yagna/ethsign compatibility vectors, record verification (including https-only relay URLs), record store rules and bounds; CLI: argument parsers, timestamps, percentiles |
+| `bench.rs` (CLI) | `bench --json` against a local listener: relay-only (exit code 4, every phase over the relay, transfers capped for the relay, the listener saw the upload and download) and normal (exit code 0, QAD answers, direct path, `--compare-relay` over the relay, `--idle`); the listener's limits (too large and busy refused cleanly with exit code 5, exactly the limit works); local check only, healthy and with an untrusted relay certificate; unknown node (exit code 3); SIGTERM ends a bench with a report; invalid arguments |
+| unit tests | yagna/ethsign compatibility vectors, record verification (including https-only relay URLs), record store rules and bounds; CLI: argument parsers, timestamps, percentiles, jitter, refusals, the bench verdict rules |
 
 ## Trying it between two machines
 
@@ -115,6 +116,8 @@ golem-p2p send --key bob.key \
 
 `send` prints each reply, the round-trip time and whether the path is
 `direct` or `relay`. Repeat `--relay` and `--directory` to use several.
+`send`, `probe` and `bench` work without `--key`: they then use a temporary
+identity that is not saved. `listen` needs `--key`.
 `--alias-key` adds secondary identities, `--relay-only` disables direct UDP.
 `listen` prints the relays it is homed on in its `READY` line. An empty list
 usually means the relay's certificate is not trusted.
@@ -143,6 +146,8 @@ golem-p2p probe --key bob.key \
     --to 0xALICE_NODE_ID --duration 30s --interval 1s --bulk 4M
 ```
 
+`--bulk` uploads are bounded by the listener's limits (below).
+
 With the global option `--json` every command prints machine-readable events
 on stdout, one JSON object per line (logs stay on stderr): `ready`, `conn`,
 `path_change`, `home_relay`, `request`, `reply`, `summary`, `error` and more,
@@ -151,6 +156,84 @@ how a test harness controller drives the CLI on many machines. The events,
 their fields and the exit codes are described in
 [docs/cli-events.md](docs/cli-events.md). `listen --duration` stops a
 listener on its own, and SIGTERM ends a probe early with a summary.
+
+## Diagnosing connectivity: `bench`
+
+`bench` is one command for users who are not networking experts: it measures
+as much as it can and explains the result in plain words. It needs no key
+file (it uses a temporary identity).
+
+```sh
+# Only the local network: relays, directories, UDP, public address, NAT.
+golem-p2p bench --relay https://RELAY_IP:3341 --relay-ca relay.crt \
+    --directory http://DIR_HOST:8080/
+
+# Also the connection to a node that runs `listen`:
+golem-p2p bench --relay https://RELAY_IP:3341 --relay-ca relay.crt \
+    --directory http://DIR_HOST:8080/ --to 0xALICE_NODE_ID --compare-relay
+```
+
+**Local network check** (no peer needed; `--skip local` leaves it out):
+
+* every relay: DNS, TCP, TLS with the configured trust roots, and
+  `GET /ping`, each timed; an untrusted (self-signed) certificate is named as
+  such;
+* every directory: whether it answers, and whether this node's record was
+  published to it;
+* from iroh's net report: whether UDP works (a relay answered QUIC address
+  discovery over IPv4/IPv6), the public address the relays saw, whether it is
+  behind NAT and the NAT kept the port, whether the public address differs
+  per relay (hard NAT; needs answers from two relays), latency per relay, the
+  preferred relay; and the home relay and the node's direct addresses.
+
+**Peer benchmark** (`--to NODE_ID`), each phase bounded by size and time:
+connect (directory lookup and handshake times, first path); latency (one
+request per 200 ms for 10 s: round-trip min/median/p95/max, jitter, failures,
+path over time, time until direct, fraction direct, path changes); upload and
+download (10 MB each or 8 s); concurrency (8 streams of 256 KiB requests, 8 MB,
+plus the round trip of small requests meanwhile); with `--compare-relay` the
+same over a relay-only connection, i.e. what you get if hole punching fails;
+with `--idle 60s` whether the connection survives a minute without traffic.
+QUIC packet loss of the connection is reported too. Transfers through a relay
+are capped at `--relay-transfer-size` (4 MB) to spare shared relays. With the
+defaults a run moves at most about 36 MB (44 MB with `--compare-relay`) and
+takes about 30 to 60 s. See `golem-p2p bench --help` for all options.
+
+The report ends with a verdict, for example:
+
+```
+Verdict: RELAY ONLY (exit code 4)
+  Connected to 0x1234...abcd, but only through a relay
+    (https://relay.example:3341/): 75 ms round trip, 22.0 Mbps up, 20.1 Mbps
+    down. UDP seems to be blocked on your network (no relay answered over UDP),
+    so all traffic goes through a relay. Ask your network admin to allow
+    outgoing UDP.
+  Not measured: the peer's NAT and firewall cannot be seen from this side
+```
+
+Every statement in the verdict is based on something measured in this run;
+`Problem:` lines are what made the result not healthy, `Hint:` lines are
+observations with advice, and `Not measured:` lines say what is unknown.
+
+Exit codes: 0 healthy, 1 setup failed, 2 invalid arguments, 3 could not
+connect to the node, 4 connected only through a relay, 5 degraded (problems
+found). With `--json` the last line is a `bench_report` event with every
+measurement, the verdict, the issues, hints and what could not be measured
+([docs/cli-events.md](docs/cli-events.md)).
+
+What `bench` cannot tell: whether the router supports UPnP, PCP or NAT-PMP
+(iroh's port mapper is not part of this build, see the design document), the
+NAT behaviour with only one relay, packet loss towards this node, and anything
+about the peer's NAT or firewall.
+
+**Running a bench node.** A public `listen` node bounds what it serves:
+uploads and downloads of at most `--max-transfer-size` (default 100 MB) each,
+`--max-transfers` (8) at once over all peers, `--max-transfer-time` (120 s)
+each; beyond that they are refused with a reason the client reports. Echo
+requests are limited to 1 MiB. There is no per-peer rate limit yet. Use a key
+for the bench node that no other process uses, so its record stays the one in
+the directory (the same applies to `probe --key` and `bench --key`: another
+process with the same key publishes a newer record for that identity).
 
 ## Library example
 

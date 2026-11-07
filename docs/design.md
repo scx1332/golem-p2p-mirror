@@ -63,7 +63,11 @@ Crate layout (`crates/golem-p2p/src`):
 machines. It is also the per-machine client of the network test harness:
 `probe` measures reachability, path (direct or relay), round-trip times and
 throughput, and `--json` prints machine-readable events
-([cli-events.md](cli-events.md)). It uses only the public library API; there
+([cli-events.md](cli-events.md)). `bench` is the diagnostic for users: it
+checks the local network (relays, directories, and iroh's net report: UDP,
+public address, NAT) and benchmarks the connection to a `listen` node, then
+explains the result in plain words. It uses only the public library API (and
+iroh's `unstable-net-report` API, with iroh pinned to an exact version); there
 is no test-only mode in the library.
 
 ## 3. Identities
@@ -490,6 +494,11 @@ GSB integration itself is out of scope for this seed.
 * Explicit "withdraw" records for identities removed while offline.
 * Address filtering before publishing (private LAN addresses are published).
 * A loader for yagna's encrypted key files in the CLI (it reads raw hex keys).
+* Port mapping (UPnP, PCP, NAT-PMP). The workspace builds iroh without its
+  `portmapper` feature, so `Builder::portmapper(true)` (the default) and the
+  CLI's `--no-portmapper` have no effect: no port is ever mapped. Enabling the
+  feature adds the `portmapper` crate and its UPnP/SSDP discovery; `bench`
+  reports port mapping as not available until then.
 
 ## 15. Open questions for the owner
 

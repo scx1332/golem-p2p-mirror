@@ -15,6 +15,9 @@ golem-p2p --json --run-id r42 --node-name alice listen --key a.key \
 golem-p2p --json --run-id r42 --node-name bob probe --key b.key \
     --directory http://dir:8080/ --relay https://relay:56000,quic=56001 --relay-ca relay.crt \
     --to 0xALICE --duration 30s --interval 1s --bulk 4M
+golem-p2p --json --run-id r42 --node-name carol bench \
+    --directory http://dir:8080/ --relay https://relay:56000,quic=56001 --relay-ca relay.crt \
+    --to 0xALICE --compare-relay
 ```
 
 Event names and field names are stable. New fields may be added; consumers
@@ -40,9 +43,10 @@ connection).
 
 ## Ordering
 
-* `listen`, `send`, `probe`: `ready` is always the first line.
-* `send`, `probe`: `summary` is always the last line. Nothing is printed after
-  it, not even events of connections closing at shutdown.
+* `listen`, `send`, `probe`, `bench`: `ready` is always the first line.
+* `send`, `probe`: `summary` is always the last line; `bench`: `bench_report`
+  is always the last line. Nothing is printed after it, not even events of
+  connections closing at shutdown.
 * Everything in between comes from concurrent tasks; order the lines by `ts`
   when exact ordering matters. For example a `conn` event may follow the first
   `reply` of the request that opened the connection.
@@ -127,16 +131,18 @@ A connection closed.
 
 ### `request` (listen)
 
-`listen` answered a request.
+`listen` answered a request, or served (or refused) an upload or download.
 
 | field | type | meaning |
 |---|---|---|
 | `from` | string | sending identity (verified) |
 | `to` | string | our identity it was addressed to |
 | `path` | string | path of the connection when the request was read |
-| `bytes` | number | request size (for `sink`: bytes received after the header) |
-| `kind` | string | `echo` (normal request) or `sink` (bulk transfer of `probe --bulk`) |
-| `ms` | number | `sink` only: time from stream start to the last byte |
+| `bytes` | number | `echo`: request size; `sink`: bytes received after the header; `source`: bytes sent after the status line |
+| `kind` | string | `echo` (normal request), `sink` (upload of `probe --bulk` and `bench`) or `source` (download of `bench`) |
+| `ms` | number | `sink`, `source` only: time from stream start to the last byte |
+| `requested` | number or null | `source` only: bytes asked for (null if the request was malformed) |
+| `refused` | string or null | `sink`, `source` only: the limit that refused or cut the transfer: `too_large`, `busy`, `timeout`, `bad_request`; null if served. A `source` with `bytes` below `requested` and no refusal was stopped early by the downloader |
 
 ### `reply` (send, probe)
 
@@ -144,7 +150,8 @@ One request/reply.
 
 | field | type | meaning |
 |---|---|---|
-| `seq` | number | 1, 2, ... |
+| `phase` | string | `bench` only, first after the common fields: `latency`, `relay_latency` (`--compare-relay`) or `idle` |
+| `seq` | number | 1, 2, ... (per phase) |
 | `to` | string | target node ID |
 | `bytes` | number | request size |
 | `path` | string | path of the connection to `to` after the request |
@@ -168,6 +175,7 @@ One request/reply.
 | `direct_fraction` | number or null | fraction of correct replies whose `path` was `direct`; null if `ok` is 0 |
 | `rtt_ms` | object | `min`, `p50`, `p95`, `max`, `mean` of `rtt_ms` over correct replies with `new_conn` false (nearest-rank percentiles); each null without samples |
 | `rtt_samples` | number | number of replies in `rtt_ms` |
+| `jitter_ms` | number or null | mean absolute difference between consecutive `rtt_ms` samples; null with fewer than two |
 | `final_path` | string | path of the connection to the peer at the end; `unknown` without a connection |
 | `payload_size` | number | request size |
 | `interrupted` | bool | ended early by SIGINT/SIGTERM |
@@ -186,7 +194,7 @@ Something failed that is not a `reply`.
 | `kind` | string | error kind, see below |
 | `message` | string | human-readable message with causes |
 | `peer` | string | `listen` request errors only: the sender |
-| `cause` | string | `bulk` only: the kind of the underlying error |
+| `cause` | string | `bulk` only: the kind of the underlying error (`refused` if a listener limit refused it) |
 
 Where errors appear: a command that fails before `ready` prints only `error`
 and exits with 1; `listen` prints `error` for a request it could not read or
@@ -197,11 +205,119 @@ not `error` events. `send` stops at the first failed request: it prints that
 `reply`, the `summary`, and exits with 1.
 
 Error kinds: `fatal` (setup: arguments, files), `request` (listen: stream
-error), `bulk`, `lagged` (the CLI missed endpoint events; connections are
-rescanned), and the library error kinds: `not_found` (no record for the node
+error), `bulk`, `refused` (a listener limit refused an upload or download),
+`lagged` (the CLI missed endpoint events; connections are rescanned), and the
+library error kinds: `not_found` (no record for the node
 ID in any directory), `timeout`, `connect`, `connection`, `handshake`,
 `rejected`, `stream_rejected`, `not_peer_identity`, `identity`, `record`,
 `discovery`, `bind`, `config`, `protocol`, `too_large`, `closed`.
+
+### `bench_phase` (bench)
+
+A phase of `bench` finished. Phases run in this order; skipped ones
+(`--skip`, no `--to`, no `--compare-relay`, no `--idle`) print nothing:
+`local`, `connect`, `latency`, `upload`, `download`, `concurrency`,
+`relay_compare`, `idle`.
+
+| field | type | meaning |
+|---|---|---|
+| `phase` | string | phase name |
+| `ok` | bool | the phase succeeded (`local`: every relay and directory check passed; `latency`: no failed request) |
+| `duration_ms` | number | duration of the phase |
+| `result` | object | the phase's section of `bench_report`: `local`, `peer.connect`, `peer.latency`, `peer.upload`, `peer.download`, `peer.concurrency`, `relay_compare`, `peer.idle` |
+
+### `bench_report` (bench)
+
+The complete result, always the last line (also after SIGINT/SIGTERM, then
+with `interrupted: true`). Units are part of the field names (`_ms`, `_bytes`,
+`_mbps`, `_pct`); values that were not measured are null, and so are the
+sections of phases that did not run.
+
+| field | type | meaning |
+|---|---|---|
+| `status` | string | `healthy`, `no_connection`, `relay_only` or `degraded`, see exit codes |
+| `exit_code` | number | the process exit code |
+| `verdict` | string | one or two sentences in plain language |
+| `issues` | [{`code`, `message`}] | problems; any issue makes a run `degraded` (unless it is `no_connection` or `relay_only` already) |
+| `hints` | [{`code`, `message`}] | observations with advice that do not change the status |
+| `unknowns` | [{`item`, `reason`}] | what could not be determined, and why |
+| `node_id`, `endpoint_id` | string | this node |
+| `temporary_identity` | bool | no `--key`: a temporary identity was used |
+| `transport` | string | as in `ready` |
+| `to` | string or null | the peer (`--to`) |
+| `duration_ms` | number | the whole run |
+| `interrupted` | bool | ended early by SIGINT/SIGTERM |
+| `settings` | object | effective parameters: `timeout_ms`, `latency_duration_ms`, `interval_ms`, `payload_bytes`, `transfer_bytes`, `transfer_time_ms`, `relay_transfer_bytes`, `streams`, `concurrency_bytes`, `concurrency_request_bytes`, `compare_relay`, `idle_ms`, `skip` |
+| `local` | object or null | part A, below; null with `--skip local` |
+| `peer` | object or null | part B, below; null without `--to` |
+| `relay_compare` | object or null | below; null without `--compare-relay` |
+
+Issue codes: `relay_unreachable`, `no_home_relay`, `directory_unreachable`,
+`identity_in_use`, `record_not_published`, `udp_blocked`, `connect_failed`,
+`requests_failed`, `transfer_refused`, `transfer_failed`, `parallel_failed`,
+`direct_path_lost`, `idle_failed`, `relay_fallback_failed`. Hint codes:
+`qad_failed`, `hard_nat`, `no_relays`, `idle_reconnect`, `idle_path_lost`,
+`packet_loss`, `jitter`, `latency_under_load`, `relay_fallback`. Unknown
+items: `local_network`, `port_mapping`, `udp`, `nat_mapping`, `peer_network`,
+`download_loss`.
+
+`local`:
+
+| field | type | meaning |
+|---|---|---|
+| `duration_ms` | number | duration of the check |
+| `bound_sockets` | [string] | local UDP sockets of the endpoint |
+| `direct_addrs` | [string] | direct addresses (local interfaces and the public address from QAD) |
+| `home_relay` | {`url`, `connected`, `error`} or null | null without relays |
+| `net_report` | object or null | iroh's net report, below; null without relays, with `--relay-only`, or if none finished within 6 s |
+| `port_mapping` | {`available`, `enabled`, `mapped`} | `available`: this build has a port mapper (currently false); `enabled`: no `--no-portmapper`; `mapped`: a UPnP/PCP/NAT-PMP mapping was obtained |
+| `relays` | [object] | one check per configured relay, below |
+| `directories` | [{`url`, `ok`, `lookup_ms`, `own_record`, `error`}] | lookup of our own node ID; `own_record`: `published` (our endpoint), `missing`, `other_endpoint` (another process published a newer record for this identity) |
+| `record_published` | bool or null | our record is in at least one directory; false if in none of those that answered; null if none answered |
+
+`local.net_report` (iroh's net report probes the relays with QUIC address
+discovery (QAD) over UDP, and with HTTPS):
+
+| field | type | meaning |
+|---|---|---|
+| `udp_v4`, `udp_v6` | bool | a relay answered QAD over IPv4 / IPv6 |
+| `public_v4`, `public_v6` | string or null | our address (`ip:port`) as the relays saw it |
+| `behind_nat_v4` | bool or null | the public IPv4 address is not the local source address towards it |
+| `port_preserved_v4` | bool or null | the public port equals the local UDP port |
+| `mapping_varies_by_dest` | bool or null | different relays saw different public addresses (hard NAT); null unless at least two relays answered over the same IP version |
+| `qad_relays_v4`, `qad_relays_v6` | number | relays that answered QAD |
+| `preferred_relay` | string or null | the relay with the lowest latency |
+| `captive_portal` | bool or null | iroh's captive portal check (plain HTTP to port 80 of a relay host). Only meaningful if the relay host serves port 80; not used for the verdict |
+
+`local.relays[]`:
+
+| field | type | meaning |
+|---|---|---|
+| `url` | string | relay URL |
+| `quic_port` | number or null | configured QAD port; null if off |
+| `ok` | bool | DNS, TCP, TLS (certificate verified with the configured roots) and `GET /ping` all succeeded within 5 s |
+| `addr` | string or null | address connected to |
+| `dns_ms`, `tcp_ms`, `tls_ms`, `http_ms` | number or null | duration of each step (`dns_ms` is null for an IP address) |
+| `http_status` | number or null | status of `GET /ping` |
+| `https_latency_ms`, `qad_v4_ms`, `qad_v6_ms` | number or null | from the net report: HTTPS probe and QAD round trips; null without an answer |
+| `error_kind` | string or null | `dns`, `tcp`, `tls_untrusted` (unknown issuer, e.g. self-signed without `--relay-ca`), `tls_certificate` (expired, wrong name, ...), `tls`, `http`, `timeout` |
+| `error` | string or null | message |
+
+`peer`:
+
+| field | type | meaning |
+|---|---|---|
+| `connect` | object | `ok`, `lookup_ms` (directory lookup), `connect_ms` (lookup and both handshakes), `handshake_ms` (`connect_ms - lookup_ms`), `path` and `remote_addr` right after connecting, `peer_endpoint`, `error_kind`, `error` |
+| `latency` | object or null | `duration_ms`, `sent`, `ok`, `failed`, `failed_pct`, `rtt_ms` {`min`, `p50`, `p95`, `max`, `mean`}, `rtt_samples`, `jitter_ms`, `direct_fraction`, `final_path` (as in `summary`) |
+| `upload`, `download` | object or null | `ok`, `requested_bytes` (after the relay cap), `relay_capped`, `bytes`, `duration_ms`, `throughput_mbps`, `path` (at the end), `limited_by` (`size` or `time`), `error_kind` (`refused` for a listener limit), `error` |
+| `concurrency` | object or null | `ok`, `streams`, `request_bytes`, `requests` (correct replies), `failed`, `total_bytes` (payload, each way), `duration_ms`, `throughput_mbps` (payload, each way), `rtt_ms` (of these requests), `loaded_rtt_ms` and `loaded_samples` (small requests sent meanwhile), `error_kind`, `error` |
+| `idle` | object or null | `idle_ms`, `ok` (a request succeeded afterwards), `survived` (the same connection was still open), `path_before`, `path_after`, `attempts` (at most 3), `recovery_ms` (first request to first reply), `rtt_ms`, `error` |
+| `path` | object | `time_to_direct_ms` (from the start of connecting), `changes`, `final_path`, `final_remote_addr`, `timeline` [{`t_ms`, `path`, `remote_addr`}] (at most 64 entries) |
+| `quic` | object or null | QUIC counters of the connection since connecting: `sent_packets`, `lost_packets` (sent by us and declared lost), `lost_pct`, `sent_bytes`, `received_bytes` (UDP payload bytes) |
+
+`relay_compare`: `skipped` (string or null: why it did not run), `ok`,
+`relay` (the relay URL used), and `connect`, `latency`, `upload`,
+`download`, `quic` as in `peer`.
 
 ### `keygen`, `directory`
 
@@ -210,15 +326,21 @@ ID in any directory), `timeout`, `connect`, `connection`, `handshake`,
 
 ## Exit codes
 
-| code | `probe` | other commands |
-|---|---|---|
-| 0 | at least one correct reply, and the bulk transfer (if requested) succeeded | success |
-| 1 | no correct reply, or setup failed | failure |
-| 2 | invalid arguments (from the argument parser, before any event) | same |
-| 3 | correct replies, but the bulk transfer failed | - |
+| code | `probe` | `bench` | other commands |
+|---|---|---|---|
+| 0 | at least one correct reply, and the bulk transfer (if requested) succeeded | `healthy`: no issue found (with `--to`: connected, and a direct path was used) | success |
+| 1 | no correct reply, or setup failed | setup failed (before `ready`) | failure |
+| 2 | invalid arguments (from the argument parser, before any event) | same | same |
+| 3 | correct replies, but the bulk transfer failed | `no_connection`: could not connect to `--to` | - |
+| 4 | - | `relay_only`: connected, but never over a direct path | - |
+| 5 | - | `degraded`: connected over a direct path (or no `--to`), but with issues | - |
 
-SIGINT and SIGTERM stop `listen` and `directory` cleanly (exit 0), and end a
-`probe` early with a `summary` (`interrupted: true`). `listen --duration D`
+For `bench`, 3 wins over 4, and 4 over 5: a relay-only connection with
+failures exits with 4, and its issues are in the report.
+
+SIGINT and SIGTERM stop `listen` and `directory` cleanly (exit 0), end a
+`probe` early with a `summary` and a `bench` early with a `bench_report`
+(`interrupted: true`; the request in flight then is not counted as an issue). `listen --duration D`
 exits on its own after `D`.
 
 ## How paths are observed
@@ -239,7 +361,7 @@ there; it needs nodes behind NATs or firewalls where a connection starts on
 the relay. The path of an `ok` reply is read right after the reply, so a path
 switch during the request is attributed to the new path.
 
-## Probe and the listener's bulk sink
+## Probe and the listener's wire usage
 
 `probe` sends one request per `--interval` (default 1 s) for `--duration`
 (default 30 s), each `--payload-size` bytes (default 64, at most 1 MiB): the
@@ -248,12 +370,75 @@ reply is correct if it ends with the payload. Requests are sequential: a slow
 request delays the next one (missed intervals are skipped, not bursted).
 `--timeout` (default 10 s) applies to connecting and to each request; a
 request still running at the end of `--duration` gets at most one more
-`--timeout`.
+`--timeout`. `bench` measures latency the same way.
 
-With `--bulk N`, after the requests the probe opens one stream to the
-listener, writes the 21-byte header `golem-p2p-cli/sink/1\n` and then `N`
-bytes, and finishes the stream. The listener counts and discards the bytes
-and replies `endpoint=... instance=... to=... from=... sink_bytes=N`. The
-transfer is only attempted after at least one correct reply, and is bounded
-by `--bulk-timeout` (default 60 s). Requests that do not start with the header
-are echo requests, so `send` with any normal message works as before.
+Every request is one bidirectional stream. The listener tells three kinds
+apart by their first bytes:
+
+* **Echo**: anything else, at most 1 MiB. The reply is
+  `endpoint=... instance=... to=... from=... echo=<request>`. `send` and the
+  latency requests use it; it works with every listener version.
+* **Sink (upload)**: the 21-byte header `golem-p2p-cli/sink/1\n`, then any
+  number of bytes, then the client finishes the stream. The listener counts
+  and discards the bytes and replies
+  `endpoint=... instance=... to=... from=... sink_bytes=N`. Used by
+  `probe --bulk N` (after at least one correct reply, bounded by
+  `--bulk-timeout`, default 60 s) and by `bench`.
+* **Source (download)**: the 23-byte header `golem-p2p-cli/source/1\n`, then
+  the byte count N in decimal ASCII (optionally followed by `\n`), then the
+  client finishes the stream. The listener replies with the status line
+  `ok bytes=N\n` followed by N bytes, and finishes. The client may stop
+  reading early (`bench --transfer-time`). A listener older than this
+  protocol treats the request as an echo; `bench` then reports that the
+  listener does not support downloads.
+
+**Listener limits.** Uploads and downloads are bounded on the listener, so a
+public bench node cannot be abused:
+
+| option | default | effect |
+|---|---|---|
+| `--max-transfer-size` | `100M` | largest upload or download per stream. A larger upload is stopped as soon as it passes the limit; a larger download is refused before any data is sent |
+| `--max-transfers` | 8 | uploads and downloads served at once, over all peers; more are refused as busy. 0 serves echo requests only |
+| `--max-transfer-time` | `120s` | longest time per upload or download; then the upload is stopped, or the download stream is reset with code 256 |
+
+Echo requests stay limited to 1 MiB each, and the library limits streams per
+connection (256) and connections (1024). There is no per-peer rate limit.
+
+A refusal is the reply (for a download: the status line)
+`refused reason=too_large max_bytes=M`, `refused reason=busy
+max_transfers=K`, `refused reason=timeout max_seconds=T` or
+`refused reason=bad_request`. For an upload the listener also stops the
+stream's receive side with code 256 (0x100), so the uploader's writes fail at
+once and it then reads the reason. The listener prints a `request` event with
+`refused` set.
+
+## Bench phases
+
+`bench` runs these phases, each bounded in size and time (defaults in
+brackets):
+
+1. `local`: the relay, directory and net report checks, in parallel (at most
+   about 6 s).
+2. `connect`: directory lookup, QUIC/TLS and golem-p2p handshakes
+   (`--timeout`, 10 s).
+3. `latency`: echo requests of `--payload-size` (64 B) every `--interval`
+   (200 ms) for `--latency-duration` (10 s).
+4. `upload`, `download`: `--transfer-size` (10 MB) each, stopped after
+   `--transfer-time` (8 s). Throughput is the bytes over the time from
+   opening the stream to the listener's count (upload) or to the last byte
+   (download).
+5. `concurrency`: `--streams` (8) workers send echo requests of 256 KiB until
+   `--concurrency-size` (8 MB of requests) or `--transfer-time`; meanwhile
+   small requests every `--interval` measure the round trip under load.
+6. `relay_compare` (`--compare-relay`): a second endpoint with a temporary
+   identity, relay only (no UDP sockets) and not published to the
+   directories, connects to the same peer and repeats latency (at most 5 s),
+   upload and download. It needs its own endpoint because golem-p2p keeps one
+   connection per peer, and iroh would add a direct path to it.
+7. `idle` (`--idle D`): no traffic for D, then up to 3 requests.
+
+Every phase that runs over a relay (the main connection while it is relayed,
+and `--compare-relay`) caps its size at `--relay-transfer-size` (4 MB), to
+spare shared relays. With the defaults a run moves at most about 36 MB (10 MB
+up, 10 MB down, 8 MB of parallel requests each way) plus 8 MB with
+`--compare-relay`, and takes about 30 to 60 s.
