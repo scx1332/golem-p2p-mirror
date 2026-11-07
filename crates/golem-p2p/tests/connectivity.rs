@@ -403,3 +403,61 @@ async fn request_timeout_covers_waiting_for_a_stream() {
     })
     .await;
 }
+
+/// Discovery whose first publish takes a while.
+#[derive(Debug, Default)]
+struct SlowFirstPublish {
+    inner: MemoryDiscovery,
+    published: AtomicUsize,
+}
+
+impl Discovery for SlowFirstPublish {
+    fn publish<'a>(
+        &'a self,
+        record: &'a VerifiedRecord,
+    ) -> BoxFuture<'a, Result<(), DiscoveryError>> {
+        Box::pin(async move {
+            if self.published.fetch_add(1, Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            self.inner.publish(record).await
+        })
+    }
+
+    fn lookup(&self, id: NodeId) -> BoxFuture<'_, Result<Option<VerifiedRecord>, DiscoveryError>> {
+        self.inner.lookup(id)
+    }
+}
+
+/// An address change while `bind` is still publishing the first record
+/// (here: the home relay connects) is not lost: the record is re-signed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn address_change_during_bind_is_published() {
+    with_timeout(60, async {
+        let net = TestNet::new(1).await;
+        let signer = InMemorySigner::new();
+        let a_id = signer.generate();
+        let a = Endpoint::builder(signer.clone(), Identities::new(a_id))
+            .discovery(SlowFirstPublish::default())
+            .relay_config(net.relays[0].config.clone())
+            .relay_tls(net.relay_tls())
+            .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            // Sign the first record before the relay connects.
+            .online_timeout(Duration::ZERO)
+            .bind()
+            .await
+            .unwrap();
+        let first = a.local_record();
+        assert!(
+            first.record().relay_urls.is_empty(),
+            "the relay connected before the first record was signed"
+        );
+        wait_for(10, "the relay URL in the record", || {
+            !a.local_record().record().relay_urls.is_empty()
+        })
+        .await;
+        assert!(a.local_record().seq() > first.seq());
+        a.close().await;
+    })
+    .await;
+}

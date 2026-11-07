@@ -417,6 +417,10 @@ impl Builder {
         let (incoming_tx, incoming_rx) = mpsc::channel(256);
         let (events, _) = broadcast::channel(256);
 
+        // Watch the addresses from before the first record reads them, so a
+        // change while it is signed and published is not missed
+        // (`address_loop` takes the watcher over).
+        let addr_watch = iroh.watch_addr();
         // Sign the first record before anything else can observe the endpoint.
         let initial = build_and_sign(
             &iroh,
@@ -466,7 +470,7 @@ impl Builder {
         inner.publish(&initial).await;
 
         tokio::spawn(accept_loop(inner.clone()));
-        tokio::spawn(address_loop(inner.clone()));
+        tokio::spawn(address_loop(inner.clone(), addr_watch));
         if use_relays {
             tokio::spawn(relay_watchdog(inner.clone()));
         }
@@ -1061,8 +1065,7 @@ async fn accept_loop(inner: Arc<Inner>) {
 
 /// Re-signs and republishes our record when our addresses change, and
 /// periodically before it expires.
-async fn address_loop(inner: Arc<Inner>) {
-    let mut w = inner.iroh.watch_addr();
+async fn address_loop(inner: Arc<Inner>, mut w: impl Watcher<Value = iroh::EndpointAddr>) {
     let refresh = inner.config.record_ttl / 3;
     let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + refresh, refresh);
     loop {
