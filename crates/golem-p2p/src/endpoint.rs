@@ -1537,6 +1537,9 @@ impl Endpoint {
 
     /// Waits for the next incoming application stream. Returns `None` once
     /// the endpoint is closed.
+    ///
+    /// Up to 256 streams that arrived but were not accepted yet are queued;
+    /// further streams are reset with [`codes::BUSY`](crate::wire::codes::BUSY).
     pub async fn accept(&self) -> Option<IncomingStream> {
         let mut rx = self.inner.incoming_rx.lock().await;
         tokio::select! {
@@ -1776,6 +1779,10 @@ impl IncomingStream {
     }
 
     /// Writes the response and finishes the stream.
+    ///
+    /// Returns once the peer has read the whole response (or after at most
+    /// 10 s), so handle each stream in its own task rather than one after
+    /// another in the accept loop.
     pub async fn respond(mut self, data: &[u8]) -> Result<()> {
         self.send.write_all(data).await.map_err(map_write_err)?;
         self.send

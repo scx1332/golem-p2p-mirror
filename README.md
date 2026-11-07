@@ -257,14 +257,21 @@ let ep = Endpoint::builder(signer, Identities::new(me))
     .bind()
     .await?;
 
-// Serve requests. `from()` is verified against the authenticated connection.
+// Serve requests, each in its own task: `respond` waits until the peer has
+// read the response, and one failed request must not stop the server.
+// `from()` is verified against the authenticated connection.
 let server = ep.clone();
 tokio::spawn(async move {
     while let Some(mut incoming) = server.accept().await {
-        let req = incoming.read_request(64 * 1024).await?;
-        incoming.respond(&req).await?;
+        tokio::spawn(async move {
+            match incoming.read_request(64 * 1024).await {
+                Ok(req) => {
+                    let _ = incoming.respond(&req).await;
+                }
+                Err(e) => eprintln!("bad request from {}: {e}", incoming.from()),
+            }
+        });
     }
-    Ok::<_, golem_p2p::Error>(())
 });
 
 // Send a request to another node by its Ethereum address.

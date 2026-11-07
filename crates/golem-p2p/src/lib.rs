@@ -24,15 +24,20 @@
 //!     .bind()
 //!     .await?;
 //!
-//! // Server side: answer requests.
+//! // Server side: answer requests, each in its own task (`respond` waits
+//! // until the peer has read the response, and one failed request must not
+//! // stop the server).
 //! let server = ep.clone();
 //! tokio::spawn(async move {
 //!     while let Some(mut incoming) = server.accept().await {
-//!         let req = incoming.read_request(1024).await?;
-//!         println!("request from {} to {}", incoming.from(), incoming.to());
-//!         incoming.respond(&req).await?;
+//!         tokio::spawn(async move {
+//!             let Ok(req) = incoming.read_request(1024).await else {
+//!                 return;
+//!             };
+//!             println!("request from {} to {}", incoming.from(), incoming.to());
+//!             let _ = incoming.respond(&req).await;
+//!         });
 //!     }
-//!     Ok::<_, golem_p2p::Error>(())
 //! });
 //!
 //! // Client side.
