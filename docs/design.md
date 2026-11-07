@@ -409,7 +409,10 @@ newly looked-up record; that is how a peer recovers after the other side
 crashed. Without any request, QUIC's idle timeout (30 s, with keep-alives every
 5 s) closes a connection to a dead peer. A timeout while waiting for a stream
 never closes the connection (the peer is busy, not gone; we sent nothing that
-it would acknowledge).
+it would acknowledge). A request abandoned by the caller before it was sent
+completely (its future dropped) is reset (`CANCELLED`): QUIC would otherwise
+finish the stream on drop, and the peer would take the part that arrived for
+the whole request.
 
 ## 8. Discovery
 

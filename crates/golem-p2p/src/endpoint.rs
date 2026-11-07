@@ -1095,6 +1095,23 @@ impl Inner {
     }
 }
 
+/// The sending side of a request in [`Endpoint::request_from`]. Dropped
+/// before the request was sent completely (the caller gave up on it), it
+/// resets the stream: a dropped [`SendStream`] would finish it, and the peer
+/// would take the part that arrived for the whole request.
+struct RequestSend {
+    send: SendStream,
+    complete: bool,
+}
+
+impl Drop for RequestSend {
+    fn drop(&mut self) {
+        if !self.complete {
+            let _ = self.send.reset(codes::CANCELLED);
+        }
+    }
+}
+
 /// An application stream opened by [`Inner::open_bi`].
 struct OpenStream {
     conn: Connection,
@@ -1542,21 +1559,31 @@ impl Endpoint {
     /// hangs, or the path is gone, and the next call dials afresh. (A timeout
     /// while waiting for a stream leaves the connection open: the peer is
     /// busy, not gone.)
+    ///
+    /// Dropping the returned future before the whole request was sent resets
+    /// the stream with [`codes::CANCELLED`](crate::wire::codes::CANCELLED),
+    /// so the peer never takes a truncated request for a complete one.
     pub async fn request_from(&self, from: NodeId, to: NodeId, data: &[u8]) -> Result<Vec<u8>> {
         let timeout = self.inner.config.request_timeout;
         let OpenStream {
             conn,
-            mut send,
+            send,
             mut recv,
             deadline,
             received,
         } = self.inner.open_bi(from, to, Some(timeout)).await?;
+        let mut req = RequestSend {
+            send,
+            complete: false,
+        };
         let deadline = deadline.unwrap_or_else(|| tokio::time::Instant::now() + timeout);
         let max = self.inner.config.max_response_size;
         let exchange = async {
-            send.write_all(data).await.map_err(map_write_err)?;
-            send.finish()
+            req.send.write_all(data).await.map_err(map_write_err)?;
+            req.send
+                .finish()
                 .map_err(|e| Error::Connection(e.to_string()))?;
+            req.complete = true;
             recv.read_to_end(max).await.map_err(map_read_err)
         };
         match tokio::time::timeout_at(deadline, exchange).await {
@@ -1569,7 +1596,7 @@ impl Endpoint {
             }
             Err(_) => {
                 // Give up on this request only, and tell the peer so.
-                let _ = send.reset(codes::TIMED_OUT);
+                let _ = req.send.reset(codes::TIMED_OUT);
                 let _ = recv.stop(codes::TIMED_OUT);
                 if conn.datagrams_received() == received {
                     debug!(

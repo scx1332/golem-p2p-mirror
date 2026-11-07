@@ -119,6 +119,9 @@ pub mod codes {
     /// Stream reset: the requester gave up waiting for the response (request
     /// timeout).
     pub const TIMED_OUT: VarInt = VarInt::from_u32(10);
+    /// Stream reset: the requester abandoned the request before it had sent
+    /// all of it (the request's future was dropped).
+    pub const CANCELLED: VarInt = VarInt::from_u32(11);
 }
 
 /// Error reading or writing frames.

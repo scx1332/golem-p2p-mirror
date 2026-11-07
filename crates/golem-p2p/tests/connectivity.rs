@@ -484,6 +484,58 @@ async fn request_timeout_fails_only_that_request() {
     .await;
 }
 
+/// A request whose future is dropped while its body is still being sent is
+/// reset with `CANCELLED`: the handler gets an error, never the part that
+/// arrived as if it were the whole request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelled_request_is_not_delivered_truncated() {
+    with_timeout(60, async {
+        let net = TestNet::new(0).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let a = net
+            .node(&signer, Identities::new(a_id), NodeOpts::default())
+            .await;
+        let b = net
+            .node(&signer, Identities::new(b_id), NodeOpts::default())
+            .await;
+        // B takes the stream but reads it only when told to, so that the
+        // request stalls once the stream's flow-control window is full.
+        let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
+        let (got_tx, got_rx) = tokio::sync::oneshot::channel();
+        {
+            let b = b.clone();
+            tokio::spawn(async move {
+                let mut inc = b.accept().await.unwrap();
+                let _ = go_rx.await;
+                let r = inc.read_request(16 << 20).await;
+                let _ = got_tx.send(r.map(|v| v.len()));
+            });
+        }
+        let big = vec![7u8; 8 << 20];
+        let r = tokio::time::timeout(Duration::from_millis(500), a.request(b_id, &big)).await;
+        assert!(
+            r.is_err(),
+            "the request was not cut off while sending: {r:?}"
+        );
+        go_tx.send(()).unwrap();
+        match got_rx.await.unwrap() {
+            Err(golem_p2p::Error::StreamRejected(code)) => {
+                assert_eq!(code, golem_p2p::wire::codes::CANCELLED.into_inner());
+            }
+            other => panic!("the handler got {other:?} instead of a reset"),
+        }
+
+        // The connection still serves requests.
+        spawn_echo(&b);
+        assert_eq!(echo(&a, b_id, "after").await.unwrap().data, "after");
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}
+
 /// What the thread running a hung test node is told to do.
 enum HangCmd {
     /// Block the node's only runtime thread until the sender is dropped.
