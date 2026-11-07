@@ -374,7 +374,10 @@ unbounded signature recovery.
 current identities and `from` is listed in the peer's *current verified*
 record. The header is a claim that is checked against the authenticated
 binding, never a source of identity. Rejections reset the stream with an
-error code (`UNKNOWN_IDENTITY`, `SENDER_NOT_BOUND`, `BUSY`).
+error code (`UNKNOWN_IDENTITY`, `SENDER_NOT_BOUND`, `BUSY`). An accepted
+stream that the application drops without answering (and without taking the
+raw streams) is reset with `NOT_ANSWERED`, so the requester gets an error, not
+an empty response.
 
 **Connection reuse.** One connection per peer node serves all its identities
 in both directions. `connect(id)` reuses a live connection whose current peer

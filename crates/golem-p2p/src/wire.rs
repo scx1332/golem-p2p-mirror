@@ -113,6 +113,9 @@ pub mod codes {
     pub const SENDER_NOT_BOUND: VarInt = VarInt::from_u32(7);
     /// The local endpoint is shutting down.
     pub const SHUTDOWN: VarInt = VarInt::from_u32(8);
+    /// Stream reset: the receiving application dropped the stream without
+    /// answering it.
+    pub const NOT_ANSWERED: VarInt = VarInt::from_u32(9);
 }
 
 /// Error reading or writing frames.

@@ -497,3 +497,48 @@ async fn max_response_size_is_configurable() {
     })
     .await;
 }
+
+/// A handler that drops the stream without answering (it failed, or gave
+/// up) makes the request fail with `NOT_ANSWERED` instead of returning an
+/// empty response. A handler that answers through the raw streams and then
+/// drops them is not affected.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dropped_request_is_an_error_not_an_empty_reply() {
+    with_timeout(60, async {
+        let net = TestNet::new(0).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let a = net
+            .node(&signer, Identities::new(a_id), NodeOpts::default())
+            .await;
+        let b = net
+            .node(&signer, Identities::new(b_id), NodeOpts::default())
+            .await;
+        {
+            let b = b.clone();
+            tokio::spawn(async move {
+                while let Some(mut inc) = b.accept().await {
+                    let req = inc.read_request(1024).await.unwrap();
+                    if req == b"raw" {
+                        let (send, _) = inc.streams();
+                        send.write_all(b"raw answer").await.unwrap();
+                        send.finish().unwrap();
+                    }
+                    // Dropped without `respond`.
+                }
+            });
+        }
+        match a.request(b_id, b"fail").await {
+            Err(golem_p2p::Error::StreamRejected(code)) => {
+                assert_eq!(code, golem_p2p::wire::codes::NOT_ANSWERED.into_inner());
+            }
+            other => panic!("expected NOT_ANSWERED, got {other:?}"),
+        }
+        assert_eq!(a.request(b_id, b"raw").await.unwrap(), b"raw answer");
+        assert_eq!(a.connections().len(), 1);
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}

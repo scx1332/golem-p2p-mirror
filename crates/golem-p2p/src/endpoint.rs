@@ -1367,13 +1367,13 @@ async fn handle_app_stream(
         to: header.to,
         peer,
         connection: c,
-        send,
-        recv,
+        streams: Some((send, recv)),
+        raw_access: false,
     };
     if let Err(e) = inner.incoming_tx.try_send(incoming) {
-        let mut incoming = e.into_inner();
-        let _ = incoming.send.reset(codes::BUSY);
-        let _ = incoming.recv.stop(codes::BUSY);
+        let (mut send, mut recv) = e.into_inner().into_streams();
+        let _ = send.reset(codes::BUSY);
+        let _ = recv.stop(codes::BUSY);
     }
 }
 
@@ -1732,13 +1732,35 @@ impl Connection {
 }
 
 /// An application stream opened by a peer, with verified sender and receiver.
+///
+/// Answer it with [`IncomingStream::respond`], or take over the raw streams
+/// with [`IncomingStream::streams`] or [`IncomingStream::into_streams`].
+/// Dropping it without either (for example after [`read_request`] failed, or
+/// when the handler gives up) resets the stream with
+/// [`codes::NOT_ANSWERED`](crate::wire::codes::NOT_ANSWERED), so the requester
+/// gets an error ([`Error::StreamRejected`]) instead of an empty response.
+///
+/// [`read_request`]: IncomingStream::read_request
 pub struct IncomingStream {
     from: NodeId,
     to: NodeId,
     peer: VerifiedRecord,
     connection: Connection,
-    send: SendStream,
-    recv: RecvStream,
+    /// Present until `respond` or `into_streams` takes them.
+    streams: Option<(SendStream, RecvStream)>,
+    /// The application had mutable access to the raw streams, so it may have
+    /// answered through them: dropping must not reset.
+    raw_access: bool,
+}
+
+impl Drop for IncomingStream {
+    fn drop(&mut self) {
+        if !self.raw_access
+            && let Some((send, _)) = &mut self.streams
+        {
+            let _ = send.reset(codes::NOT_ANSWERED);
+        }
+    }
 }
 
 impl fmt::Debug for IncomingStream {
@@ -1772,19 +1794,33 @@ impl IncomingStream {
         &self.connection
     }
 
-    /// Mutable access to the raw streams.
+    fn parts(&mut self) -> &mut (SendStream, RecvStream) {
+        // Only `respond` and `into_streams` take them, and both consume self.
+        self.streams
+            .as_mut()
+            .expect("streams are present until consumed")
+    }
+
+    /// Mutable access to the raw streams. The application is then
+    /// responsible for answering: dropping the `IncomingStream` afterwards
+    /// no longer resets the stream.
     pub fn streams(&mut self) -> (&mut SendStream, &mut RecvStream) {
-        (&mut self.send, &mut self.recv)
+        self.raw_access = true;
+        let (send, recv) = self.parts();
+        (send, recv)
     }
 
     /// Takes the raw streams.
-    pub fn into_streams(self) -> (SendStream, RecvStream) {
-        (self.send, self.recv)
+    pub fn into_streams(mut self) -> (SendStream, RecvStream) {
+        self.streams
+            .take()
+            .expect("streams are present until consumed")
     }
 
     /// Reads the request body (until the peer finishes its side).
     pub async fn read_request(&mut self, max: usize) -> Result<Vec<u8>> {
-        self.recv.read_to_end(max).await.map_err(map_read_err)
+        let (_, recv) = self.parts();
+        recv.read_to_end(max).await.map_err(map_read_err)
     }
 
     /// Writes the response and finishes the stream.
@@ -1793,13 +1829,16 @@ impl IncomingStream {
     /// 10 s), so handle each stream in its own task rather than one after
     /// another in the accept loop.
     pub async fn respond(mut self, data: &[u8]) -> Result<()> {
-        self.send.write_all(data).await.map_err(map_write_err)?;
-        self.send
-            .finish()
+        let (mut send, _recv) = self
+            .streams
+            .take()
+            .expect("streams are present until consumed");
+        send.write_all(data).await.map_err(map_write_err)?;
+        send.finish()
             .map_err(|e| Error::Connection(e.to_string()))?;
         // Wait until the peer has read everything, so dropping does not race
         // with delivery.
-        let _ = tokio::time::timeout(Duration::from_secs(10), self.send.stopped()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(10), send.stopped()).await;
         Ok(())
     }
 }
