@@ -41,6 +41,11 @@ pub const MAX_REQUEST: usize = 1 << 20;
 /// download that exceeds a limit.
 pub const REFUSED: VarInt = VarInt::from_u32(0x100);
 
+/// Longest time to receive an echo request, or the start of an upload or a
+/// download request, before the stream is refused. Without it a peer could
+/// keep streams (and up to [`MAX_REQUEST`] bytes each) open indefinitely.
+pub const REQUEST_TIME: Duration = Duration::from_secs(10);
+
 /// Maximum size of a download request (magic plus byte count).
 const MAX_SOURCE_REQUEST: usize = 64;
 
@@ -89,19 +94,27 @@ async fn handle(
     slots: &Arc<Semaphore>,
 ) -> anyhow::Result<()> {
     let start = Instant::now();
+    let deadline = tokio::time::Instant::now() + REQUEST_TIME;
     let (_, recv) = inc.streams();
     // Read just enough to tell an upload or download from an echo request.
     let mut head = vec![0u8; SINK_MAGIC.len().max(SOURCE_MAGIC.len())];
     let mut filled = 0;
     let mut finished = false;
-    while filled < head.len() {
-        match recv.read(&mut head[filled..]).await? {
-            Some(n) => filled += n,
-            None => {
-                finished = true;
-                break;
+    let read_head = async {
+        while filled < head.len() {
+            match recv.read(&mut head[filled..]).await? {
+                Some(n) => filled += n,
+                None => {
+                    finished = true;
+                    break;
+                }
             }
         }
+        Ok::<_, anyhow::Error>(())
+    };
+    match tokio::time::timeout_at(deadline, read_head).await {
+        Ok(r) => r?,
+        Err(_) => return Err(too_slow(&mut inc)),
     }
     head.truncate(filled);
 
@@ -115,7 +128,7 @@ async fn handle(
             let (_, recv) = inc.streams();
             let max = MAX_SOURCE_REQUEST.saturating_sub(req.len());
             // A request that is not finished in time is malformed.
-            match tokio::time::timeout(Duration::from_secs(10), recv.read_to_end(max)).await {
+            match tokio::time::timeout(REQUEST_TIME, recv.read_to_end(max)).await {
                 Ok(rest) => req.extend_from_slice(&rest?),
                 Err(_) => req.clear(),
             }
@@ -125,8 +138,11 @@ async fn handle(
 
     if !finished {
         let (_, recv) = inc.streams();
-        let rest = recv.read_to_end(MAX_REQUEST - head.len()).await?;
-        head.extend_from_slice(&rest);
+        let read = recv.read_to_end(MAX_REQUEST - head.len());
+        match tokio::time::timeout_at(deadline, read).await {
+            Ok(rest) => head.extend_from_slice(&rest?),
+            Err(_) => return Err(too_slow(&mut inc)),
+        }
     }
     let req = head;
     let (from, to) = (inc.from(), inc.to());
@@ -148,6 +164,17 @@ async fn handle(
     );
     inc.respond(reply.as_bytes()).await?;
     Ok(())
+}
+
+/// Refuses a request that did not arrive within [`REQUEST_TIME`].
+fn too_slow(inc: &mut IncomingStream) -> anyhow::Error {
+    let (send, recv) = inc.streams();
+    let _ = recv.stop(REFUSED);
+    let _ = send.reset(REFUSED);
+    anyhow::Error::from(golem_p2p::Error::Timeout).context(format!(
+        "request not received within {} s",
+        REQUEST_TIME.as_secs()
+    ))
 }
 
 /// The start of a request for human output: long requests are cut.

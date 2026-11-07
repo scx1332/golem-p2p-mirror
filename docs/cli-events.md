@@ -402,8 +402,11 @@ public bench node cannot be abused:
 | `--max-transfers` | 8 | uploads and downloads served at once, over all peers; more are refused as busy. 0 serves echo requests only |
 | `--max-transfer-time` | `120s` | longest time per upload or download; then the upload is stopped, or the download stream is reset with code 256 |
 
-Echo requests stay limited to 1 MiB each, and the library limits streams per
-connection (256) and connections (1024). There is no per-peer rate limit.
+Echo requests stay limited to 1 MiB each and must arrive (be finished by the
+client) within 10 s, as must the header of an upload or download request;
+otherwise the listener resets the stream with code 256 and prints an `error`
+of kind `timeout`. The library limits streams per connection (256) and
+connections (1024). There is no per-peer rate limit.
 
 A refusal is the reply (for a download: the status line)
 `refused reason=too_large max_bytes=M`, `refused reason=busy

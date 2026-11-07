@@ -70,7 +70,7 @@ What the tests cover:
 | `encryption.rs` | peers offering another ALPN refused in the TLS handshake; a relay (plain HTTP behind a recording TLS-terminating proxy) sees endpoint IDs but neither a plaintext marker nor the Ethereum identities; non-https relay URLs rejected by the builder; a signed record with an `http://` relay refused and never dialed |
 | `crash_restart.rs` (CLI) | real process killed with SIGKILL and restarted with the same identity, homed on an https relay with a self-signed certificate (`--relay-ca`) |
 | `relay_url.rs` (CLI) | `http://` and other non-https relay URLs rejected on the command line |
-| `probe.rs` (CLI) | `--json` output of `listen`, `probe` and `send` as child processes: relay-only probe with bulk transfer (every line parses, common fields, summary consistent with the replies, listener saw every request and the bulk bytes over the relay); probe that ends on a direct path with `time_to_direct_ms`; unknown node fails with exit code 1; SIGTERM ends a probe with a summary; a bulk upload above the listener's `--max-transfer-size` is refused (exit code 3, cause `refused`), one within it works; `keygen`/`directory` with `--json`, error event and exit code |
+| `probe.rs` (CLI) | `--json` output of `listen`, `probe` and `send` as child processes: relay-only probe with bulk transfer (every line parses, common fields, summary consistent with the replies, listener saw every request and the bulk bytes over the relay); probe that ends on a direct path with `time_to_direct_ms`; unknown node fails with exit code 1; SIGTERM ends a probe with a summary; a bulk upload above the listener's `--max-transfer-size` is refused (exit code 3, cause `refused`), one within it works; an echo request that is never finished is refused after 10 s; `keygen`/`directory` with `--json`, error event and exit code |
 | `relay_quic.rs` (CLI) | the relay's QUIC address discovery port (`--relay-quic-port`, per relay `,quic=PORT`, `off`) reaches iroh: a local relay with QAD on a random port sees QAD connections; invalid ports rejected |
 | `bench.rs` (CLI) | `bench --json` against a local listener: relay-only (exit code 4, every phase over the relay, transfers capped for the relay, the listener saw the upload and download) and normal (exit code 0, QAD answers, direct path, `--compare-relay` over the relay, `--idle`); the listener's limits (too large and busy refused cleanly with exit code 5, exactly the limit works); local check only, healthy and with an untrusted relay certificate; unknown node (exit code 3); SIGTERM ends a bench with a report; invalid arguments |
 | unit tests | yagna/ethsign compatibility vectors, record verification (including https-only relay URLs, and records of older nodes that list Docker addresses), record store rules and bounds, published addresses (container and VM bridges left out, LAN and VPN kept, ranking before the cap, IPv6); CLI: argument parsers, timestamps, percentiles, jitter, refusals, the bench verdict rules |
@@ -238,8 +238,8 @@ anything about the peer's NAT or firewall.
 uploads and downloads of at most `--max-transfer-size` (default 100 MB) each,
 `--max-transfers` (8) at once over all peers, `--max-transfer-time` (120 s)
 each; beyond that they are refused with a reason the client reports. Echo
-requests are limited to 1 MiB. There is no per-peer rate limit yet. Use a key
-for the bench node that no other process uses, so its record stays the one in
+requests are limited to 1 MiB and 10 s. There is no per-peer rate limit yet.
+Use a key for the bench node that no other process uses, so its record stays the one in
 the directory (the same applies to `probe --key` and `bench --key`: another
 process with the same key publishes a newer record for that identity).
 

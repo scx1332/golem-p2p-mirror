@@ -3,6 +3,8 @@
 
 mod common;
 
+use std::time::Duration;
+
 use common::*;
 use serde_json::Value;
 
@@ -340,6 +342,51 @@ async fn bulk_refused_by_listener_limit() {
         })
         .await;
     assert_eq!(sink["bytes"], 100_000, "{sink}");
+}
+
+/// An echo request that is never finished does not hold the listener's
+/// stream forever: after 10 s the listener refuses it (stream reset with
+/// its `REFUSED` code) and reports a `timeout` error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unfinished_request_refused_after_10s() {
+    use golem_p2p::{
+        Endpoint, HttpDirectory, Identities, InMemorySigner, TransportMode,
+        iroh::endpoint::{ReadError, ReadToEndError, VarInt},
+    };
+    let infra = Infra::start("probe-slow").await;
+    let (mut lis, ready) = listener(&infra, "lis", &[]).await;
+    let lis_id: golem_p2p::NodeId = ready["node_id"].as_str().unwrap().parse().unwrap();
+    let signer = InMemorySigner::new();
+    let me = signer.generate();
+    let ep = Endpoint::builder(signer, Identities::new(me))
+        .discovery(HttpDirectory::new(infra.dir_url.parse().unwrap()).unwrap())
+        .transport_mode(TransportMode::DirectOnly)
+        .bind_addr("127.0.0.1:0".parse().unwrap())
+        .bind()
+        .await
+        .unwrap();
+
+    let (mut send, mut recv) = ep.open_bi(lis_id).await.unwrap();
+    send.write_all(b"an echo request that never ends")
+        .await
+        .unwrap();
+    let start = std::time::Instant::now();
+    let r = tokio::time::timeout(Duration::from_secs(20), recv.read_to_end(1024))
+        .await
+        .expect("the listener kept the unfinished request open");
+    assert!(
+        matches!(r, Err(ReadToEndError::Read(ReadError::Reset(c))) if c == VarInt::from_u32(0x100)),
+        "{r:?}"
+    );
+    assert!(
+        start.elapsed() >= Duration::from_secs(8),
+        "{:?}",
+        start.elapsed()
+    );
+    let err = lis.wait_event("error", 10).await;
+    assert_eq!(err["kind"], "timeout", "{err}");
+    assert_eq!(err["peer"], me.to_string());
+    ep.close().await;
 }
 
 /// `--json` works for every command, and `run`/`node` are null when unset.

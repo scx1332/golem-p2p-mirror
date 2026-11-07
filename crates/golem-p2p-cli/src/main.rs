@@ -143,7 +143,7 @@ enum Cmd {
 struct LimitArgs {
     /// Largest upload or download per stream, e.g. `100M`. Larger uploads
     /// are stopped and larger downloads refused. Echo requests are limited to
-    /// 1 MiB separately.
+    /// 1 MiB and 10 s separately.
     #[arg(long, default_value = "100M", value_parser = parse::bytes)]
     max_transfer_size: u64,
     /// Uploads and downloads served at once, over all peers; more are
@@ -528,11 +528,12 @@ async fn run(cmd: Cmd, out: &Out) -> anyhow::Result<ExitCode> {
                 );
                 eprintln!(
                     "limits: uploads and downloads of at most {} bytes, {} at once, {} s each; \
-                     echo requests of at most {} bytes",
+                     echo requests of at most {} bytes within {} s",
                     limits.max_transfer_size,
                     limits.max_transfers,
                     limits.max_transfer_time.as_secs_f64(),
-                    listen::MAX_REQUEST
+                    listen::MAX_REQUEST,
+                    listen::REQUEST_TIME.as_secs()
                 );
             }
             let stop = async {
