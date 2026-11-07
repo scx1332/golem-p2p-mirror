@@ -1,0 +1,8 @@
+run=1 listener=easy1 sender=easy2 ok=1 replies=407 t_first=1.14 first_ms=479 first_path=direct t_direct=1.14 last_path=direct switches=0 direct_pct=100 relay_ms=- direct_ms=41 listener_saw=direct:408 error=-
+run=1 listener=sym1 sender=easy1 ok=1 replies=395 t_first=1.35 first_ms=725 first_path=direct t_direct=1.35 last_path=direct switches=0 direct_pct=100 relay_ms=- direct_ms=41 listener_saw=direct:395,relay:1 error=-
+run=1 listener=pr1 sender=pr2 ok=1 replies=361 t_first=2.33 first_ms=696 first_path=direct t_direct=2.33 last_path=direct switches=0 direct_pct=100 relay_ms=- direct_ms=42 listener_saw=direct:360,relay:1 error=-
+run=1 listener=easy1 sender=sym1 ok=1 replies=387 t_first=0.92 first_ms=229 first_path=direct t_direct=0.92 last_path=direct switches=0 direct_pct=100 relay_ms=- direct_ms=42 listener_saw=direct:388 error=-
+run=2 listener=easy1 sender=easy2 ok=1 replies=402 t_first=1.19 first_ms=419 first_path=direct t_direct=1.19 last_path=direct switches=0 direct_pct=100 relay_ms=- direct_ms=42 listener_saw=direct:403 error=-
+run=2 listener=sym1 sender=easy1 ok=1 replies=384 t_first=1.11 first_ms=458 first_path=direct t_direct=1.11 last_path=direct switches=0 direct_pct=100 relay_ms=- direct_ms=42 listener_saw=direct:383,relay:2 error=-
+run=2 listener=pr1 sender=pr2 ok=1 replies=393 t_first=1.12 first_ms=401 first_path=direct t_direct=1.12 last_path=direct switches=0 direct_pct=100 relay_ms=- direct_ms=41 listener_saw=direct:393,relay:1 error=-
+run=2 listener=easy1 sender=sym1 ok=1 replies=378 t_first=1.14 first_ms=414 first_path=direct t_direct=1.14 last_path=direct switches=0 direct_pct=100 relay_ms=- direct_ms=42 listener_saw=direct:378 error=-
