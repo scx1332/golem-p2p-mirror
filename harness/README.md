@@ -21,8 +21,10 @@ lab/tools/aggregate.py   turns matrix/realworld results.txt into a Markdown tabl
 lab/tools/benchsum.py    one key=value line per `bench --json` run; run metadata
 campaign/campaign1.sh    benchmark campaign 1 (lab matrix, real world, relay, startup)
 campaign/campaign2.sh    campaign 2: the same scenarios after the bench/timeout fixes
+campaign/campaign3.sh    campaign 3: the same scenarios after the loss/relay-fallback/sizing fixes
 campaign/summarize.py    campaign directory -> summary.json + table.md (all bench formats)
-campaign/compare.py      two campaign directories -> compare.json + compare.md
+campaign/compare.py      two campaign directories -> compare.json + compare.md;
+                         --series: several -> compare<N>.json + compare<N>.md
 results/<date>-<name>/   raw data and summaries of campaigns
 ```
 
@@ -373,6 +375,16 @@ which the packet_loss hint judges; `latency_loss` then pools it instead of
 `relay_fallback_degraded`, judged right) and `concurrency.sized_for_mbps`
 (smaller parallel requests on a slow link; `concurrency.sized_runs` and
 `request_bytes` in the summary).
+
+`campaign/campaign3.sh` is `campaign2.sh` with campaign 2's scenarios, run
+counts and checks (default output `results/<date>-campaign3`); only its
+`summarize` step differs: `compare.py` against campaign 2
+(`GPL_COMPARE_WITH`), and `compare.py --series` over campaigns 1, 2 and 3
+(`GPL_COMPARE_SERIES`, the earlier directories oldest first), which writes
+`compare3.json`/`compare3.md`: totals and per-scenario outcomes, verdicts,
+misleading/wrong checks, RTT, throughputs (with the concurrency phase), run
+durations and lost connections of every campaign side by side, highlights
+from the last campaign's `notes.json` key `comparison_series`.
 
 ## Driving it from a controller
 

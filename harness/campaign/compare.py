@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Compares two benchmark campaigns scenario by scenario.
+"""Compares benchmark campaigns scenario by scenario.
 
   compare.py <base campaign dir> <new campaign dir> [--out DIR]
+  compare.py --series <campaign dir>... [--out DIR]
 
 Both directories are summarized from their raw runs with summarize.py's rules
 (summarize_dir, which reads both bench JSON formats), so the verdict
@@ -16,6 +17,15 @@ classification of the runs (right/misleading/wrong by their worst finding)
 and the misleading/wrong check codes; then totals and automatic flags
 (changes beyond the noise thresholds below). Hand-written highlights come from
 the new campaign's notes.json, key `comparison` (a list of {title, detail}).
+
+--series: the same rows for two or more campaigns, oldest first, side by
+side (compare<N>.json and compare<N>.md, N = number of campaigns, in --out,
+default the last campaign directory): totals (runs, final paths, lost
+connections, verdict runs right/misleading/wrong) per campaign, and per
+scenario the outcome, verdict runs, misleading/wrong checks, RTT,
+throughputs, run duration and lost connections in each campaign.
+Highlights come from the last campaign's notes.json, key
+`comparison_series`.
 """
 
 import argparse
@@ -97,7 +107,8 @@ def flags(sid, a, b):
         kind = "regression" if worse and not better else "improvement" if better and not worse else "change"
         out.append((kind, f"outcome d/r/f {oa['direct']}/{oa['relay']}/{oa['fail']} -> {ob['direct']}/{ob['relay']}/{ob['fail']}"))
     for key, tol, unit, higher_better in (("rtt_ms_p50", RTT_TOL, "ms", False), ("upload_mbps", TPUT_TOL, "Mbps", True),
-                                          ("download_mbps", TPUT_TOL, "Mbps", True), ("bind_ms_p50", BIND_TOL, "ms", False),
+                                          ("download_mbps", TPUT_TOL, "Mbps", True),
+                                          ("concurrency_mbps", TPUT_TOL, "Mbps", True), ("bind_ms_p50", BIND_TOL, "ms", False),
                                           ("run_duration_s_p50", DUR_TOL, "s", False)):
         x, y = a[key], b[key]
         if x is None and y is None:
@@ -150,12 +161,119 @@ def arrow(a, b, nd=1):
     return f"{fmtv(a, nd)} → {fmtv(b, nd)}"
 
 
+def oc(r):
+    o = (r or {}).get("outcome")
+    return "-" if not o else f"{o['direct']}/{o['relay']}/{o['fail']}"
+
+
+def vr(r):
+    if not r:
+        return "-"
+    v = r.get("verdict_runs") or {}
+    return f"{v.get('right', 0)}/{v.get('misleading', 0)}/{v.get('wrong', 0)}"
+
+
+def series(dirs, out):
+    """Two or more campaigns side by side, oldest first: compare<N>.json/.md."""
+    camps = []
+    for d in dirs:
+        summ, notes = summarize.summarize_dir(d)
+        camps.append({"dir": os.path.abspath(d), "name": os.path.basename(os.path.abspath(d)), "summaries": summ,
+                      "notes": notes, "by": {s["id"]: s for s in summ}})
+    out_dir = os.path.abspath(out or dirs[-1])
+    ids = []
+    for c in camps:
+        ids += [s["id"] for s in c["summaries"] if s["id"] not in ids]
+    scen = []
+    for sid in ids:
+        rows = [row(c["by"][sid]) if sid in c["by"] else None for c in camps]
+        first = next(c["by"][sid] for c in camps if sid in c["by"])
+        scen.append({"id": sid, "group": first["group"], "title": first["title"], "campaigns": rows})
+    n = len(camps)
+    result = {
+        "campaigns": [{"name": c["name"], "dir": os.path.relpath(c["dir"], out_dir), "commit": c["notes"].get("commit"),
+                       "binary": c["notes"].get("binary"), "totals": totals(None, c["summaries"])} for c in camps],
+        "highlights": camps[-1]["notes"].get("comparison_series", []),
+        "scenarios": scen,
+    }
+    with open(os.path.join(out_dir, f"compare{n}.json"), "w") as f:
+        json.dump(result, f, indent=1, ensure_ascii=False)
+        f.write("\n")
+
+    names = [c["name"] for c in camps]
+    md = [f"# Campaign series: {' → '.join(names)}", "",
+          "All campaigns recomputed from their raw runs with `harness/campaign/summarize.py` (`compare.py --series`), "
+          "each judged by the rules of its own bench; generated, except the highlights, which come from the last "
+          "campaign's `notes.json` (`comparison_series`).", ""]
+    for c in camps:
+        md.append(f"* {c['name']}: commit {c['notes'].get('commit')}")
+    md.append("")
+    if result["highlights"]:
+        md += ["## Highlights", ""]
+        for h in result["highlights"]:
+            md.append(f"* **{h['title']}** {h['detail']}")
+        md.append("")
+    ts = [c["totals"] for c in result["campaigns"]]
+
+    def trow(label, fn):
+        return f"| {label} | " + " | ".join(fn(t) for t in ts) + " |"
+    md += ["## Totals", "", "| | " + " | ".join(names) + " |", "|---" * (n + 1) + "|",
+           trow("scenarios / runs / runs with a report", lambda t: f"{t['scenarios']} / {t['runs']} / {t['ok_runs']}"),
+           trow("verdict runs right / misleading / wrong (by worst finding)",
+                lambda t: " / ".join(str(t["verdicts"]["runs_by_worst_finding"].get(k, 0))
+                                     for k in ("right", "misleading", "wrong"))),
+           trow("verdict checks right / misleading / wrong",
+                lambda t: " / ".join(str(t["verdicts"]["checks"].get(k, 0)) for k in ("right", "misleading", "wrong"))),
+           trow("peer runs: final direct / relay / failed", lambda t: f"{t['direct']} / {t['relay']} / {t['fail']}"),
+           trow("runs whose connection closed during the run", lambda t: str(t["disconnect_runs"])),
+           trow("peer runs with QUIC counters at the end", lambda t: str(t["runs_with_quic_counters"])),
+           ""]
+    md += ["## Per scenario", "",
+           "Each cell lists the campaigns in order (" + " → ".join(names) + "). Verdicts = runs "
+           "right/misleading/wrong by their worst finding; outcome = final path direct/relay/failed per run "
+           "(failed includes connections gone at the end); RTT = latency-phase p50 pooled over runs; up/down/conc "
+           "= median throughput (conc: concurrency phase, - = no run measured it); run = bench run duration p50; "
+           "lost conn = runs with a `disconnect` event.", "",
+           "| scenario | verdicts r/m/w | outcome d/r/f | RTT ms | up Mbps | down Mbps | conc Mbps | run s | lost conn |",
+           "|---|---|---|---|---|---|---|---|---|"]
+
+    def chain(rows, fn):
+        return " → ".join(fn(r) for r in rows)
+
+    def field(key):
+        return lambda r: fmtv((r or {}).get(key))
+    for s in scen:
+        rs = s["campaigns"]
+        md.append(f"| {s['id']} | {chain(rs, vr)} | {chain(rs, oc)} | {chain(rs, field('rtt_ms_p50'))} | "
+                  f"{chain(rs, field('upload_mbps'))} | {chain(rs, field('download_mbps'))} | "
+                  f"{chain(rs, field('concurrency_mbps'))} | {chain(rs, field('run_duration_s_p50'))} | "
+                  f"{chain(rs, field('disconnect_runs'))} |")
+    md += ["", "## Misleading and wrong verdict checks per campaign", ""]
+    for s in scen:
+        cs = [(r or {}).get("not_right_checks") or [] for r in s["campaigns"]]
+        if any(cs):
+            md.append(f"* `{s['id']}`: " + " → ".join(", ".join(c) or "none" for c in cs))
+    md.append("")
+    with open(os.path.join(out_dir, f"compare{n}.md"), "w") as f:
+        f.write("\n".join(md))
+    print("\n".join(md))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("base")
-    ap.add_argument("new")
+    ap.add_argument("dirs", nargs="+", metavar="DIR")
+    ap.add_argument("--series", action="store_true",
+                    help="two or more campaigns, oldest first: compare<N>.json/compare<N>.md")
     ap.add_argument("--out")
     args = ap.parse_args()
+    if args.series:
+        if len(args.dirs) < 2:
+            ap.error("--series needs at least two campaign directories")
+        series(args.dirs, args.out)
+        return
+    if len(args.dirs) != 2:
+        ap.error("give a base and a new campaign directory (or --series)")
+    args.base, args.new = args.dirs
     base, notes_a = summarize.summarize_dir(args.base)
     new, notes_b = summarize.summarize_dir(args.new)
     out_dir = os.path.abspath(args.out or args.new)
@@ -214,30 +332,25 @@ def main():
         md.append(f"| verdict checks {k} | {va['checks'].get(k, 0)} | {vb['checks'].get(k, 0)} |")
     md += ["", "## Per scenario (base → new)", "",
            "Outcome = final path direct/relay/failed per run (failed includes connections gone at the end). "
-           "RTT = latency-phase p50 pooled over runs; up/down = median throughput; bind = `ready.bind_ms` p50; "
+           "RTT = latency-phase p50 pooled over runs; up/down/conc = median throughput (conc: concurrency phase); "
+           "bind = `ready.bind_ms` p50; "
            "run = bench run duration p50; lost conn = runs with a `disconnect` event; verdicts = runs "
            "right/misleading/wrong by their worst finding.", "",
-           "| scenario | outcome d/r/f | RTT ms | up Mbps | down Mbps | bind ms | run s | lost conn | verdicts r/m/w |",
-           "|---|---|---|---|---|---|---|---|---|"]
+           "| scenario | outcome d/r/f | RTT ms | up Mbps | down Mbps | conc Mbps | bind ms | run s | lost conn | "
+           "verdicts r/m/w |",
+           "|---|---|---|---|---|---|---|---|---|---|"]
     for s in scen:
         a, b = s["base"] or {}, s["new"] or {}
-
-        def oc(r):
-            o = r.get("outcome")
-            return "-" if not o else f"{o['direct']}/{o['relay']}/{o['fail']}"
-
-        def vr(r):
-            v = r.get("verdict_runs") or {}
-            return "-" if not r else f"{v.get('right', 0)}/{v.get('misleading', 0)}/{v.get('wrong', 0)}"
         md.append(f"| {s['id']} | {oc(a)} → {oc(b)} | {arrow(a.get('rtt_ms_p50'), b.get('rtt_ms_p50'))} | "
                   f"{arrow(a.get('upload_mbps'), b.get('upload_mbps'))} | "
                   f"{arrow(a.get('download_mbps'), b.get('download_mbps'))} | "
+                  f"{arrow(a.get('concurrency_mbps'), b.get('concurrency_mbps'))} | "
                   f"{arrow(a.get('bind_ms_p50'), b.get('bind_ms_p50'), 0)} | "
                   f"{arrow(a.get('run_duration_s_p50'), b.get('run_duration_s_p50'))} | "
                   f"{fmtv(a.get('disconnect_runs'))} → {fmtv(b.get('disconnect_runs'))} | {vr(a)} → {vr(b)} |")
     md += ["", "## Flags", "",
-           "Changes beyond the noise thresholds (relative and absolute: RTT 10 % and 3 ms, throughput 25 % and "
-           "5 Mbps, bind 25 % and 100 ms, run duration 25 % and 3 s), outcome and verdict changes.", ""]
+           "Changes beyond the noise thresholds (relative and absolute: RTT 10 % and 3 ms, throughput (also "
+           "concurrency) 25 % and 5 Mbps, bind 25 % and 100 ms, run duration 25 % and 3 s), outcome and verdict changes.", ""]
     any_flag = False
     for s in scen:
         if s["flags"]:
