@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/golem-p2p"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+repository = "https://github.com/golemfactory/golem-p2p"
+publish = false
+
+[workspace.dependencies]
+golem-p2p = { path = "crates/golem-p2p" }
+iroh = { version = "=1.4.1", default-features = false, features = ["tls-ring", "metrics"] }
+iroh-relay = { version = "=1.4.1", default-features = false }
+anyhow = "1"
+axum = { version = "0.8", default-features = false }
+clap = { version = "4", features = ["derive", "env"] }
+hex = "0.4"
+k256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+rand = "0.10"
+reqwest = { version = "0.13", default-features = false }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.11"
+sha3 = "0.12"
+thiserror = "2"
+tokio = { version = "1.44", features = ["rt", "macros", "sync", "time", "net"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"

@@ -1,0 +1,16 @@
+[package]
+name = "golem-p2p"
+description = "Peer-to-peer communication between yagna nodes over iroh, with Ethereum identities"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+k256.workspace = true
+sha3.workspace = true
+serde.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+hex.workspace = true
