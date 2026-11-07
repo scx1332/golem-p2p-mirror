@@ -34,15 +34,16 @@ use anyhow::{Context, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use golem_p2p::{
     Endpoint, HttpDirectory, Identities, InMemorySigner, MultiDiscovery, NodeId, RecordStore,
-    TransportMode,
-    iroh::{RelayUrl, tls::CaTlsConfig},
+    TransportMode, iroh::tls::CaTlsConfig,
 };
 use rustls_pki_types::{CertificateDer, pem::PemObject};
+use serde_json::json;
 use tokio::sync::watch;
 
 use crate::{
     observe::{FirstDirect, Observer, strings},
     out::{Out, anyhow_kind, ms, path_name},
+    parse::{QuicPort, RelaySpec},
     probe::{Bulk, Pinger},
 };
 
@@ -125,9 +126,16 @@ struct NodeArgs {
     /// Additional identity key files (aliases).
     #[arg(long)]
     alias_key: Vec<PathBuf>,
-    /// Relay server URL (https only). Repeat for several relays.
-    #[arg(long, value_parser = parse::relay_url)]
-    relay: Vec<RelayUrl>,
+    /// Relay server URL (https only). Repeat for several relays. Append
+    /// `,quic=PORT` or `,quic=off` to set this relay's QUIC address discovery
+    /// (QAD) port, e.g. `https://relay.example:56000,quic=56001`.
+    #[arg(long, value_name = "URL[,quic=PORT|off]", value_parser = parse::relay_spec)]
+    relay: Vec<RelaySpec>,
+    /// QUIC address discovery (QAD) port of every relay without its own
+    /// `,quic=` setting: a UDP port, or `off` to skip QAD. Default: iroh's
+    /// default port 7842.
+    #[arg(long, value_name = "PORT|off", value_parser = parse::quic_port)]
+    relay_quic_port: Option<QuicPort>,
     /// PEM file with certificates to trust for relay TLS, in addition to the
     /// built-in web PKI roots. For relays with a self-signed certificate.
     #[arg(long)]
@@ -223,7 +231,7 @@ async fn bind(args: &NodeArgs, timeout: Option<Duration>) -> anyhow::Result<Endp
         .transport_mode(args.mode())
         .portmapper(!args.no_portmapper);
     for r in &args.relay {
-        b = b.relay(r.clone());
+        b = b.relay_config(r.config(args.relay_quic_port));
     }
     if !args.relay_ca.is_empty() {
         let mut roots = Vec::new();
@@ -261,6 +269,14 @@ impl Node {
         let events = ep.subscribe();
         let bind_time = started.elapsed();
         let rec = ep.local_record();
+        let relay_config: Vec<_> = args
+            .relay
+            .iter()
+            .map(|r| {
+                let cfg = r.config(args.relay_quic_port);
+                json!({"url": cfg.url.to_string(), "quic_port": cfg.quic.map(|q| q.port)})
+            })
+            .collect();
         out.event("ready")
             .field("node_id", ep.node_id().to_string())
             .field(
@@ -274,6 +290,7 @@ impl Node {
                 "direct_addrs",
                 strings(rec.record().direct_addrs.iter().map(|a| a.to_string())),
             )
+            .field("relay_config", relay_config)
             .field(
                 "transport",
                 match args.mode() {

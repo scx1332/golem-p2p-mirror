@@ -2,7 +2,42 @@
 
 use std::time::Duration;
 
-use golem_p2p::{iroh::RelayUrl, record::RELAY_URL_SCHEME};
+use golem_p2p::{
+    iroh::{RelayConfig, RelayUrl},
+    record::RELAY_URL_SCHEME,
+};
+use iroh_relay::RelayQuicConfig;
+
+/// The QUIC address discovery (QAD) setting of a relay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuicPort {
+    /// QAD on this UDP port of the relay host.
+    Port(u16),
+    /// No QAD with this relay.
+    Off,
+}
+
+/// A `--relay` value: `URL[,quic=PORT|off]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelaySpec {
+    pub url: RelayUrl,
+    /// Per-relay QAD setting; `None` means "use `--relay-quic-port`".
+    pub quic: Option<QuicPort>,
+}
+
+impl RelaySpec {
+    /// The iroh relay configuration, with `default` as the QAD setting for a
+    /// relay without its own. Without either, iroh's default port (7842).
+    pub fn config(&self, default: Option<QuicPort>) -> RelayConfig {
+        match self.quic.or(default) {
+            None => RelayConfig::from(self.url.clone()),
+            Some(QuicPort::Port(p)) => {
+                RelayConfig::new(self.url.clone(), Some(RelayQuicConfig::new(p)))
+            }
+            Some(QuicPort::Off) => RelayConfig::new(self.url.clone(), None),
+        }
+    }
+}
 
 /// Parses a relay URL and rejects every scheme except `https`.
 pub fn relay_url(s: &str) -> Result<RelayUrl, String> {
@@ -14,6 +49,35 @@ pub fn relay_url(s: &str) -> Result<RelayUrl, String> {
         ));
     }
     Ok(url)
+}
+
+/// Parses `URL[,quic=PORT|off]`.
+pub fn relay_spec(s: &str) -> Result<RelaySpec, String> {
+    let mut parts = s.split(',');
+    let url = relay_url(parts.next().unwrap_or_default())?;
+    let mut quic = None;
+    for opt in parts {
+        match opt.split_once('=') {
+            Some(("quic", v)) => quic = Some(quic_port(v)?),
+            _ => {
+                return Err(format!(
+                    "unknown relay option {opt:?} (expected quic=PORT or quic=off)"
+                ));
+            }
+        }
+    }
+    Ok(RelaySpec { url, quic })
+}
+
+/// Parses a QAD port: a UDP port number (1-65535) or `off`.
+pub fn quic_port(s: &str) -> Result<QuicPort, String> {
+    if s.eq_ignore_ascii_case("off") {
+        return Ok(QuicPort::Off);
+    }
+    match s.parse::<u16>() {
+        Ok(p) if p > 0 => Ok(QuicPort::Port(p)),
+        _ => Err(format!("invalid QUIC port {s:?} (expected 1-65535 or off)")),
+    }
 }
 
 /// Parses a duration: a number of seconds (`30`, `1.5`) or a number with a
@@ -70,6 +134,60 @@ fn split_number(s: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_specs() {
+        let s = relay_spec("https://relay.example.org:56000").unwrap();
+        assert_eq!(s.url.as_str(), "https://relay.example.org:56000/");
+        assert_eq!(s.quic, None);
+        let s = relay_spec("https://1.2.3.4:56000,quic=56001").unwrap();
+        assert_eq!(s.quic, Some(QuicPort::Port(56001)));
+        let s = relay_spec("https://1.2.3.4:56000,quic=off").unwrap();
+        assert_eq!(s.quic, Some(QuicPort::Off));
+
+        for bad in [
+            "http://1.2.3.4:3340",
+            "http://1.2.3.4:3340,quic=7842",
+            "https://1.2.3.4,quic=0",
+            "https://1.2.3.4,quic=70000",
+            "https://1.2.3.4,qad=7842",
+            "https://1.2.3.4,",
+        ] {
+            assert!(relay_spec(bad).is_err(), "{bad}");
+        }
+        assert!(
+            relay_spec("http://1.2.3.4")
+                .unwrap_err()
+                .contains("relay URLs must use https")
+        );
+    }
+
+    #[test]
+    fn relay_configs() {
+        let default_port = iroh_relay::defaults::DEFAULT_RELAY_QUIC_PORT;
+        let port = |cfg: RelayConfig| cfg.quic.map(|q| q.port);
+        let plain = relay_spec("https://1.2.3.4:56000").unwrap();
+        let own = relay_spec("https://1.2.3.4:56000,quic=56001").unwrap();
+        let off = relay_spec("https://1.2.3.4:56000,quic=off").unwrap();
+
+        assert_eq!(port(plain.config(None)), Some(default_port));
+        assert_eq!(port(plain.config(Some(QuicPort::Port(9)))), Some(9));
+        assert_eq!(port(plain.config(Some(QuicPort::Off))), None);
+        // A per-relay setting wins over `--relay-quic-port`.
+        assert_eq!(port(own.config(None)), Some(56001));
+        assert_eq!(port(own.config(Some(QuicPort::Off))), Some(56001));
+        assert_eq!(port(off.config(Some(QuicPort::Port(9)))), None);
+        assert_eq!(own.config(None).url, own.url);
+    }
+
+    #[test]
+    fn quic_ports() {
+        assert_eq!(quic_port("56001"), Ok(QuicPort::Port(56001)));
+        assert_eq!(quic_port("OFF"), Ok(QuicPort::Off));
+        assert!(quic_port("0").is_err());
+        assert!(quic_port("-1").is_err());
+        assert!(quic_port("").is_err());
+    }
 
     #[test]
     fn durations() {
