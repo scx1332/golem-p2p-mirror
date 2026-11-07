@@ -261,7 +261,7 @@ services (relay, directory, reflector at 198.18.0.x) are not reachable from
   inbound traffic. Use `udp_timeout=` to test short timeouts.
 * **No hairpinning between lab nodes behind the same NAT**, no shared CGN
   between several subscribers, no port-block allocation, no UPnP/PCP/NAT-PMP
-  (iroh's portmapper probes find nothing).
+  (golem-p2p deliberately does not use port mapping, see design.md §9).
 * **Fixed LAN addressing.** Each node has its own LAN subnet; real homes
   often share `192.168.1.0/24`, which matters when peers publish private
   addresses (they do, see design.md §14).
