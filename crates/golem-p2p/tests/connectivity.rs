@@ -404,6 +404,188 @@ async fn request_timeout_covers_waiting_for_a_stream() {
     .await;
 }
 
+/// A request whose handler is too slow times out on its own: its stream is
+/// reset (the handler learns that the requester gave up), requests running
+/// at the same time on the same connection succeed, and the connection stays
+/// open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_timeout_fails_only_that_request() {
+    with_timeout(60, async {
+        let net = TestNet::new(0).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let timeout = Duration::from_secs(1);
+        let a = Endpoint::builder(signer.clone(), Identities::new(a_id))
+            .discovery(net.discovery.clone())
+            .transport_mode(TransportMode::DirectOnly)
+            .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .request_timeout(timeout)
+            .bind()
+            .await
+            .unwrap();
+        let b = net
+            .node(&signer, Identities::new(b_id), NodeOpts::default())
+            .await;
+        // B echoes every request at once, except `slow`: that one it never
+        // answers, it only waits until the requester stops reading.
+        let (gave_up_tx, gave_up_rx) = tokio::sync::oneshot::channel();
+        let gave_up_tx = Arc::new(std::sync::Mutex::new(Some(gave_up_tx)));
+        {
+            let b = b.clone();
+            tokio::spawn(async move {
+                while let Some(mut inc) = b.accept().await {
+                    let gave_up_tx = gave_up_tx.clone();
+                    tokio::spawn(async move {
+                        let req = inc.read_request(1024).await.unwrap();
+                        if req == b"slow" {
+                            let (send, _) = inc.streams();
+                            let stopped = send.stopped().await;
+                            if let Some(tx) = gave_up_tx.lock().unwrap().take() {
+                                let _ = tx.send(stopped.ok().flatten());
+                            }
+                        } else {
+                            let _ = inc.respond(&req).await;
+                        }
+                    });
+                }
+            });
+        }
+        let conn = a.connect(b_id).await.unwrap();
+
+        // Fast requests before, during and after the slow one's timeout.
+        let fast = async {
+            for i in 0..10 {
+                let msg = format!("fast-{i}");
+                let reply = a.request(b_id, msg.as_bytes()).await;
+                assert_eq!(reply.unwrap(), msg.as_bytes(), "request {i}");
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+        };
+        let start = tokio::time::Instant::now();
+        let (slow, ()) = tokio::join!(a.request(b_id, b"slow"), fast);
+        assert!(matches!(slow, Err(golem_p2p::Error::Timeout)), "{slow:?}");
+        assert!(start.elapsed() >= timeout);
+
+        // B learned that A gave up on the slow request.
+        let code = tokio::time::timeout(Duration::from_secs(5), gave_up_rx)
+            .await
+            .expect("the slow handler was not told that the requester gave up")
+            .unwrap();
+        assert_eq!(code, Some(golem_p2p::wire::codes::TIMED_OUT));
+
+        // Same connection, still usable.
+        assert!(!conn.is_closed(), "the timeout closed the connection");
+        assert_eq!(a.request(b_id, b"after").await.unwrap(), b"after");
+        assert_eq!(a.connect(b_id).await.unwrap().stable_id(), conn.stable_id());
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}
+
+/// What the thread running a hung test node is told to do.
+enum HangCmd {
+    /// Block the node's only runtime thread until the sender is dropped.
+    Hang(std::sync::mpsc::Receiver<()>),
+    Close,
+}
+
+/// A peer that hangs (it neither answers nor acknowledges anything) is
+/// noticed within one request timeout: the request fails, the connection is
+/// closed, and once the peer recovers the next request dials it afresh.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hung_peer_is_noticed_within_the_request_timeout() {
+    with_timeout(60, async {
+        let net = TestNet::new(0).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let timeout = Duration::from_secs(1);
+        let connect_timeout = Duration::from_secs(2);
+        let a = Endpoint::builder(signer.clone(), Identities::new(a_id))
+            .discovery(net.discovery.clone())
+            .transport_mode(TransportMode::DirectOnly)
+            .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .request_timeout(timeout)
+            .connect_timeout(connect_timeout)
+            .bind()
+            .await
+            .unwrap();
+
+        // B runs on its own single-threaded runtime, so that blocking that
+        // thread hangs B completely, like a stopped process.
+        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let discovery = net.discovery.clone();
+        let b_signer = signer.clone();
+        let b_thread = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                let b = Endpoint::builder(b_signer, Identities::new(b_id))
+                    .discovery(discovery)
+                    .transport_mode(TransportMode::DirectOnly)
+                    .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                    .bind()
+                    .await
+                    .unwrap();
+                spawn_echo(&b);
+                ready_tx.send(()).unwrap();
+                while let Some(cmd) = cmd_rx.recv().await {
+                    match cmd {
+                        // Deliberately blocking: the whole node stops.
+                        HangCmd::Hang(release) => {
+                            let _ = release.recv();
+                        }
+                        HangCmd::Close => break,
+                    }
+                }
+                b.close().await;
+            });
+        });
+        ready_rx.await.unwrap();
+
+        assert_eq!(echo(&a, b_id, "before").await.unwrap().data, "before");
+        let conn = a.connect(b_id).await.unwrap();
+
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        cmd_tx.send(HangCmd::Hang(release_rx)).unwrap();
+        // Let whatever B sent before it hung arrive.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let start = tokio::time::Instant::now();
+        let r = a.request(b_id, b"while hung").await;
+        let took = start.elapsed();
+        assert!(matches!(r, Err(golem_p2p::Error::Timeout)), "{r:?}");
+        assert!(took < timeout * 2, "took {took:?}");
+        assert!(
+            conn.is_closed(),
+            "nothing arrived from the hung peer, but the connection stays open"
+        );
+
+        // While B still hangs, the next request dials and fails within the
+        // connect timeout.
+        let start = tokio::time::Instant::now();
+        assert!(a.request(b_id, b"still hung").await.is_err());
+        assert!(start.elapsed() < connect_timeout + timeout * 2);
+
+        // B recovers: a new connection serves requests again.
+        drop(release_tx);
+        let e = echo_eventually(&a, b_id, "after", 20).await;
+        assert_eq!(e.data, "after");
+        assert_ne!(a.connect(b_id).await.unwrap().stable_id(), conn.stable_id());
+
+        cmd_tx.send(HangCmd::Close).unwrap();
+        a.close().await;
+        tokio::task::spawn_blocking(move || b_thread.join().unwrap())
+            .await
+            .unwrap();
+    })
+    .await;
+}
+
 /// Discovery whose first publish takes a while.
 #[derive(Debug, Default)]
 struct SlowFirstPublish {

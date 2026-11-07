@@ -392,13 +392,24 @@ unreachable peer fails after one connect timeout, not one per request.
 
 **Request/response.** `Endpoint::request` opens a stream, writes the request,
 finishes, and reads the response. It is not retried once the request may have
-reached the peer (requests are not assumed idempotent). On a connection error
-or timeout the connection is closed, so the next call dials fresh with a newly
-looked-up record. That is how a peer recovers after the other side crashed.
-The request timeout starts when the connection is ready and also covers
-waiting for a stream when the peer has reached its limit of 256 concurrent
-streams; that wait timing out leaves the connection open (the peer is busy,
-not gone).
+reached the peer (requests are not assumed idempotent). The request timeout
+starts when the connection is ready and also covers waiting for a stream when
+the peer has reached its limit of 256 concurrent streams.
+
+A timeout fails that one request, not the connection: its stream is reset
+(`TIMED_OUT`), so the peer's handler learns that nobody waits for the answer,
+and other requests on the same connection go on. One slow request or a large
+transfer on a poor link must not tear down all traffic to the peer. The
+connection is closed only on a connection error, or if nothing at all arrived
+from the peer during the timed-out request (the UDP datagram counter of the
+connection did not move, over all its paths): a live peer acknowledges the
+request within a round trip and sends keep-alives every 5 s, so silence means
+it crashed, hangs, or the path is gone. The next call then dials fresh with a
+newly looked-up record; that is how a peer recovers after the other side
+crashed. Without any request, QUIC's idle timeout (30 s, with keep-alives every
+5 s) closes a connection to a dead peer. A timeout while waiting for a stream
+never closes the connection (the peer is busy, not gone; we sent nothing that
+it would acknowledge).
 
 ## 8. Discovery
 
@@ -541,10 +552,12 @@ that sees a new instance of an endpoint closes connections of the old
 instance, and refuses connections that present an older instance.
 
 After a crash, a peer may still hold a connection to the dead process. Its next
-request fails after the request timeout, the connection is closed, and the
-following request dials the new process using the newer record from
-discovery. The crash test kills a real process with SIGKILL and checks that
-every answer afterwards comes from the new process.
+request fails after the request timeout; nothing arrived from the dead process
+meanwhile, so the connection is closed (section 7), and the following request
+dials the new process using the newer record from discovery. The crash test
+kills a real process with SIGKILL and checks that every answer afterwards
+comes from the new process; a library test does the same with a peer that
+hangs.
 
 ## 11. Lessons from ya-relay, and how this design applies them
 

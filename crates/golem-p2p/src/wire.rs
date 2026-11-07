@@ -116,6 +116,9 @@ pub mod codes {
     /// Stream reset: the receiving application dropped the stream without
     /// answering it.
     pub const NOT_ANSWERED: VarInt = VarInt::from_u32(9);
+    /// Stream reset: the requester gave up waiting for the response (request
+    /// timeout).
+    pub const TIMED_OUT: VarInt = VarInt::from_u32(10);
 }
 
 /// Error reading or writing frames.

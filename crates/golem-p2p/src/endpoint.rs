@@ -1055,41 +1055,56 @@ impl Inner {
     ///
     /// With `timeout`, waiting for the stream (the peer may have reached its
     /// limit of concurrent streams) ends after `timeout` from when the
-    /// connection was ready; the returned instant is that deadline.
+    /// connection was ready; [`OpenStream::deadline`] is that deadline.
     async fn open_bi(
         self: &Arc<Self>,
         from: NodeId,
         to: NodeId,
         timeout: Option<Duration>,
-    ) -> Result<(
-        Connection,
-        SendStream,
-        RecvStream,
-        Option<tokio::time::Instant>,
-    )> {
+    ) -> Result<OpenStream> {
         if !self.local_record().contains(&from) {
             return Err(Error::NotLocalIdentity(from));
         }
         let conn = self.connect(to).await?;
         let deadline = timeout.map(|t| tokio::time::Instant::now() + t);
-        let open = async |conn: &Connection| match deadline {
-            Some(d) => tokio::time::timeout_at(d, conn.open_bi(from, to))
-                .await
-                .unwrap_or(Err(Error::Timeout)),
-            None => conn.open_bi(from, to).await,
+        let open = async |conn: &Connection| {
+            let received = conn.datagrams_received();
+            let (send, recv) = match deadline {
+                Some(d) => tokio::time::timeout_at(d, conn.open_bi(from, to))
+                    .await
+                    .unwrap_or(Err(Error::Timeout))?,
+                None => conn.open_bi(from, to).await?,
+            };
+            Ok::<_, Error>(OpenStream {
+                conn: conn.clone(),
+                send,
+                recv,
+                deadline,
+                received,
+            })
         };
         match open(&conn).await {
-            Ok((s, r)) => Ok((conn, s, r, deadline)),
             Err(Error::Connection(e)) => {
                 debug!("stream open failed on cached connection, redialing: {e}");
                 conn.close();
                 let conn = self.connect(to).await?;
-                let (s, r) = open(&conn).await?;
-                Ok((conn, s, r, deadline))
+                open(&conn).await
             }
-            Err(e) => Err(e),
+            r => r,
         }
     }
+}
+
+/// An application stream opened by [`Inner::open_bi`].
+struct OpenStream {
+    conn: Connection,
+    send: SendStream,
+    recv: RecvStream,
+    /// End of the request timeout, if one was given.
+    deadline: Option<tokio::time::Instant>,
+    /// [`Connection::datagrams_received`] when the timeout started, to tell
+    /// a peer that is slow to answer from one that has gone silent.
+    received: u64,
 }
 
 async fn reject(conn: &IrohConnection, send: &mut SendStream, reason: RejectReason, code: VarInt) {
@@ -1497,8 +1512,8 @@ impl Endpoint {
     /// If the peer has reached its limit of concurrent streams on the
     /// connection (256), this waits until one of them ends.
     pub async fn open_bi_from(&self, from: NodeId, to: NodeId) -> Result<(SendStream, RecvStream)> {
-        let (_, s, r, _) = self.inner.open_bi(from, to, None).await?;
-        Ok((s, r))
+        let s = self.inner.open_bi(from, to, None).await?;
+        Ok((s.send, s.recv))
     }
 
     /// Sends `data` from our default identity to `to` and returns the response.
@@ -1516,14 +1531,26 @@ impl Endpoint {
     /// streams, sending the request and receiving the response.
     ///
     /// Not retried once the request may have been delivered. If the request
-    /// fails on a connection-level error, or times out after it was sent, that
-    /// connection is closed so the next call dials a fresh one with a freshly
-    /// looked-up record. (A timeout while waiting for a stream leaves the
-    /// connection open: the peer is busy, not gone.)
+    /// fails on a connection-level error, that connection is closed so the
+    /// next call dials a fresh one with a freshly looked-up record.
+    ///
+    /// A request that times out after it was sent fails alone: its stream is
+    /// reset with [`codes::TIMED_OUT`](crate::wire::codes::TIMED_OUT), and
+    /// other requests on the same connection go on. The connection is closed
+    /// only if nothing at all arrived from the peer during the timeout (not
+    /// even an acknowledgement of the request): then the peer has crashed,
+    /// hangs, or the path is gone, and the next call dials afresh. (A timeout
+    /// while waiting for a stream leaves the connection open: the peer is
+    /// busy, not gone.)
     pub async fn request_from(&self, from: NodeId, to: NodeId, data: &[u8]) -> Result<Vec<u8>> {
         let timeout = self.inner.config.request_timeout;
-        let (conn, mut send, mut recv, deadline) =
-            self.inner.open_bi(from, to, Some(timeout)).await?;
+        let OpenStream {
+            conn,
+            mut send,
+            mut recv,
+            deadline,
+            received,
+        } = self.inner.open_bi(from, to, Some(timeout)).await?;
         let deadline = deadline.unwrap_or_else(|| tokio::time::Instant::now() + timeout);
         let max = self.inner.config.max_response_size;
         let exchange = async {
@@ -1541,7 +1568,17 @@ impl Endpoint {
                 Err(e)
             }
             Err(_) => {
-                conn.close();
+                // Give up on this request only, and tell the peer so.
+                let _ = send.reset(codes::TIMED_OUT);
+                let _ = recv.stop(codes::TIMED_OUT);
+                if conn.datagrams_received() == received {
+                    debug!(
+                        peer = %to,
+                        "request timed out and nothing arrived from the peer meanwhile, \
+                         closing the connection"
+                    );
+                    conn.close();
+                }
                 Err(Error::Timeout)
             }
         }
@@ -1701,6 +1738,13 @@ impl Connection {
     /// Returns `true` once the connection is closed.
     pub fn is_closed(&self) -> bool {
         self.inner.conn.close_reason().is_some()
+    }
+
+    /// UDP datagrams received on this connection so far, over all its paths
+    /// (relayed ones included): a sign of life of the peer. A live peer
+    /// acknowledges what we send and sends keep-alives every few seconds.
+    fn datagrams_received(&self) -> u64 {
+        self.inner.conn.stats().udp_rx.datagrams
     }
 
     /// Closes the connection.
