@@ -489,8 +489,9 @@ pub async fn upload(
         let chunk = vec![0u8; 64 * 1024];
         while sent < max_bytes {
             let n = (max_bytes - sent).min(chunk.len() as u64) as usize;
-            send.write_all(&chunk[..n]).await?;
-            sent += n as u64;
+            // `write`, not `write_all`: cut off by the time limit, `sent`
+            // must still be exactly what the stream took.
+            sent += send.write(&chunk[..n]).await? as u64;
         }
         send.finish()?;
         Ok::<_, anyhow::Error>(())
