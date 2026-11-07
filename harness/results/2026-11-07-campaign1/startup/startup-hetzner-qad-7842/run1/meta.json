@@ -1,0 +1,6 @@
+{
+ "bench_args": "--relay https://213.163.75.157:56000 --directory http://213.163.75.157:56050/",
+ "bencher": "hetzner",
+ "deployed": "9c37664 (local build)",
+ "run": "startup-hetzner-qad-7842-r1"
+}

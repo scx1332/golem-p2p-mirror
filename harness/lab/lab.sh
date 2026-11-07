@@ -25,6 +25,13 @@
 #                                 golem-p2p listen/send between two nodes, summarized
 #   lab.sh matrix [--repeat N] [--duration S] [--out DIR] <listener:sender>...
 #                                 run pair for every listed pair, N times
+#   lab.sh bench <node> [--to ID] [--out DIR] [--run-id R] [...] [-- bench args]
+#                                 `golem-p2p --json bench`; prints its bench_report line
+#   lab.sh benchpair <listener> <bencher> [--out DIR] [--run-id R] [--listen-arg A]...
+#                    [--bench-arg A]... [--timeout S]
+#                                 `listen --json` + `bench --json --to`; prints the bench_report
+#   lab.sh benchmatrix [--repeat N] [--out DIR] [--bench-arg A]... <listener:bencher>...
+#                                 benchpair for every pair, N rounds; reports.jsonl + results.txt
 set -euo pipefail
 export LC_ALL=C
 
@@ -37,7 +44,8 @@ TOOLS=$LAB_DIR/tools
 TOPOLOGIES=$LAB_DIR/topologies
 
 # Real (internet) relay, used by nodes with uplink=real.
-REAL_RELAY=${GPL_REAL_RELAY:-https://213.163.75.157:56000}
+# The relay serves QUIC address discovery on UDP 56001 (not iroh's default 7842).
+REAL_RELAY=${GPL_REAL_RELAY:-https://213.163.75.157:56000,quic=56001}
 REAL_RELAY_CA=${GPL_REAL_RELAY_CA:-$LAB_DIR/certs/real-relay.crt}
 REAL_DIRECTORY=${GPL_REAL_DIRECTORY:-}
 
@@ -448,15 +456,24 @@ spawn_in() {
     if [[ -f $pidf ]] && kill -0 "$(cat "$pidf")" 2>/dev/null; then
         die "a process with tag '$tag' is already running"
     fi
-    if ((asroot)); then
-        setsid ip netns exec "$ns" "$@" >"$logf" 2>&1 </dev/null &
-    else
+    # SPAWN_ERR=<file>: stderr goes there instead of into the log (for
+    # commands that print JSON on stdout).
+    local errf=${SPAWN_ERR:-}
+    local cmd=("$@")
+    if ((!asroot)); then
         user_cmd "$node"
-        setsid ip netns exec "$ns" "${USER_CMD[@]}" "$@" >"$logf" 2>&1 </dev/null &
+        cmd=("${USER_CMD[@]}" "$@")
     fi
-    echo $! >"$pidf"
+    if [[ -n $errf ]]; then
+        setsid ip netns exec "$ns" "${cmd[@]}" >"$logf" 2>"$errf" </dev/null &
+        echo $! >"$pidf"
+        chown "$RUN_UID:$RUN_GID" "$errf"
+    else
+        setsid ip netns exec "$ns" "${cmd[@]}" >"$logf" 2>&1 </dev/null &
+        echo $! >"$pidf"
+    fi
     chown "$RUN_UID:$RUN_GID" "$logf"
-    echo $!
+    cat "$pidf"
 }
 
 stop_tag() {
@@ -842,7 +859,8 @@ start_listener() {
     local n
     READY=""
     for n in $(seq 200); do
-        READY=$(grep -m1 '^READY' "$STATE/logs/$tag.log" 2>/dev/null || true)
+        # `READY ...` (human output) or the `ready` event (with --json).
+        READY=$(grep -m1 -E '^READY|^\{.*"event":"ready"' "$STATE/logs/$tag.log" 2>/dev/null || true)
         [[ -n $READY ]] && return 0
         kill -0 "$(cat "$STATE/pids/$tag.pid")" 2>/dev/null || break
         sleep 0.1
@@ -850,6 +868,11 @@ start_listener() {
     tail -5 "$STATE/logs/$tag.log" >&2 || true
     stop_tag "$tag"
     die "listener in $node did not become ready (log: $STATE/logs/$tag.log)"
+}
+
+# ready_node_id <READY line or ready event>: the listener's node ID.
+ready_node_id() {
+    sed -n -e 's/^READY node_id=\([^ ]*\).*/\1/p' -e 's/^{.*"event":"ready".*"node_id":"\(0x[0-9a-f]*\)".*/\1/p' <<<"$1"
 }
 
 # run_send <node> <to> <duration> <out dir> <args...>: runs `golem-p2p send
@@ -871,7 +894,8 @@ run_send() {
 
 # listen <node> [--tag T] [--relay URL] [--relay-ca F] [--directory URL] [-- extra listen args]
 # Starts a background listener (stop it with `lab.sh stop <tag>`, default
-# listen-<node>) and prints its READY line.
+# listen-<node>) and prints its READY line. With `-- --json ...` it prints the
+# `ready` event; the events are in $STATE/logs/<tag>.log, stderr in <tag>.err.
 cmd_listen() {
     require_up
     [[ $# -ge 1 ]] || die "usage: lab.sh listen <node> [--tag T] [--relay URL] [--relay-ca F] [--directory URL] [-- args]"
@@ -880,7 +904,12 @@ cmd_listen() {
     parse_run_opts "$@"
     ((${#O_REST[@]} == 0)) || die "unknown listen option ${O_REST[0]}"
     conn_args "$node" "$O_RELAY" "$O_CA" "$O_DIR"
-    start_listener "$node" "${O_TAG:-listen-$node}" "${CONN[@]}" "${O_EXTRA[@]}"
+    local tag=${O_TAG:-listen-$node} a
+    # With --json, stdout (the log) carries only events; stderr goes to <tag>.err.
+    for a in "${O_EXTRA[@]}"; do
+        [[ $a == --json ]] && local SPAWN_ERR=$STATE/logs/$tag.err
+    done
+    start_listener "$node" "$tag" "${CONN[@]}" "${O_EXTRA[@]}"
     echo "$READY"
 }
 
@@ -927,7 +956,7 @@ cmd_pair() {
     mkdir_user "$out"
     local ltag=pair-listen-$lnode-$$ lid
     start_listener "$lnode" "$ltag" "${CONN[@]}" "${O_LARGS[@]}"
-    lid=$(sed -n 's/^READY node_id=\([^ ]*\).*/\1/p' <<<"$READY")
+    lid=$(ready_node_id "$READY")
     run_send "$snode" "$lid" "$O_DUR" "$out" "${CONN[@]}" "${O_SARGS[@]}"
     stop_tag "$ltag"
     cp "$STATE/logs/$ltag.log" "$out/listen.log"
@@ -967,6 +996,169 @@ cmd_matrix() {
     log "results in $out/results.txt"
 }
 
+# ---------------------------------------------------------------- bench --json
+
+# Parses the options of bench/benchpair into B_* variables.
+parse_bench_opts() {
+    B_OUT="" B_RELAY="" B_CA="" B_DIR="" B_TO="" B_RUN="" B_TIMEOUT=300 B_LARGS=() B_BARGS=()
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --out) B_OUT=$2; shift 2 ;;
+            --relay) B_RELAY=$2; shift 2 ;;
+            --relay-ca) B_CA=$2; shift 2 ;;
+            --directory) B_DIR=$2; shift 2 ;;
+            --to) B_TO=$2; shift 2 ;;
+            --run-id) B_RUN=$2; shift 2 ;;
+            --timeout) B_TIMEOUT=$2; shift 2 ;;
+            --listen-arg) B_LARGS+=("$2"); shift 2 ;;
+            --bench-arg) B_BARGS+=("$2"); shift 2 ;;
+            --) shift; B_BARGS+=("$@"); break ;;
+            *) die "unknown bench option $1" ;;
+        esac
+    done
+    [[ $B_TIMEOUT =~ ^[0-9]+$ ]] || die "bad --timeout $B_TIMEOUT"
+}
+
+# node_meta <role> <node>: key=value lines describing a lab node, for meta.json.
+node_meta() {
+    node_line "$2"
+    echo "$1=$N_NAME"
+    echo "$1_profile=$N_PROFILE"
+    echo "$1_uplink=$N_UPLINK"
+    echo "$1_delay=$N_DELAY"
+    echo "$1_jitter=$N_JITTER"
+    echo "$1_loss=$N_LOSS"
+    echo "$1_rate=$N_RATE"
+    echo "$1_udp_timeout=$N_UDPT"
+}
+
+# run_bench <node> <out dir> <run id> <timeout s> <args...>: `golem-p2p --json
+# bench` in a node; stdout to bench.jsonl, stderr to bench.err, exit code to
+# bench.exit. SIGTERM after <timeout> s (bench then still prints its report).
+run_bench() {
+    local node=$1 out=$2 run=$3 tmo=$4
+    shift 4
+    user_cmd "$node"
+    local rc=0
+    ip netns exec "$PFX-$node" "${USER_CMD[@]}" timeout -s TERM -k 15 "$tmo" \
+        "$GOLEM_P2P" --json --run-id "$run" --node-name "$node" bench "$@" \
+        >"$out/bench.jsonl" 2>"$out/bench.err" </dev/null || rc=$?
+    echo "$rc" >"$out/bench.exit"
+    chown "$RUN_UID:$RUN_GID" "$out/bench.jsonl" "$out/bench.err" "$out/bench.exit"
+}
+
+# Prints the bench_report line of a run directory; fails if there is none.
+bench_report_line() {
+    local l
+    l=$(tail -n 1 "$1/bench.jsonl" 2>/dev/null || true)
+    [[ $l == *'"event":"bench_report"'* ]] || { echo "lab: no bench_report in $1/bench.jsonl (exit $(cat "$1/bench.exit" 2>/dev/null))" >&2; return 1; }
+    echo "$l"
+}
+
+# bench <node> [--to ID] [--out DIR] [--run-id R] [--relay ..] [--relay-ca ..]
+#       [--directory ..] [--timeout S] [-- bench args]
+# Runs `golem-p2p --json bench` in a node and prints its bench_report line.
+# Raw output in DIR (default ~/gpl-runs/<time>-bench-<node>): bench.jsonl,
+# bench.err, bench.exit, meta.json.
+cmd_bench() {
+    require_up
+    [[ $# -ge 1 ]] || die "usage: lab.sh bench <node> [--to ID] [options] [-- bench args]"
+    local node=$1
+    shift
+    parse_bench_opts "$@"
+    conn_args "$node" "$B_RELAY" "$B_CA" "$B_DIR"
+    local out=${B_OUT:-$RUN_HOME/gpl-runs/$(date +%Y%m%d-%H%M%S)-bench-$node}
+    local run=${B_RUN:-$(basename "$out")}
+    mkdir_user "$out"
+    local to=()
+    [[ -n $B_TO ]] && to=(--to "$B_TO")
+    { node_meta bencher "$node"; echo "run=$run"; echo "to=$B_TO";
+      echo "bench_args=${CONN[*]} ${to[*]} ${B_BARGS[*]}"; echo "deployed=$(cat "$LAB_DIR/DEPLOYED" 2>/dev/null)"; } |
+        python3 "$TOOLS/benchsum.py" meta "$out/meta.json"
+    run_bench "$node" "$out" "$run" "$B_TIMEOUT" "${CONN[@]}" "${to[@]}" "${B_BARGS[@]}"
+    chown -R "$RUN_UID:$RUN_GID" "$out"
+    python3 "$TOOLS/benchsum.py" line "$out" >&2 || true
+    bench_report_line "$out"
+}
+
+# benchpair <listener> <bencher> [--out DIR] [--run-id R] [--relay ..] [--relay-ca ..]
+#           [--directory ..] [--listen-arg A]... [--bench-arg A]... [--timeout S]
+# Starts `golem-p2p --json listen` in the listener node, runs `golem-p2p --json
+# bench --to <listener>` in the bencher node, stops the listener and prints the
+# bench_report line (a key=value summary goes to stderr). Raw output in DIR
+# (default ~/gpl-runs/<time>-bench-<listener>-<bencher>): bench.jsonl,
+# bench.err, bench.exit, listen.jsonl, listen.err, meta.json, summary.txt.
+cmd_benchpair() {
+    require_up
+    [[ $# -ge 2 ]] || die "usage: lab.sh benchpair <listener> <bencher> [options]"
+    local lnode=$1 bnode=$2
+    shift 2
+    parse_bench_opts "$@"
+    node_line "$lnode"
+    local lup=$N_UPLINK
+    node_line "$bnode"
+    [[ -n $B_RELAY || $lup == "$N_UPLINK" ]] ||
+        die "$lnode and $bnode use different uplinks; pass --relay/--relay-ca/--directory"
+    conn_args "$lnode" "$B_RELAY" "$B_CA" "$B_DIR"
+    local out=${B_OUT:-$RUN_HOME/gpl-runs/$(date +%Y%m%d-%H%M%S)-bench-$lnode-$bnode}
+    local run=${B_RUN:-$(basename "$out")}
+    mkdir_user "$out"
+    local ltag=bench-listen-$lnode-$$ lid
+    SPAWN_ERR=$STATE/logs/$ltag.err start_listener "$lnode" "$ltag" \
+        --json --run-id "$run" --node-name "$lnode" "${CONN[@]}" "${B_LARGS[@]}"
+    lid=$(ready_node_id "$READY")
+    [[ -n $lid ]] || { stop_tag "$ltag"; die "no node_id in the listener's ready event"; }
+    { node_meta listener "$lnode"; node_meta bencher "$bnode"; echo "run=$run"; echo "to=$lid";
+      echo "listen_args=${CONN[*]} ${B_LARGS[*]}"; echo "bench_args=${CONN[*]} --to $lid ${B_BARGS[*]}";
+      echo "deployed=$(cat "$LAB_DIR/DEPLOYED" 2>/dev/null)"; } |
+        python3 "$TOOLS/benchsum.py" meta "$out/meta.json"
+    run_bench "$bnode" "$out" "$run" "$B_TIMEOUT" "${CONN[@]}" --to "$lid" "${B_BARGS[@]}"
+    stop_tag "$ltag"
+    cp "$STATE/logs/$ltag.log" "$out/listen.jsonl"
+    cp "$STATE/logs/$ltag.err" "$out/listen.err"
+    rm -f "$STATE/logs/$ltag.log" "$STATE/logs/$ltag.err"
+    python3 "$TOOLS/benchsum.py" line "$out" | tee "$out/summary.txt" >&2 || true
+    chown -R "$RUN_UID:$RUN_GID" "$out"
+    bench_report_line "$out"
+}
+
+# benchmatrix [--repeat N] [--out DIR] [--listen-arg A]... [--bench-arg A]...
+#             [--timeout S] <listener:bencher>...
+# benchpair for every pair, N rounds (all pairs, then all pairs again). Every
+# run's bench_report line is appended to DIR/reports.jsonl, its key=value
+# summary to DIR/results.txt; raw output in DIR/<listener>-<bencher>/run<r>/.
+cmd_benchmatrix() {
+    require_up
+    local repeat=3 out="" pairs=() pass=()
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --repeat) repeat=$2; shift 2 ;;
+            --out) out=$2; shift 2 ;;
+            --listen-arg | --bench-arg | --timeout) pass+=("$1" "$2"); shift 2 ;;
+            *:*) pairs+=("$1"); shift ;;
+            *) die "unknown benchmatrix argument $1 (pairs are listener:bencher)" ;;
+        esac
+    done
+    ((${#pairs[@]})) || die "no pairs given"
+    out=${out:-$RUN_HOME/gpl-runs/benchmatrix-$(date +%Y%m%d-%H%M%S)}
+    mkdir_user "$out"
+    cp "$STATE/topology.src" "$out/topology.topo"
+    local r p l b d line
+    for r in $(seq "$repeat"); do
+        for p in "${pairs[@]}"; do
+            l=${p%%:*} b=${p#*:} d=$out/$l-$b/run$r
+            mkdir_user "$out/$l-$b"
+            if line=$(cmd_benchpair "$l" "$b" --out "$d" --run-id "$l-$b-r$r" "${pass[@]}"); then
+                echo "$line" >>"$out/reports.jsonl"
+            fi
+            echo "round=$r $(cat "$d/summary.txt" 2>/dev/null || echo "listener=$l bencher=$b error=no-report")" |
+                tee -a "$out/results.txt"
+        done
+    done
+    chown -R "$RUN_UID:$RUN_GID" "$out"
+    log "results in $out/reports.jsonl and $out/results.txt"
+}
+
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; }
 
 main() {
@@ -987,6 +1179,9 @@ main() {
         send) cmd_send "$@" ;;
         pair) cmd_pair "$@" ;;
         matrix) cmd_matrix "$@" ;;
+        bench) cmd_bench "$@" ;;
+        benchpair) cmd_benchpair "$@" ;;
+        benchmatrix) cmd_benchmatrix "$@" ;;
         help | -h | --help) usage ;;
         *) die "unknown command '$cmd' (lab.sh help)" ;;
     esac

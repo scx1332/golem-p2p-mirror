@@ -1,0 +1,24 @@
+# Benchmark campaign 1 (harness/campaign/campaign1.sh lab): the matrix nodes
+# (every access link 10 ms each way, the relay's link another 10 ms each way,
+# so a direct round trip is ~40 ms and a relayed one ~80 ms), plus a node on a
+# bad link (netem) and node pairs with short NAT mapping timeouts for --idle.
+set relay_delay=10ms
+# name   profile          link options
+pub1     public           delay=10ms
+easy1    easy             delay=10ms
+easy2    easy             delay=10ms
+rc1      restricted       delay=10ms
+pr1      port-restricted  delay=10ms
+pr2      port-restricted  delay=10ms
+sym1     symmetric        delay=10ms
+sym2     symmetric        delay=10ms
+udpb1    udp-blocked      delay=10ms
+cgn1     cgnat            delay=10ms
+dbl1     double           delay=10ms
+# 50 ms each way and 1 % loss each way on this node's access link
+lossy1   port-restricted  delay=50ms loss=1%
+# NAT mappings expire 30 s / 5 s after the last packet (default 120 s)
+idle1    port-restricted  delay=10ms udp_timeout=30
+idle2    port-restricted  delay=10ms udp_timeout=30
+idle3    port-restricted  delay=10ms udp_timeout=5
+idle4    port-restricted  delay=10ms udp_timeout=5

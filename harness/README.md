@@ -9,15 +9,22 @@ out through the VM's real uplink instead.
 Results of the first experiments: [lab/RESULTS.md](lab/RESULTS.md).
 
 ```
-lab/lab.sh            the lab: up/down/status/exec/spawn/listen/send/pair/matrix/selftest/netem
+lab/lab.sh            the lab: up/down/status/exec/spawn/listen/send/pair/matrix/
+                      bench/benchpair/benchmatrix/selftest/netem
 lab/deploy.sh         build the CLI and copy the lab to the VM (run on the build machine)
 lab/realworld.sh      experiment 2: lab node via the real uplink <-> public node here
-lab/topologies/*.topo topologies (selftest, matrix, real)
+lab/topologies/*.topo topologies (selftest, matrix, real, campaign, campaign-real)
 lab/tools/reflector.py   UDP/TCP address reflector (runs in the lab's "internet")
 lab/tools/natcheck.py    measures mapping and filtering behaviour from behind a NAT
 lab/tools/summarize.py   summarizes a send run (path, timings)
 lab/tools/aggregate.py   turns matrix/realworld results.txt into a Markdown table
+lab/tools/benchsum.py    one key=value line per `bench --json` run; run metadata
+campaign/campaign1.sh    benchmark campaign 1 (lab matrix, real world, relay, startup)
+campaign/summarize.py    campaign directory -> summary.json + table.md
+results/<date>-<name>/   raw data and summaries of campaigns
 ```
+
+Results of benchmark campaign 1: [results/2026-11-07-campaign1/](results/2026-11-07-campaign1/).
 
 ## Requirements
 
@@ -79,6 +86,9 @@ cd ~/golem-p2p-lab
 | `send <node> --to <id> [--duration S] [--out DIR] [...] [-- args]` | `golem-p2p send --count <many>` for S seconds, every output line timestamped, then one summary line. |
 | `pair <listener> <sender> [--duration S] [--out DIR] [--listen-arg A] [--send-arg A] [...]` | `listen` + `send` + `stop`, summary includes which paths the listener saw. Raw logs in `~/gpl-runs/<time>-<listener>-<sender>/`. |
 | `matrix [--repeat N] [--duration S] [--out DIR] <l:s>...` | `pair` for every pair, N rounds, results in `DIR/results.txt`. |
+| `bench <node> [--to ID] [--out DIR] [--run-id R] [--relay U --relay-ca F --directory D] [--timeout S] [-- args]` | `golem-p2p --json bench` in a node (SIGTERM after `--timeout`, default 300 s). Prints the `bench_report` line; a `key=value` summary goes to stderr. Raw output in DIR: `bench.jsonl` (every event, `ready` first, `bench_report` last), `bench.err`, `bench.exit`, `meta.json`. |
+| `benchpair <listener> <bencher> [--out DIR] [--run-id R] [--listen-arg A]... [--bench-arg A]... [-- bench args]` | `golem-p2p --json listen` in one node, `bench --json --to <it>` in the other, then stops the listener. Prints the `bench_report` line; adds `listen.jsonl`, `listen.err` and `summary.txt` to DIR (default `~/gpl-runs/<time>-bench-<l>-<b>`). |
+| `benchmatrix [--repeat N] [--out DIR] [--bench-arg A]... <l:b>...` | `benchpair` for every pair, N rounds; every `bench_report` line appended to `DIR/reports.jsonl`, summaries to `DIR/results.txt`, raw runs in `DIR/<l>-<b>/run<r>/`. |
 | `selftest [<topology>]` | runs `natcheck.py` in every lab node and compares with the profile's expected behaviour; prints a Markdown table, exits non-zero on a mismatch. |
 | `netem <node> [delay=] [jitter=] [loss=] [rate=] \| clear` | changes the node's access link (both directions) while the lab runs. |
 
@@ -94,6 +104,24 @@ listener=sym1 sender=easy1 ok=1 replies=721 t_first=0.92 first_ms=298 first_path
 for the relay, up to 5 s), `first_ms` is the first request as printed by
 `send` (directory lookup, connect, handshake, one request). Field meanings are
 in `tools/summarize.py`.
+
+The `bench` commands use the CLI's `--json` events instead
+([docs/cli-events.md](../docs/cli-events.md)); `--run-id` and the node name
+(`--node-name`) are set on both sides. Their summary line (`tools/benchsum.py`)
+looks like
+
+```
+listener=sym1 listener_profile=symmetric bencher=easy1 bencher_profile=easy run=trial1
+  exit=0 bind_ms=608 status=healthy connect_ms=217 first_path=relay ttd_ms=304
+  final_path=direct changes=1 direct_frac=0.98 rtt_p50=40.4 rtt_p95=40.6 jitter=0.9
+  lost_pct=0.04 up=122.7[direct] down=122.1[direct] conc=155.9 rc=80.6/35.4/35.6
+  listener_saw=direct:83,relay:28 issues=- hints=relay_fallback verdict="Good: ..."
+```
+
+`lab.sh listen <node> -- --json ...` prints the listener's `ready` event and
+keeps its stderr apart (`$STATE/logs/<tag>.err`). Nodes with `uplink=real` use
+the real relay with its QAD port by default
+(`https://213.163.75.157:56000,quic=56001`, override with `GPL_REAL_RELAY`).
 
 ### Topology files
 
@@ -274,6 +302,46 @@ services (relay, directory, reflector at 198.18.0.x) are not reachable from
   NAT behaviour is outside our control.
 * The lab VM runs everything on one kernel: CPU contention between nodes is
   possible with many busy nodes (the experiments here use about 25 requests/s).
+
+## Benchmark campaigns
+
+`campaign/campaign1.sh` re-runs benchmark campaign 1 from the build machine
+(it drives the lab VM and the relay VM over ssh, and runs `golem-p2p` on the
+build machine itself). Steps, in this order for `all`:
+
+```sh
+harness/campaign/campaign1.sh --out harness/results/$(date -u +%F)-campaign1 all
+# or step by step:
+harness/campaign/campaign1.sh --out DIR deploy lab labextra # lab matrix (~30 min)
+harness/campaign/campaign1.sh --out DIR realworld startup    # via the real relay (~30 min)
+harness/campaign/campaign1.sh --out DIR relay summarize cleanup
+```
+
+| step | what |
+|---|---|
+| `deploy` | build the CLI, `lab/deploy.sh` |
+| `lab` | `lab.sh up campaign`, selftest, then every lab scenario (`LAB_SCENARIOS` in the script: listener, bencher, extra bench arguments) `--repeat` times (default 3), rounds interleaved, with `lab.sh benchpair`; fetches the runs |
+| `labextra` | NAT "reboot" during `--idle 60s`: `conntrack -F` on both routers of a port-restricted pair 20 s into the idle phase (needs the lab from `lab`) |
+| `realworld` | `lab.sh up campaign-real` (easy, symmetric and udp-blocked nodes with `uplink=real`), a temporary directory on the relay VM (`systemd-run` unit `gpl-rw-directory`, port 56050, `RuntimeMaxSec`); lab nodes bench a `listen` node on this machine on a random UDP port (behind ufw) and on UDP 8000 (allowed by ufw), and this machine benches `listen` nodes in the lab; relay with `,quic=56001` |
+| `startup` | local check only (`bench` without `--to`) here and in the easy lab node, with the relay's QAD port, iroh's default port (unanswered) and QAD off: bind time, net report |
+| `relay` | relay only (`--relay-only` on both sides) between two processes on this machine through the real relay: alone, then 2 and 4 benches in parallel (separate listeners, no concurrency phase) |
+| `summarize` | `campaign/summarize.py DIR`: `summary.json` and `table.md` |
+| `cleanup` | `lab.sh down`, stop the directory on the relay VM and local processes |
+
+Layout of a campaign directory: `scenarios.jsonl` (one line per scenario:
+`id`, `group`, `title`, `a` = the bench side, `b` = the listener side,
+`netem`, extra `args`), `<group>/<scenario>/run<r>/` with `bench.jsonl`,
+`bench.err`, `bench.exit`, `listen.jsonl`, `listen.err`, `meta.json`
+(parallel relay runs: `run<r>-<i>`), `relay-metrics.txt` (the real relay's
+byte counters before and after each step that uses it), `notes.json`
+(hand-written observations merged into the summary), `summary.json`,
+`table.md`, `debug/` (extra captures). Keys of the local test nodes go to
+`DIR/.keys/` (git-ignored). `summary.json` has per scenario the run counts,
+final paths, medians/percentiles of the bench measurements, `bind_ms`, and
+`verdict_checks`: the bench's verdict and net report compared with the known
+NAT profile of the bench side (right / misleading / wrong). The real relay is shared: every bench caps relayed transfers at
+4 MB (`--relay-transfer-size`), and a full run of campaign 1 moves a few
+hundred MB through it.
 
 ## Driving it from a controller
 
