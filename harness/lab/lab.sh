@@ -57,10 +57,14 @@ ROOT_LINK=gplu          # root-namespace veth names for uplink=real: gplu<idx>
 
 # Address plan (see README): 198.18.0.0/15 (RFC 2544) plays the public internet.
 RELAY_IP=198.18.0.1     # relay https :443, QUIC address discovery :7842, directory :8080
+LAB_QAD_PORT=7842
 REFL_A=198.18.0.2       # reflector, UDP 3478 + 3479, TCP 3478
 REFL_B=198.18.0.3       # reflector, UDP 3478
 REFL_C=198.18.0.4       # reflector, UDP 4000 (only sends unsolicited packets)
-LAB_RELAY=https://$RELAY_IP
+# The lab relay's QAD port is given explicitly (it is iroh's default too), so
+# bench knows the port is right and blames a missing QAD answer on UDP.
+LAB_RELAY_HTTPS=https://$RELAY_IP
+LAB_RELAY=$LAB_RELAY_HTTPS,quic=$LAB_QAD_PORT
 LAB_DIRECTORY=http://$RELAY_IP:8080/
 
 PROFILES="public easy restricted port-restricted symmetric udp-blocked double cgnat"
@@ -508,7 +512,7 @@ cert_mode = "Manual"
 manual_cert_path = "$d/relay.crt"
 manual_key_path = "$d/relay.key"
 https_bind_addr = "$RELAY_IP:443"
-quic_bind_addr = "$RELAY_IP:7842"
+quic_bind_addr = "$RELAY_IP:$LAB_QAD_PORT"
 EOF
     chown -R "$RUN_UID:$RUN_GID" "$d"
     chmod 600 "$d/relay.key"
@@ -521,7 +525,7 @@ EOF
         --tcp "$REFL_A:3478" >/dev/null
     local n code
     for n in $(seq 100); do
-        code=$(nsx "$SVC" curl -s -o /dev/null -w '%{http_code}' --max-time 1 --cacert "$d/relay.crt" "$LAB_RELAY/" || true)
+        code=$(nsx "$SVC" curl -s -o /dev/null -w '%{http_code}' --max-time 1 --cacert "$d/relay.crt" "$LAB_RELAY_HTTPS/" || true)
         [[ $code == 200 ]] && break
         sleep 0.2
     done
@@ -633,7 +637,7 @@ cmd_status() {
         if [[ $pid != - ]] && kill -0 "$pid" 2>/dev/null; then st=running; else st=DEAD; fi
         printf '  %-14s %-8s pid %s\n' "${t#svc.}" "$st" "$pid"
     done
-    echo "  relay $LAB_RELAY (QAD $RELAY_IP:7842/udp, CA $STATE/relay/relay.crt), directory $LAB_DIRECTORY"
+    echo "  relay $LAB_RELAY (QAD $RELAY_IP:$LAB_QAD_PORT/udp, CA $STATE/relay/relay.crt), directory $LAB_DIRECTORY"
     echo "  reflector udp $REFL_A:3478,$REFL_A:3479,$REFL_B:3478,$REFL_C:4000 tcp $REFL_A:3478"
     echo "nodes:"
     printf '  %-12s %-16s %-6s %-14s %-14s %s\n' NAME PROFILE UPLINK NODE_IP PUBLIC_IP "LINK (procs)"

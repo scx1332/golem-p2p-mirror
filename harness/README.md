@@ -20,11 +20,15 @@ lab/tools/summarize.py   summarizes a send run (path, timings)
 lab/tools/aggregate.py   turns matrix/realworld results.txt into a Markdown table
 lab/tools/benchsum.py    one key=value line per `bench --json` run; run metadata
 campaign/campaign1.sh    benchmark campaign 1 (lab matrix, real world, relay, startup)
-campaign/summarize.py    campaign directory -> summary.json + table.md
+campaign/campaign2.sh    campaign 2: the same scenarios after the bench/timeout fixes
+campaign/summarize.py    campaign directory -> summary.json + table.md (both bench formats)
+campaign/compare.py      two campaign directories -> compare.json + compare.md
 results/<date>-<name>/   raw data and summaries of campaigns
 ```
 
-Results of benchmark campaign 1: [results/2026-11-07-campaign1/](results/2026-11-07-campaign1/).
+Results of benchmark campaign 1: [results/2026-11-07-campaign1/](results/2026-11-07-campaign1/);
+campaign 2 and its comparison with campaign 1: [results/2026-11-07-campaign2/](results/2026-11-07-campaign2/)
+(`compare.md`).
 
 ## Requirements
 
@@ -119,8 +123,11 @@ listener=sym1 listener_profile=symmetric bencher=easy1 bencher_profile=easy run=
 ```
 
 `lab.sh listen <node> -- --json ...` prints the listener's `ready` event and
-keeps its stderr apart (`$STATE/logs/<tag>.err`). Nodes with `uplink=real` use
-the real relay with its QAD port by default
+keeps its stderr apart (`$STATE/logs/<tag>.err`). Lab nodes use the lab relay
+with its QAD port given explicitly (`https://198.18.0.1,quic=7842`: 7842 is
+iroh's default, but only an explicit port lets `bench` treat a missing QAD
+answer as blocked UDP rather than as a possibly wrong port). Nodes with
+`uplink=real` use the real relay with its QAD port by default
 (`https://213.163.75.157:56000,quic=56001`, override with `GPL_REAL_RELAY`).
 
 ### Topology files
@@ -335,13 +342,29 @@ Layout of a campaign directory: `scenarios.jsonl` (one line per scenario:
 (parallel relay runs: `run<r>-<i>`), `relay-metrics.txt` (the real relay's
 byte counters before and after each step that uses it), `notes.json`
 (hand-written observations merged into the summary), `summary.json`,
-`table.md`, `debug/` (extra captures). Keys of the local test nodes go to
+`table.md`, `debug/` (extra captures), and for campaign 2 `versions.txt`
+(the binary on each machine) and `compare.json`/`compare.md` (against
+campaign 1). Keys of the local test nodes go to
 `DIR/.keys/` (git-ignored). `summary.json` has per scenario the run counts,
 final paths, medians/percentiles of the bench measurements, `bind_ms`, and
 `verdict_checks`: the bench's verdict and net report compared with the known
 NAT profile of the bench side (right / misleading / wrong). The real relay is shared: every bench caps relayed transfers at
 4 MB (`--relay-transfer-size`), and a full run of campaign 1 moves a few
 hundred MB through it.
+
+`campaign/campaign2.sh` runs campaign 1's scenarios with the same run counts
+and steps (`all`, or step by step as above, default output
+`results/<date>-campaign2`). It differs in three ways: every step that runs
+`golem-p2p` refuses to start unless the lab VM has the same binary as the
+build machine (bench and listen must be the same version: a listener older
+than the bench cannot answer an upload stopped at `--transfer-time`); `deploy`
+writes `versions.txt`; `summarize` also runs `compare.py` against campaign 1
+(`GPL_COMPARE_WITH=DIR` for another base). `summarize.py` reads the bench JSON
+of both campaigns and judges each by its own bench's rules (see its
+docstring); re-run on campaign 1's raw data it reproduces campaign 1's
+`summary.json`, with a few added fields (`run_duration_s`, `phase_ms_p50`,
+`disconnect_runs`, `connection_lost`, `quic_counters_runs`, `latency_loss`,
+`concurrency`, `transfer_limited_by`).
 
 ## Driving it from a controller
 

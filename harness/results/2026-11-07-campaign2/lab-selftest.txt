@@ -1,0 +1,20 @@
+| node | profile | mapping | filtering | port preserved | unmapped port open | TCP | expected | result |
+|---|---|---|---|---|---|---|---|---|
+| pub1 | public | no-nat | EIF | yes | yes | yes | no-nat EIF | PASS |
+| easy1 | easy | EIM | EIF | yes | no | yes | EIM EIF | PASS |
+| easy2 | easy | EIM | EIF | yes | no | yes | EIM EIF | PASS |
+| rc1 | restricted | EIM | ADF | yes | no | yes | EIM ADF | PASS |
+| pr1 | port-restricted | EIM | APDF | yes | no | yes | EIM APDF | PASS |
+| pr2 | port-restricted | EIM | APDF | yes | no | yes | EIM APDF | PASS |
+| sym1 | symmetric | APDM | APDF | no | no | yes | APDM APDF | PASS |
+| sym2 | symmetric | APDM | APDF | no | no | yes | APDM APDF | PASS |
+| udpb1 | udp-blocked | no-udp | n/a | no | no | yes | no-udp n/a | PASS |
+| cgn1 | cgnat | EIM | APDF | yes | no | yes | EIM APDF | PASS |
+| dbl1 | double | EIM | EIF | yes | no | yes | EIM EIF | PASS |
+| lossy1 | port-restricted | EIM | APDF | yes | no | yes | EIM APDF | PASS |
+| idle1 | port-restricted | EIM | APDF | yes | no | yes | EIM APDF | PASS |
+| idle2 | port-restricted | EIM | APDF | yes | no | yes | EIM APDF | PASS |
+| idle3 | port-restricted | EIM | APDF | yes | no | yes | EIM APDF | PASS |
+| idle4 | port-restricted | EIM | APDF | yes | no | yes | EIM APDF | PASS |
+
+selftest: 16 passed, 0 failed

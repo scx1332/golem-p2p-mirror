@@ -18,7 +18,8 @@ Summary fields ("-" = not measured):
   final_path       peer.path.final_path; changes = peer.path.changes
   direct_frac      latency phase: share of replies over a direct path
   rtt_p50/rtt_p95/jitter   latency phase, ms
-  lost_pct         QUIC packets sent by the bencher and declared lost
+  lost_pct         QUIC packets sent by the bencher and declared lost (whole connection)
+  lat_lost         the same, latency phase only (peer.latency.quic: lost/sent), newer CLIs
   up/down/conc     Mbps of upload, download, concurrency (path at the end in [])
   rc               --compare-relay: rtt p50 / up / down over the relay
   idle             --idle: survived/ok, path before->after, recovery ms
@@ -121,6 +122,9 @@ def line(d):
     res["rtt_p95"] = fmt(get(lat, "rtt_ms", "p95"))
     res["jitter"] = fmt(lat.get("jitter_ms"))
     res["lost_pct"] = fmt(get(p, "quic", "lost_pct"), 2)
+    lq = lat.get("quic")
+    if lq:
+        res["lat_lost"] = f"{lq.get('lost_packets')}/{lq.get('sent_packets')}"
     for k, sec in (("up", "upload"), ("down", "download"), ("conc", "concurrency")):
         t = p.get(sec)
         if t is None:

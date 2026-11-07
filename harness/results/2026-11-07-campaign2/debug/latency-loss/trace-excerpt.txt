@@ -1,0 +1,90 @@
+# Excerpt of bench.err (RUST_LOG=noq_proto=trace,iroh=debug,info) of a latency-only bench pr2 -> pr1 in the
+# campaign lab (run.sh). 22:12:51.424-51.513 UTC: the connect phase ended at 51.439 (latency phase from
+# there), path_change relay -> direct at 51.512. path_id=0 is the relay path (remote fd15:...:12345 is
+# iroh's relay mapping); nat-traversal PATH_CHALLENGEs to the peer's candidates (198.18.5.2:38198,
+# 192.168.5.2:38198) and off-path PATH_RESPONSEs use path 0's packet numbers. Lines: path-0 packets
+# (frames, size), datagrams with their destination, ACKs received, and the only 2 loss events
+# (3 packets) of the whole run.
+2026-11-07T22:12:51.424595Z TRACE pkt{path_id=0}:recv{space=Data pn=1}: noq_proto::connection: got frame PATH_ACK path_id: 0 ranges: [0..1] delay: 16µs
+2026-11-07T22:12:51.424668Z TRACE send{space=Data pn=4 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_ACK path_id: 0 ranges: [0..3] delay: 13µs
+2026-11-07T22:12:51.424673Z TRACE send{space=Data pn=4 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=32
+2026-11-07T22:12:51.424680Z TRACE  noq_proto::connection: sending 32 bytes in 1 datagrams segment_size=32 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.424695Z TRACE send{space=Data pn=5 path_id=0}: noq_proto::connection::packet_builder: frame=PING
+2026-11-07T22:12:51.424698Z TRACE send{space=Data pn=5 path_id=0}: noq_proto::connection::packet_builder: frame=IMMEDIATE_ACK
+2026-11-07T22:12:51.424704Z TRACE send{space=Data pn=5 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=1389
+2026-11-07T22:12:51.424707Z TRACE  noq_proto::connection: sending 1389 bytes in 1 datagrams segment_size=1389 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.431750Z TRACE pkt{path_id=0}:recv{space=Data pn=3}: noq_proto::connection: got frame ADD_IPV_4_ADDRESS seq_no: 1 addr: 198.18.5.2:38198
+2026-11-07T22:12:51.431755Z TRACE pkt{path_id=0}:recv{space=Data pn=3}: noq_proto::connection: got frame ADD_IPV_4_ADDRESS seq_no: 0 addr: 192.168.5.2:38198
+2026-11-07T22:12:51.431939Z TRACE send{space=Data pn=6 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_CHALLENGE(6ff6f7553ae8eb90) msg="(nat-traversal)"
+2026-11-07T22:12:51.431942Z TRACE send{space=Data pn=6 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=35
+2026-11-07T22:12:51.431972Z TRACE send{space=Data pn=7 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_CHALLENGE(f1248a257714ec57) msg="(nat-traversal)"
+2026-11-07T22:12:51.431975Z TRACE send{space=Data pn=7 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=35
+2026-11-07T22:12:51.431994Z TRACE send{space=Data pn=8 path_id=0}: noq_proto::connection::packet_builder: frame=REACH_OUT round: 2 local_addr: 198.18.6.2:49056
+2026-11-07T22:12:51.431996Z TRACE send{space=Data pn=8 path_id=0}: noq_proto::connection::packet_builder: frame=REACH_OUT round: 2 local_addr: 192.168.6.2:49056
+2026-11-07T22:12:51.432000Z TRACE send{space=Data pn=8 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=48
+2026-11-07T22:12:51.432005Z TRACE  noq_proto::connection: sending 48 bytes in 1 datagrams segment_size=48 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.438875Z TRACE send{space=Data pn=9 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_ACK path_id: 0 ranges: [0..4,7..8] delay: 3µs
+2026-11-07T22:12:51.438879Z TRACE send{space=Data pn=9 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=34
+2026-11-07T22:12:51.438918Z TRACE  noq_proto::connection: sending 34 bytes in 1 datagrams segment_size=34 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.438963Z TRACE send{space=Data pn=10 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_NEW_CONNECTION_ID path_id: 0 seq: 5 id: ff4f7a2c5a79b64d
+2026-11-07T22:12:51.438968Z TRACE send{space=Data pn=10 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=56
+2026-11-07T22:12:51.438975Z TRACE  noq_proto::connection: sending 56 bytes in 1 datagrams segment_size=56 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.439052Z TRACE pkt{path_id=0}:recv{space=Data pn=8}: noq_proto::connection: got frame PATH_ACK path_id: 0 ranges: [0..3] delay: 19µs
+2026-11-07T22:12:51.440390Z TRACE send{space=Data pn=11 path_id=0}: noq_proto::connection::packet_builder: frame=STREAM id: client bidirectional stream 1 off: 0 len: 109 fin: false
+2026-11-07T22:12:51.440394Z TRACE send{space=Data pn=11 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=139
+2026-11-07T22:12:51.440407Z TRACE  noq_proto::connection: sending 139 bytes in 1 datagrams segment_size=139 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.440446Z TRACE send{space=Data pn=12 path_id=0}: noq_proto::connection::packet_builder: frame=STREAM id: client bidirectional stream 1 off: 109 len: 0 fin: true
+2026-11-07T22:12:51.440462Z TRACE send{space=Data pn=12 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=31
+2026-11-07T22:12:51.440470Z TRACE  noq_proto::connection: sending 31 bytes in 1 datagrams segment_size=31 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.446190Z TRACE send{space=Data pn=13 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_RESPONSE(c58164cce30094da) msg="(off-path)"
+2026-11-07T22:12:51.446193Z TRACE send{space=Data pn=13 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_CHALLENGE(13645766c3e5233c)
+2026-11-07T22:12:51.446198Z TRACE send{space=Data pn=13 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=1200
+2026-11-07T22:12:51.446224Z TRACE send{space=Data pn=14 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_ACK path_id: 0 ranges: [0..4,7..10] delay: 3µs
+2026-11-07T22:12:51.446228Z TRACE send{space=Data pn=14 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=34
+2026-11-07T22:12:51.446233Z TRACE  noq_proto::connection: sending 34 bytes in 1 datagrams segment_size=34 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.466437Z TRACE send{space=Data pn=15 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_CHALLENGE(790f3218f68b53c9) msg="(nat-traversal)"
+2026-11-07T22:12:51.466440Z TRACE send{space=Data pn=15 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=35
+2026-11-07T22:12:51.466473Z TRACE send{space=Data pn=16 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_CHALLENGE(4d1128c74e174f93) msg="(nat-traversal)"
+2026-11-07T22:12:51.466478Z TRACE send{space=Data pn=16 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=35
+2026-11-07T22:12:51.472182Z TRACE send{space=Data pn=17 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_ACK path_id: 0 ranges: [0..4,7..10,11..12] delay: 8µs
+2026-11-07T22:12:51.472187Z TRACE send{space=Data pn=17 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=36
+2026-11-07T22:12:51.472200Z TRACE  noq_proto::connection: sending 36 bytes in 1 datagrams segment_size=36 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.472226Z TRACE  noq_proto::connection: sending 1200 bytes in 1 datagrams segment_size=1200 last_datagram_len=0 network_path=(local: 192.168.6.2, remote: [::ffff:198.18.5.2]:38198)
+2026-11-07T22:12:51.480237Z TRACE send{space=Data pn=18 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_RESPONSE(ba798fb3408f6e93) msg="(off-path)"
+2026-11-07T22:12:51.480240Z TRACE send{space=Data pn=18 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_CHALLENGE(f1da9b8fcb0e05ac)
+2026-11-07T22:12:51.480245Z TRACE send{space=Data pn=18 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=1200
+2026-11-07T22:12:51.480271Z TRACE send{space=Data pn=19 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_ACK path_id: 0 ranges: [0..4,7..10,11..12,13..14] delay: 3µs
+2026-11-07T22:12:51.480275Z TRACE send{space=Data pn=19 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=38
+2026-11-07T22:12:51.480297Z TRACE  noq_proto::connection: sending 38 bytes in 1 datagrams segment_size=38 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.486424Z TRACE send{space=Data pn=20 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_ACK path_id: 0 ranges: [0..4,7..10,11..12,13..14,17..18] delay: 7µs
+2026-11-07T22:12:51.486429Z TRACE send{space=Data pn=20 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=40
+2026-11-07T22:12:51.486435Z TRACE  noq_proto::connection: sending 40 bytes in 1 datagrams segment_size=40 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.492212Z TRACE pkt{path_id=0}:recv{space=Data pn=12}: noq_proto::connection: got frame PATH_ACK path_id: 0 ranges: [0..4,7..8] delay: 2µs
+2026-11-07T22:12:51.492218Z TRACE pkt{path_id=0}:recv{space=Data pn=12}:frame{ty=PATH_ACK path=0}: noq_proto::connection: packets lost path_id=0 count=1 lost_bytes=0
+2026-11-07T22:12:51.492261Z TRACE send{space=Data pn=21 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_RESPONSE(40dfb22a0f13215) msg="(off-path)"
+2026-11-07T22:12:51.492265Z TRACE send{space=Data pn=21 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_CHALLENGE(1049b29e8748d241)
+2026-11-07T22:12:51.492271Z TRACE send{space=Data pn=21 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=1200
+2026-11-07T22:12:51.500422Z TRACE send{space=Data pn=22 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_CHALLENGE(47e607e934d6ea9e) msg="(nat-traversal)"
+2026-11-07T22:12:51.500426Z TRACE send{space=Data pn=22 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=35
+2026-11-07T22:12:51.505093Z TRACE pkt{path_id=0}:recv{space=Data pn=15}: noq_proto::connection: got frame PATH_ACK path_id: 0 ranges: [1..6,7..8] delay: 1609µs
+2026-11-07T22:12:51.505150Z TRACE send{space=Data pn=23 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_ACK path_id: 0 ranges: [1..4,7..10,11..14,15..19] delay: 1612µs
+2026-11-07T22:12:51.505155Z TRACE send{space=Data pn=23 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=39
+2026-11-07T22:12:51.505162Z TRACE  noq_proto::connection: sending 39 bytes in 1 datagrams segment_size=39 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.505181Z TRACE send{space=Data pn=24 path_id=0}: noq_proto::connection::packet_builder: frame=PING
+2026-11-07T22:12:51.505184Z TRACE send{space=Data pn=24 path_id=0}: noq_proto::connection::packet_builder: frame=IMMEDIATE_ACK
+2026-11-07T22:12:51.505190Z TRACE send{space=Data pn=24 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=1420
+2026-11-07T22:12:51.505193Z TRACE  noq_proto::connection: sending 1420 bytes in 1 datagrams segment_size=1420 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.506627Z TRACE send{space=Data pn=25 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_ACK path_id: 0 ranges: [1..4,7..10,11..14,15..19,25..26] delay: 6µs
+2026-11-07T22:12:51.506632Z TRACE send{space=Data pn=25 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=40
+2026-11-07T22:12:51.506637Z TRACE  noq_proto::connection: sending 40 bytes in 1 datagrams segment_size=40 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.512383Z TRACE pkt{path_id=0}:recv{space=Data pn=20}: noq_proto::connection: got frame PATH_ACK path_id: 0 ranges: [1..6,7..9,13..14] delay: 736µs
+2026-11-07T22:12:51.512391Z TRACE pkt{path_id=0}:recv{space=Data pn=20}:frame{ty=PATH_ACK path=0}: noq_proto::connection: packets lost path_id=0 count=2 lost_bytes=56
+2026-11-07T22:12:51.512414Z TRACE send{space=Data pn=26 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_NEW_CONNECTION_ID path_id: 0 seq: 5 id: ff4f7a2c5a79b64d
+2026-11-07T22:12:51.512419Z TRACE send{space=Data pn=26 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=56
+2026-11-07T22:12:51.512425Z TRACE  noq_proto::connection: sending 56 bytes in 1 datagrams segment_size=56 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.512537Z TRACE send{space=Data pn=27 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_ACK_ECN path_id: 0 ranges: [1..4,7..10,11..14,15..19,20..21,25..26] delay: 744µs
+2026-11-07T22:12:51.512540Z TRACE send{space=Data pn=27 path_id=0}: noq_proto::connection::packet_builder: frame=PATH_ACK_ECN path_id: 1 ranges: [0..1] delay: 6µs
+2026-11-07T22:12:51.512544Z TRACE send{space=Data pn=27 path_id=0}: noq_proto::connection::packet_builder: wrote packet size=55
+2026-11-07T22:12:51.512549Z TRACE  noq_proto::connection: sending 55 bytes in 1 datagrams segment_size=55 last_datagram_len=0 network_path=(local: <unspecified>, remote: [fd15:70a:510b:1:82a2:c912:a4e4:3b72]:12345)
+2026-11-07T22:12:51.512580Z TRACE  noq_proto::connection: sending 1200 bytes in 1 datagrams segment_size=1200 last_datagram_len=0 network_path=(local: 192.168.6.2, remote: [::ffff:198.18.5.2]:38198)
+2026-11-07T22:12:51.512624Z TRACE  noq_proto::connection: sending 1326 bytes in 1 datagrams segment_size=1326 last_datagram_len=0 network_path=(local: 192.168.6.2, remote: [::ffff:198.18.5.2]:38198)

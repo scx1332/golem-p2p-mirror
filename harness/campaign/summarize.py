@@ -3,7 +3,7 @@
 
   summarize.py <campaign dir> [--copy-to FILE]
 
-Input (written by campaign1.sh):
+Input (written by campaign1.sh / campaign2.sh):
   scenarios.jsonl                 one scenario per line: id, group, title, a, b, netem, args
   <group>/<scenario>/<run>/       bench.jsonl (ready ... bench_report), bench.exit,
                                   listen.jsonl (peer, optional), meta.json
@@ -16,6 +16,18 @@ if the scenario has a peer), final paths, and medians/percentiles over runs.
 `rtt_ms` pools the latency-phase replies of all runs (not the first request of
 a connection), like bench does within one run; the throughputs, jitter and
 loss are medians of the per-run values. Percentiles are nearest-rank.
+
+Both bench JSON formats are understood: campaign 1's (commit 9c37664: QUIC
+counters only for the whole connection, `peer.quic`) and the later one
+(per-phase `quic` counters such as `peer.latency.quic`, `peer.connection_lost`,
+`relays[].quic_port_explicit`, the `connection_lost` issue and the
+`hard_nat_likely` hint; docs/cli-events.md). The verdict checks judge each
+format by the rules of its bench (e.g. the packet_loss threshold: 2 % of the
+whole connection before, 0.5 % of at least 50 latency-phase packets after).
+`loss_pct` is always the whole connection's; `latency_loss` (newer format
+only) pools the latency phase's counters.
+
+summarize_dir() is also used by compare.py.
 """
 
 import argparse
@@ -116,7 +128,19 @@ def load_run(d):
         "replies": replies,
         "listen_requests": [e for e in lev if e.get("event") == "request"],
         "errors": [e for e in ev if e.get("event") == "error"],
+        "phases": [e for e in ev if e.get("event") == "bench_phase"],
+        # The bench's connection closed during the run (both formats).
+        "disconnects": [e for e in ev if e.get("event") == "disconnect"],
     }
+
+
+def new_format(rep):
+    """The bench JSON of the verdict/request-timeout fixes (after 9c37664)."""
+    if rep is None:
+        return False
+    peer = rep.get("peer") or {}
+    relays = get(rep, "local", "relays") or []
+    return "connection_lost" in peer or any("quic_port_explicit" in rl for rl in relays)
 
 
 def side_profile(side):
@@ -151,6 +175,11 @@ def check_run(sc, run):
     hints = {i["code"] for i in rep.get("hints", [])}
     unknown = {u["item"] for u in rep.get("unknowns", [])}
     verdict = rep.get("verdict", "")
+    newf = new_format(rep)
+    hard_hint = hints & {"hard_nat", "hard_nat_likely"}
+    # Emulated packet loss on the path (netem also describes other faults,
+    # e.g. the NAT flush of lab-natflush-pr, whose link is clean).
+    lossy_link = "loss" in (sc.get("netem") or "")
     exp = EXPECT_NET.get(pa)
     real = "real uplink" in (a or {}).get("location", "")
     # The real relay serves QAD on 56001 only: without ,quic=56001 iroh probes
@@ -180,20 +209,28 @@ def check_run(sc, run):
                     out.append(("wrong", k, f"{k}={nr.get(k)}, expected {exp[k]} for {pa}"))
             if nr.get("behind_nat_v4") == exp["behind_nat_v4"] and nr.get("port_preserved_v4") == exp["port_preserved_v4"]:
                 out.append(("right", "nat_facts", f"behind_nat/port_preserved match the {pa} profile"))
-            if pa == "symmetric" and "hard_nat" not in hints and rep.get("status") != "healthy":
+            if pa == "symmetric" and not hard_hint and rep.get("status") != "healthy":
                 why = ("mapping_varies_by_dest needs two relays (one configured)"
                        if nr.get("mapping_varies_by_dest") is None else f"mapping_varies_by_dest={nr.get('mapping_varies_by_dest')}")
                 out.append(("misleading", "hard_nat_missed",
                             f"symmetric NAT on this side not named ({why}), although port_preserved_v4=false was measured"))
     elif exp and exp["udp"] and nr is None and rep.get("transport") != "relay_only" and rep.get("local"):
         out.append(("misleading", "no_net_report", "no net report"))
+    if hard_hint and pa not in HARD:
+        out.append(("wrong", "hard_nat_false", f"{'/'.join(sorted(hard_hint))} hint, but the {pa} side keeps its port"))
+    udp_msg = next((i.get("message", "") for i in rep.get("issues", []) if i["code"] == "udp_blocked"), "")
     if pa in NO_UDP:
         if "udp_blocked" in issues:
             out.append(("right", "udp_blocked", "udp_blocked issue on the UDP-blocked side"))
         else:
             out.append(("wrong", "udp_blocked_missed", "UDP is blocked on this side, but no udp_blocked issue"))
     elif "udp_blocked" in issues:
-        if qad_unanswered:
+        if qad_unanswered and "Either outgoing UDP is blocked" in udp_msg and "port 7842" in udp_msg:
+            out.append(("right", "udp_blocked_or_qad_port",
+                        "udp_blocked on an unanswered QAD port (7842, iroh's default; quic_port_explicit=false): the "
+                        "message names both causes as equally likely, blocked UDP or a relay that does not serve QAD "
+                        "on port 7842, and says how to give the port (,quic=PORT)"))
+        elif qad_unanswered:
             out.append(("misleading", "udp_blocked_wrong_qad_port",
                         "udp_blocked: 'Outgoing UDP is probably blocked on your network', but UDP works; only the relay's "
                         "QAD port (7842, iroh's default) does not answer (the message names the port)"))
@@ -206,8 +243,8 @@ def check_run(sc, run):
             if pa in NO_UDP:
                 pass  # covered above
             elif pa in HARD:
-                if "hard NAT" in verdict or "hard_nat" in hints:
-                    out.append(("right", "relay_reason", "relay-only blamed on the hard NAT"))
+                if "hard NAT" in verdict or hard_hint:
+                    out.append(("right", "relay_reason", "relay-only blamed on the (likely) hard NAT on this side"))
                 elif "one of the two NATs" in verdict:
                     out.append(("misleading", "relay_reason_vague",
                                 "relay-only: verdict says 'UDP works on your side; the peer's network may block UDP, or one of "
@@ -220,17 +257,29 @@ def check_run(sc, run):
                         out.append(("right", "relay_reason", f"relay-only blamed on the peer side ({pb})"))
                 if "Your side looks fine" in verdict and pa not in ("public",) and pb not in NO_UDP | HARD:
                     out.append(("misleading", "relay_reason", "verdict says this side looks fine"))
-        if status == "relay_only" and nr and nr.get("behind_nat_v4") is False and "two NATs" in verdict:
-            out.append(("misleading", "two_nats_without_nat",
-                        "relay-only: verdict says 'one of the two NATs prevents hole punching', but this side measured "
-                        "behind_nat_v4=false (no NAT; here a stateful firewall, which bench cannot see)"))
-        if "packet_loss" in hints and not sc.get("netem"):
+        if status == "relay_only" and nr and nr.get("behind_nat_v4") is False:
+            if "two NATs" in verdict:
+                out.append(("misleading", "two_nats_without_nat",
+                            "relay-only: verdict says 'one of the two NATs prevents hole punching', but this side measured "
+                            "behind_nat_v4=false (no NAT; here a stateful firewall, which bench cannot see)"))
+            elif "not behind a NAT" in verdict and "firewall" in verdict:
+                out.append(("right", "relay_reason_no_nat",
+                            "relay-only without a NAT on this side (behind_nat_v4=false): the verdict names the peer's "
+                            "network or a firewall in front of this machine (here ufw)"))
+        lq = get(peer, "latency", "quic")
+        if "packet_loss" in hints and not lossy_link:
             up = get(peer, "upload", "throughput_mbps")
             down = get(peer, "download", "throughput_mbps")
-            out.append(("misleading", "packet_loss_congestion",
-                        f"packet_loss hint ({get(peer, 'quic', 'lost_pct')} % of sent packets lost) on an unshaped path: "
-                        f"the losses are congestion losses of the bulk phases ({fmt(up)}/{fmt(down)} Mbps up/down, "
-                        "as fast as the other direction), not a lossy link"))
+            if newf:
+                out.append(("misleading", "packet_loss_unshaped",
+                            f"packet_loss hint on a path without emulated loss: {get(lq, 'lost_packets')} of "
+                            f"{get(lq, 'sent_packets')} latency-phase packets lost ({get(lq, 'lost_pct')} %), "
+                            f"transfers at {fmt(up)}/{fmt(down)} Mbps up/down"))
+            else:
+                out.append(("misleading", "packet_loss_congestion",
+                            f"packet_loss hint ({get(peer, 'quic', 'lost_pct')} % of sent packets lost) on an unshaped path: "
+                            f"the losses are congestion losses of the bulk phases ({fmt(up)}/{fmt(down)} Mbps up/down, "
+                            "as fast as the other direction), not a lossy link"))
         if status == "healthy" and peer.get("path", {}).get("final_path") == "direct":
             out.append(("right", "healthy_direct", "healthy with a direct path"))
         fp = peer.get("path", {}).get("final_path")
@@ -239,8 +288,25 @@ def check_run(sc, run):
             out.append(("wrong", "says_relay", f"verdict says 'through a relay', but the last path seen was direct "
                         f"(final_path={fp}: the connection was closed, e.g. after request timeouts)"))
         if status == "degraded" and fp == "unknown":
-            out.append(("misleading", "connection_closed_unexplained",
-                        "the connection was gone at the end (final_path unknown), the verdict does not say so"))
+            if "connection_lost" in issues or "connection was lost" in verdict:
+                out.append(("right", "connection_lost_explained",
+                            "the connection was gone at the end (final_path unknown), and the verdict/connection_lost "
+                            "issue says so"))
+            else:
+                out.append(("misleading", "connection_closed_unexplained",
+                            "the connection was gone at the end (final_path unknown), the verdict does not say so"))
+        rc = rep.get("relay_compare") or {}
+        if "relay_fallback_failed" in issues and get(rc, "connect", "ok") and (
+                get(rc, "latency", "ok") or get(rc, "download", "ok")):
+            out.append(("misleading", "relay_fallback_failed_but_works",
+                        "relay_fallback_failed ('the relay-only connection did not work ... this peer cannot be "
+                        f"reached'), but it connected and worked: {get(rc, 'latency', 'ok')} latency replies, "
+                        f"download {fmt(get(rc, 'download', 'throughput_mbps'))} Mbps; failed: "
+                        f"{get(rc, 'upload', 'error') or get(rc, 'download', 'error')}"))
+        cl = peer.get("connection_lost")
+        if cl and cl.get("phase") != "idle" and "connection_lost" not in issues:
+            out.append(("wrong", "connection_lost_missed",
+                        f"the connection was lost during {cl.get('phase')} ({cl.get('cause')}), no connection_lost issue"))
         idle = peer.get("idle")
         if idle:
             if idle.get("survived") and "idle_reconnect" not in hints and "idle_failed" not in issues:
@@ -248,8 +314,20 @@ def check_run(sc, run):
             elif not idle.get("survived") and "idle_reconnect" in hints:
                 out.append(("right", "idle", "idle: reconnect reported"))
         q = peer.get("quic") or {}
-        if sc.get("netem") and "loss" in (sc.get("netem") or ""):
-            if "packet_loss" in hints:
+        if lossy_link:
+            if newf:
+                lost, sent, lpct = get(lq, "lost_packets"), get(lq, "sent_packets"), get(lq, "lost_pct")
+                seen = f"{lost} of {sent} latency-phase packets lost ({lpct} %)"
+                if "packet_loss" in hints:
+                    out.append(("right", "packet_loss", f"packet_loss hint: {seen}"))
+                elif lpct is not None and sent is not None and lpct >= 0.5 and sent >= 50:
+                    out.append(("wrong", "packet_loss_threshold",
+                                f"{seen}, at or above the hint's threshold (0.5 % of >= 50 packets), but no packet_loss hint"))
+                else:
+                    out.append(("misleading", "packet_loss_missed",
+                                f"1 % loss each way on the link, no packet_loss hint: {seen}, threshold 0.5 % of >= 50 "
+                                "(about 110 packets: one run in three sees no loss at 1 %)"))
+            elif "packet_loss" in hints:
                 out.append(("right", "packet_loss", f"packet_loss hint ({q.get('lost_pct')} % lost)"))
             else:
                 out.append(("misleading", "packet_loss_missed",
@@ -259,6 +337,35 @@ def check_run(sc, run):
     if real and nr and nr.get("public_v4") and not nr["public_v4"].startswith("213.163.75.157:"):
         out.append(("wrong", "public_v4", f"public_v4 {nr['public_v4']}, expected 213.163.75.157"))
     return out
+
+
+def phase_medians(runs):
+    by = {}
+    for r in runs:
+        for e in r["phases"]:
+            by.setdefault(e.get("phase"), []).append(e.get("duration_ms"))
+    return {k: med(v) for k, v in by.items()} or None
+
+
+def latency_loss(peers):
+    """Pooled QUIC counters of the latency phase (newer format), and how many
+    runs lost any packet there or got the packet_loss hint's inputs."""
+    qs = [get(p, "latency", "quic") for p in peers]
+    qs = [q for q in qs if q]
+    if not qs:
+        return None
+    sent = sum(q.get("sent_packets") or 0 for q in qs)
+    lost = sum(q.get("lost_packets") or 0 for q in qs)
+    return {
+        "runs": len(qs),
+        "sent_packets": sent,
+        "lost_packets": lost,
+        "lost_pct": round(100 * lost / sent, 3) if sent else None,
+        "runs_with_loss": sum(1 for q in qs if (q.get("lost_packets") or 0) > 0),
+        "runs_at_threshold": sum(1 for q in qs if (q.get("sent_packets") or 0) >= 50
+                                 and (q.get("lost_pct") or 0) >= 0.5),
+        "per_run": [f"{q.get('lost_packets')}/{q.get('sent_packets')}" for q in qs],
+    }
 
 
 def summarize_scenario(sc, runs, notes):
@@ -323,6 +430,30 @@ def summarize_scenario(sc, runs, notes):
         "concurrency_mbps": tput("concurrency"),
         "loaded_rtt_ms_p50": med([get(p, "concurrency", "loaded_rtt_ms", "p50") for p in peers]),
         "transfer_relay_capped": any(get(p, "upload", "relay_capped") for p in peers) or None,
+        # Whole bench run (bench_report.duration_ms), and the median duration of each phase.
+        "run_duration_s": p50_p95([round(r["report"]["duration_ms"] / 1000, 1) for r in runs
+                                   if r["report"] and r["report"].get("duration_ms") is not None]),
+        "phase_ms_p50": phase_medians(runs),
+        # The connection made in the connect phase closed before the end of the
+        # run: disconnect events (both formats), peer.connection_lost (newer format).
+        "disconnect_runs": sum(1 for r in runs if r["disconnects"]) if has_peer else None,
+        "connection_lost": dict(Counter(f"{c.get('phase')}:{c.get('cause')}" for c in
+                                        (p.get("connection_lost") for p in peers) if c)) or None,
+        # QUIC counters of the connection still there at the end (peer.quic not null).
+        "quic_counters_runs": sum(1 for p in peers if p.get("quic")) if has_peer else None,
+        "latency_loss": latency_loss(peers),
+        "concurrency": {
+            "ok": sum(1 for p in peers if get(p, "concurrency", "ok")),
+            "runs": sum(1 for p in peers if p.get("concurrency")),
+            "failed": sum(get(p, "concurrency", "failed") or 0 for p in peers),
+            "unfinished": sum(get(p, "concurrency", "unfinished") or 0 for p in peers),
+            "requests": sum(get(p, "concurrency", "requests") or 0 for p in peers),
+            "throughput_null_but_ok": sum(1 for p in peers if get(p, "concurrency", "ok")
+                                          and get(p, "concurrency", "throughput_mbps") is None),
+        } if any(p.get("concurrency") for p in peers) else None,
+        "transfer_limited_by": dict(Counter(f"{sec}:{get(p, sec, 'limited_by')}" for p in peers
+                                            for sec in ("upload", "download", "concurrency")
+                                            if get(p, sec, "limited_by"))) or None,
         "relay_compare": None,
         "idle": None,
         "bind_ms": p50_p95([get(r["ready"], "bind_ms") for r in runs if r["ready"]]),
@@ -436,12 +567,9 @@ def relay_traffic(path):
             "total_bytes_sent": sum(s["relay_bytes_sent"] for s in steps)}
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("dir")
-    ap.add_argument("--copy-to")
-    a = ap.parse_args()
-    root = os.path.abspath(a.dir)
+def summarize_dir(root):
+    """All scenarios of a campaign directory, and its notes (with `_root`)."""
+    root = os.path.abspath(root)
     scenarios = [json.loads(l) for l in open(os.path.join(root, "scenarios.jsonl")) if l.strip()]
     try:
         notes = json.load(open(os.path.join(root, "notes.json")))
@@ -458,6 +586,26 @@ def main():
         if not runs:
             continue
         out.append(summarize_scenario(sc, runs, notes))
+    return out, notes
+
+
+def verdict_totals(scenarios):
+    acc = Counter()
+    acc_runs = Counter()
+    for sc in scenarios:
+        for c in sc["verdict_checks"]:
+            acc[c["kind"]] += c["runs"]
+        acc_runs.update(sc["verdict_runs"])
+    return {"checks": dict(acc), "runs_by_worst_finding": dict(acc_runs)}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("dir")
+    ap.add_argument("--copy-to")
+    a = ap.parse_args()
+    root = os.path.abspath(a.dir)
+    out, notes = summarize_dir(root)
     try:
         commit = subprocess.run(["git", "-C", root, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     except OSError:
@@ -475,19 +623,14 @@ def main():
         if deployed:
             break
     # Verdict accuracy, over all scenarios.
-    acc = Counter()
-    acc_runs = Counter()
-    for sc in out:
-        for c in sc["verdict_checks"]:
-            acc[c["kind"]] += c["runs"]
-        acc_runs.update(sc["verdict_runs"])
+    totals = verdict_totals(out)
     summary = {
         "commit": notes.get("commit") or commit,
         "binary": notes.get("binary") or deployed,
         "date": notes.get("date"),
         "environment": notes.get("environment", {}),
         "relay_traffic": relay_traffic(os.path.join(root, "relay-metrics.txt")),
-        "verdict_check_totals": {"checks": dict(acc), "runs_by_worst_finding": dict(acc_runs)},
+        "verdict_check_totals": totals,
         "scenarios": out,
         "observations": notes.get("observations", []),
         "limitations": notes.get("limitations", []),
@@ -502,8 +645,9 @@ def main():
             json.dump(summary, f, indent=1)
             f.write("\n")
     # A Markdown table for a quick look.
-    rows = ["| scenario | runs ok | final d/r/f | connect p50 ms | ttd p50 ms | RTT p50/p95 ms | up/down/conc Mbps | relay cmp rtt/up/down | idle | exit codes |",
-            "|---|---|---|---|---|---|---|---|---|---|"]
+    rows = ["| scenario | runs ok | final d/r/f | connect p50 ms | ttd p50 ms | RTT p50/p95 ms | up/down/conc Mbps "
+            "| relay cmp rtt/up/down | idle | exit codes | run s p50 | loss % latency (lost/sent) / connection |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|"]
 
     def f(v, nd=0):
         return "-" if v is None else (f"{v:.{nd}f}" if isinstance(v, (int, float)) else str(v))
@@ -512,6 +656,7 @@ def main():
         pf = s["path_final"]
         rc = s["relay_compare"]
         idle = s["idle"]
+        ll = s["latency_loss"]
         rows.append(
             f"| {s['id']} | {s['ok_runs']}/{s['runs']} | "
             + (f"{pf['direct']}/{pf['relay']}/{pf['failed']}" if pf else "-")
@@ -521,12 +666,15 @@ def main():
             + (f"{f(rc['rtt_ms_p50'], 1)}/{f(rc['upload_mbps'], 1)}/{f(rc['download_mbps'], 1)}" if rc else "-")
             + " | "
             + (f"{idle['survived']}/{idle['runs']} survived, rec {f(idle['recovery_ms'])} ms" if idle else "-")
-            + f" | {' '.join(k + ':' + str(v) for k, v in s['exit_codes'].items())} |"
+            + f" | {' '.join(k + ':' + str(v) for k, v in s['exit_codes'].items())} | "
+            + f"{f(get(s, 'run_duration_s', 'p50'), 1)} | "
+            + (f"{f(ll['lost_pct'], 2)} ({ll['lost_packets']}/{ll['sent_packets']})" if ll else "-")
+            + f" / {f(s['loss_pct'], 2)} |"
         )
     with open(os.path.join(root, "table.md"), "w") as fh:
         fh.write("\n".join(rows) + "\n")
     print("\n".join(rows))
-    print(f"verdict checks: {dict(acc)}; runs by worst finding: {dict(acc_runs)}")
+    print(f"verdict checks: {totals['checks']}; runs by worst finding: {totals['runs_by_worst_finding']}")
 
 
 if __name__ == "__main__":
