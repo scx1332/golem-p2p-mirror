@@ -17,15 +17,20 @@ if the scenario has a peer), final paths, and medians/percentiles over runs.
 a connection), like bench does within one run; the throughputs, jitter and
 loss are medians of the per-run values. Percentiles are nearest-rank.
 
-Both bench JSON formats are understood: campaign 1's (commit 9c37664: QUIC
-counters only for the whole connection, `peer.quic`) and the later one
-(per-phase `quic` counters such as `peer.latency.quic`, `peer.connection_lost`,
+All bench JSON formats are understood: campaign 1's (commit 9c37664: QUIC
+counters only for the whole connection, `peer.quic`), campaign 2's (per-phase
+`quic` counters such as `peer.latency.quic`, `peer.connection_lost`,
 `relays[].quic_port_explicit`, the `connection_lost` issue and the
-`hard_nat_likely` hint; docs/cli-events.md). The verdict checks judge each
-format by the rules of its bench (e.g. the packet_loss threshold: 2 % of the
-whole connection before, 0.5 % of at least 50 latency-phase packets after).
-`loss_pct` is always the whole connection's; `latency_loss` (newer format
-only) pools the latency phase's counters.
+`hard_nat_likely` hint; docs/cli-events.md), and the one after it, which adds
+`peer.latency.loss` (latency-phase loss counted once the path had settled;
+the packet_loss hint judges that instead of `peer.latency.quic`),
+`relay_compare.reachable` (with the `relay_fallback_degraded` hint) and
+`concurrency.sized_for_mbps`. The verdict checks judge each format by the
+rules of its bench (e.g. the packet_loss threshold: 2 % of the whole
+connection in campaign 1, 0.5 % of at least 50 latency-phase packets after,
+counted from when the path had settled once `latency.loss` exists).
+`loss_pct` is always the whole connection's; `latency_loss` (campaign 2 on)
+pools the latency-phase counters the hint judges.
 
 summarize_dir() is also used by compare.py.
 """
@@ -141,6 +146,14 @@ def new_format(rep):
     peer = rep.get("peer") or {}
     relays = get(rep, "local", "relays") or []
     return "connection_lost" in peer or any("quic_port_explicit" in rl for rl in relays)
+
+
+def latency_loss_counters(peer):
+    """The latency-phase counters the packet_loss hint judges: `latency.loss`
+    (counted once the path had settled; may be null) where the bench reports
+    it, else `latency.quic` (campaign 2)."""
+    lat = (peer or {}).get("latency") or {}
+    return lat.get("loss") if "loss" in lat else lat.get("quic")
 
 
 def side_profile(side):
@@ -266,15 +279,18 @@ def check_run(sc, run):
                 out.append(("right", "relay_reason_no_nat",
                             "relay-only without a NAT on this side (behind_nat_v4=false): the verdict names the peer's "
                             "network or a firewall in front of this machine (here ufw)"))
-        lq = get(peer, "latency", "quic")
+        lq = latency_loss_counters(peer)
+        settled = "loss" in (peer.get("latency") or {})
         if "packet_loss" in hints and not lossy_link:
             up = get(peer, "upload", "throughput_mbps")
             down = get(peer, "download", "throughput_mbps")
             if newf:
                 out.append(("misleading", "packet_loss_unshaped",
                             f"packet_loss hint on a path without emulated loss: {get(lq, 'lost_packets')} of "
-                            f"{get(lq, 'sent_packets')} latency-phase packets lost ({get(lq, 'lost_pct')} %), "
-                            f"transfers at {fmt(up)}/{fmt(down)} Mbps up/down"))
+                            f"{get(lq, 'sent_packets')} latency-phase packets lost ({get(lq, 'lost_pct')} %"
+                            + (f", counted from {fmt(get(lq, 'from_ms'))} ms when the path had settled"
+                               if settled else "")
+                            + f"), transfers at {fmt(up)}/{fmt(down)} Mbps up/down"))
             else:
                 out.append(("misleading", "packet_loss_congestion",
                             f"packet_loss hint ({get(peer, 'quic', 'lost_pct')} % of sent packets lost) on an unshaped path: "
@@ -296,6 +312,14 @@ def check_run(sc, run):
                 out.append(("misleading", "connection_closed_unexplained",
                             "the connection was gone at the end (final_path unknown), the verdict does not say so"))
         rc = rep.get("relay_compare") or {}
+        # Newer bench: the relay fallback is judged by what got through
+        # (`reachable`); a failed transfer over it is the relay_fallback_degraded hint.
+        if rc.get("reachable") and not rc.get("ok") and "relay_fallback_degraded" in hints \
+                and "relay_fallback_failed" not in issues:
+            out.append(("right", "relay_fallback_degraded",
+                        "the relay-only connection worked, but not everything over it: relay_fallback_degraded "
+                        f"hint, not relay_fallback_failed ({get(rc, 'latency', 'ok')} latency replies; failed: "
+                        f"{get(rc, 'upload', 'error') or get(rc, 'download', 'error') or 'requests'})"))
         if "relay_fallback_failed" in issues and get(rc, "connect", "ok") and (
                 get(rc, "latency", "ok") or get(rc, "download", "ok")):
             out.append(("misleading", "relay_fallback_failed_but_works",
@@ -318,6 +342,9 @@ def check_run(sc, run):
             if newf:
                 lost, sent, lpct = get(lq, "lost_packets"), get(lq, "sent_packets"), get(lq, "lost_pct")
                 seen = f"{lost} of {sent} latency-phase packets lost ({lpct} %)"
+                if settled:
+                    seen += (f", counted from {fmt(get(lq, 'from_ms'))} ms when the path had settled"
+                             if lq else ", path not settled (no loss count)")
                 if "packet_loss" in hints:
                     out.append(("right", "packet_loss", f"packet_loss hint: {seen}"))
                 elif lpct is not None and sent is not None and lpct >= 0.5 and sent >= 50:
@@ -326,7 +353,8 @@ def check_run(sc, run):
                 else:
                     out.append(("misleading", "packet_loss_missed",
                                 f"1 % loss each way on the link, no packet_loss hint: {seen}, threshold 0.5 % of >= 50 "
-                                "(about 110 packets: one run in three sees no loss at 1 %)"))
+                                + ("(about 140 packets: one run in four sees no loss at 1 %)" if settled else
+                                   "(about 110 packets: one run in three sees no loss at 1 %)")))
             elif "packet_loss" in hints:
                 out.append(("right", "packet_loss", f"packet_loss hint ({q.get('lost_pct')} % lost)"))
             else:
@@ -348,9 +376,10 @@ def phase_medians(runs):
 
 
 def latency_loss(peers):
-    """Pooled QUIC counters of the latency phase (newer format), and how many
-    runs lost any packet there or got the packet_loss hint's inputs."""
-    qs = [get(p, "latency", "quic") for p in peers]
+    """Pooled latency-phase counters that the packet_loss hint judges
+    (campaign 2 on: `latency.loss` where present, else `latency.quic`), and how
+    many runs lost any packet there or got the packet_loss hint's inputs."""
+    qs = [latency_loss_counters(p) for p in peers]
     qs = [q for q in qs if q]
     if not qs:
         return None
@@ -450,6 +479,11 @@ def summarize_scenario(sc, runs, notes):
             "requests": sum(get(p, "concurrency", "requests") or 0 for p in peers),
             "throughput_null_but_ok": sum(1 for p in peers if get(p, "concurrency", "ok")
                                           and get(p, "concurrency", "throughput_mbps") is None),
+            # Newer bench: requests made smaller for a slow link.
+            **({"sized_runs": sum(1 for p in peers if get(p, "concurrency", "sized_for_mbps") is not None),
+                "request_bytes": sorted({get(p, "concurrency", "request_bytes") for p in peers
+                                         if get(p, "concurrency", "request_bytes") is not None})}
+               if any("sized_for_mbps" in (p.get("concurrency") or {}) for p in peers) else {}),
         } if any(p.get("concurrency") for p in peers) else None,
         "transfer_limited_by": dict(Counter(f"{sec}:{get(p, sec, 'limited_by')}" for p in peers
                                             for sec in ("upload", "download", "concurrency")

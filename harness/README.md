@@ -21,7 +21,7 @@ lab/tools/aggregate.py   turns matrix/realworld results.txt into a Markdown tabl
 lab/tools/benchsum.py    one key=value line per `bench --json` run; run metadata
 campaign/campaign1.sh    benchmark campaign 1 (lab matrix, real world, relay, startup)
 campaign/campaign2.sh    campaign 2: the same scenarios after the bench/timeout fixes
-campaign/summarize.py    campaign directory -> summary.json + table.md (both bench formats)
+campaign/summarize.py    campaign directory -> summary.json + table.md (all bench formats)
 campaign/compare.py      two campaign directories -> compare.json + compare.md
 results/<date>-<name>/   raw data and summaries of campaigns
 ```
@@ -364,7 +364,15 @@ of both campaigns and judges each by its own bench's rules (see its
 docstring); re-run on campaign 1's raw data it reproduces campaign 1's
 `summary.json`, with a few added fields (`run_duration_s`, `phase_ms_p50`,
 `disconnect_runs`, `connection_lost`, `quic_counters_runs`, `latency_loss`,
-`concurrency`, `transfer_limited_by`).
+`concurrency`, `transfer_limited_by`), and on campaign 2's raw data campaign
+2's `summary.json` exactly. Benches after campaign 2 report
+`peer.latency.loss` (latency-phase loss counted once the path had settled,
+which the packet_loss hint judges; `latency_loss` then pools it instead of
+`peer.latency.quic`), `relay_compare.reachable` (an issue
+`relay_fallback_failed` only if nothing got through; otherwise the hint
+`relay_fallback_degraded`, judged right) and `concurrency.sized_for_mbps`
+(smaller parallel requests on a slow link; `concurrency.sized_runs` and
+`request_bytes` in the summary).
 
 ## Driving it from a controller
 

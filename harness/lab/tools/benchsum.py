@@ -19,9 +19,12 @@ Summary fields ("-" = not measured):
   direct_frac      latency phase: share of replies over a direct path
   rtt_p50/rtt_p95/jitter   latency phase, ms
   lost_pct         QUIC packets sent by the bencher and declared lost (whole connection)
-  lat_lost         the same, latency phase only (peer.latency.quic: lost/sent), newer CLIs
+  lat_lost         the same, latency phase only, as the packet_loss hint judges it: lost/sent
+                   of peer.latency.loss (counted once the path had settled; "unsettled" if
+                   null) where the CLI reports it, else of peer.latency.quic (campaign 2)
   up/down/conc     Mbps of upload, download, concurrency (path at the end in [])
-  rc               --compare-relay: rtt p50 / up / down over the relay
+  rc               --compare-relay: rtt p50 / up / down over the relay; :FAIL if not
+                   everything worked, :UNREACHABLE if nothing got through (newer CLIs)
   idle             --idle: survived/ok, path before->after, recovery ms
   listener_saw     paths of the requests the listener served (path:count)
   verdict          the bench verdict
@@ -122,9 +125,11 @@ def line(d):
     res["rtt_p95"] = fmt(get(lat, "rtt_ms", "p95"))
     res["jitter"] = fmt(lat.get("jitter_ms"))
     res["lost_pct"] = fmt(get(p, "quic", "lost_pct"), 2)
-    lq = lat.get("quic")
+    lq = lat.get("loss") if "loss" in lat else lat.get("quic")
     if lq:
         res["lat_lost"] = f"{lq.get('lost_packets')}/{lq.get('sent_packets')}"
+    elif "loss" in lat:
+        res["lat_lost"] = "unsettled"
     for k, sec in (("up", "upload"), ("down", "download"), ("conc", "concurrency")):
         t = p.get(sec)
         if t is None:
@@ -144,7 +149,7 @@ def line(d):
                     fmt(get(rc, "upload", "throughput_mbps")),
                     fmt(get(rc, "download", "throughput_mbps")),
                 ]
-            ) + ("" if rc.get("ok") else ":FAIL")
+            ) + ("" if rc.get("ok") else ":UNREACHABLE" if rc.get("reachable") is False else ":FAIL")
     idle = p.get("idle")
     if idle:
         res["idle"] = (
