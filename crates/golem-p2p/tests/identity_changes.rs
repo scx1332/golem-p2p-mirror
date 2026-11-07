@@ -2,11 +2,16 @@
 
 mod common;
 
-use std::time::Duration;
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 
 use common::*;
 use golem_p2p::{
-    Endpoint, Error, Event, Identities, InMemorySigner, NodeId, SignError, TransportMode,
+    Endpoint, Error, Event, Identities, InMemorySigner, NodeId, RecordStore, SignError,
+    TransportMode, iroh::Watcher,
 };
 
 fn relay_opts() -> NodeOpts {
@@ -347,6 +352,83 @@ async fn restart_with_persistent_endpoint_key() {
 
         node.close().await;
         peer.close().await;
+    })
+    .await;
+}
+
+/// A re-sign that fails (here: the key is locked when the home relay
+/// connects) is retried, so the record catches up once signing works again
+/// instead of waiting for the next periodic refresh.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_resign_is_retried() {
+    with_timeout(60, async {
+        let net = TestNet::new(1).await;
+        let signer = InMemorySigner::new();
+        let x = signer.generate();
+        let node = Endpoint::builder(signer.clone(), Identities::new(x))
+            .discovery(net.discovery.clone())
+            .relay_config(net.relays[0].config.clone())
+            .relay_tls(net.relay_tls())
+            .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            // Sign the first record before the relay connects.
+            .online_timeout(Duration::ZERO)
+            .bind()
+            .await
+            .unwrap();
+        signer.lock(x);
+        assert!(node.local_record().record().relay_urls.is_empty());
+        let mut status = node.iroh().home_relay_status();
+        wait_for(10, "the home relay", || {
+            status.get().iter().any(|s| s.is_connected())
+        })
+        .await;
+        // The address change was seen and its re-sign failed.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(node.local_record().record().relay_urls.is_empty());
+
+        signer.unlock(x);
+        wait_for(10, "the relay URL in the record", || {
+            !node.local_record().record().relay_urls.is_empty()
+        })
+        .await;
+        node.close().await;
+    })
+    .await;
+}
+
+/// A record that could not be published (the directory was down) is
+/// published once the directory is back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn failed_publish_is_retried() {
+    with_timeout(60, async {
+        // A port nobody listens on yet.
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let directory =
+            golem_p2p::HttpDirectory::new(format!("http://{addr}/").parse().unwrap()).unwrap();
+        let signer = InMemorySigner::new();
+        let x = signer.generate();
+        let node = Endpoint::builder(signer.clone(), Identities::new(x))
+            .discovery(directory)
+            .transport_mode(TransportMode::DirectOnly)
+            .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .bind()
+            .await
+            .unwrap();
+
+        // The directory comes up after the node published (and failed).
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let store = Arc::new(RecordStore::default());
+        let server = tokio::spawn(golem_p2p::directory::serve(listener, store.clone()));
+        wait_for(10, "the record in the directory", || {
+            store.resolve(&x).is_some()
+        })
+        .await;
+        assert_eq!(store.resolve(&x).unwrap(), node.local_record());
+
+        server.abort();
+        node.close().await;
     })
     .await;
 }

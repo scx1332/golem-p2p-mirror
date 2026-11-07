@@ -247,7 +247,10 @@ Why each piece is there:
 * **`instance_id`.** Distinguishes a restarted process from the previous one,
   also when the endpoint key is kept.
 * **`expires_at`.** Default TTL is 1 h; the record is re-signed after a third
-  of that, and whenever identities or the published addresses change.
+  of that, and whenever identities or the published addresses change. A
+  re-sign that fails (a signer that cannot sign at the moment) or a publish
+  that fails (a directory that is down) is retried after 1 s, then with
+  doubling waits up to once a minute, until it succeeds.
 
 ### Which direct addresses are published
 

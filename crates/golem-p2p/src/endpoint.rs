@@ -4,7 +4,10 @@ use std::{
     collections::{BTreeSet, HashMap},
     fmt,
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -16,13 +19,13 @@ use iroh::{
     },
     tls::CaTlsConfig,
 };
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::{
     addrs::{self, Interfaces},
-    discovery::Discovery,
+    discovery::{Discovery, DiscoveryError},
     error::{Error, Result},
     identity::NodeId,
     lookup::RecordLookup,
@@ -450,6 +453,8 @@ impl Builder {
                 seq: initial.seq(),
             }),
             record_tx,
+            published_seq: AtomicU64::new(0),
+            publish_failed: Notify::new(),
             instance_id,
             conns: Mutex::new(HashMap::new()),
             dial_locks: Mutex::new(HashMap::new()),
@@ -488,6 +493,12 @@ impl Builder {
 /// Maximum number of incoming handshakes in progress at once.
 const MAX_PENDING_HANDSHAKES: usize = 128;
 
+/// First wait before retrying a failed automatic re-sign or publish of our
+/// record; it doubles on every further failure, up to [`RETRY_MAX`].
+const RETRY_MIN: Duration = Duration::from_secs(1);
+/// Longest wait between two retries of a failed re-sign or publish.
+const RETRY_MAX: Duration = Duration::from_secs(60);
+
 /// Minimum interval between two record updates processed from one connection
 /// (accepted, stale or duplicate alike).
 const UPDATE_INTERVAL: Duration = Duration::from_millis(100);
@@ -511,6 +522,11 @@ struct Inner {
     store: Arc<RecordStore>,
     local: tokio::sync::Mutex<LocalState>,
     record_tx: watch::Sender<VerifiedRecord>,
+    /// Highest sequence number of our records that discovery has accepted.
+    published_seq: AtomicU64,
+    /// Notified when publishing our record failed, so that `address_loop`
+    /// retries it.
+    publish_failed: Notify,
     instance_id: [u8; 16],
     conns: Mutex<HashMap<usize, Connection>>,
     dial_locks: Mutex<HashMap<EndpointId, Arc<tokio::sync::Mutex<()>>>>,
@@ -621,14 +637,34 @@ impl Inner {
         Ok(rec)
     }
 
+    /// Publishes `rec` to discovery. A failure is retried by `address_loop`.
     async fn publish(&self, rec: &VerifiedRecord) {
-        if let Some(d) = &self.discovery {
-            match tokio::time::timeout(Duration::from_secs(10), d.publish(rec)).await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => warn!("publishing record failed: {e}"),
-                Err(_) => warn!("publishing record timed out"),
+        let Some(d) = &self.discovery else { return };
+        let failure = match tokio::time::timeout(Duration::from_secs(10), d.publish(rec)).await {
+            Ok(Ok(())) => None,
+            // Publishing the same record again cannot change that.
+            Ok(Err(e @ DiscoveryError::Stale)) => {
+                warn!("publishing record failed: {e}");
+                None
+            }
+            Ok(Err(e)) => Some(e.to_string()),
+            Err(_) => Some("timed out".to_string()),
+        };
+        match failure {
+            None => {
+                self.published_seq.fetch_max(rec.seq(), Ordering::Relaxed);
+            }
+            Some(e) => {
+                warn!(seq = rec.seq(), "publishing record failed, will retry: {e}");
+                self.publish_failed.notify_one();
             }
         }
+    }
+
+    /// Returns `true` if our current record has not been published yet.
+    fn unpublished(&self) -> bool {
+        self.discovery.is_some()
+            && self.published_seq.load(Ordering::Relaxed) < self.local_record().seq()
     }
 
     /// Finds the latest valid record for `to`, asking discovery first.
@@ -1064,11 +1100,18 @@ async fn accept_loop(inner: Arc<Inner>) {
 }
 
 /// Re-signs and republishes our record when our addresses change, and
-/// periodically before it expires.
+/// periodically before it expires. A failed re-sign (for example a signer
+/// that is unavailable for a moment) or publish (a directory that is down) is
+/// retried, after 1 s at first and up to every [`RETRY_MAX`], until it
+/// succeeds.
 async fn address_loop(inner: Arc<Inner>, mut w: impl Watcher<Value = iroh::EndpointAddr>) {
     let refresh = inner.config.record_ttl / 3;
     let mut tick = tokio::time::interval_at(tokio::time::Instant::now() + refresh, refresh);
+    let mut resign_failed = false;
+    let mut retry_at: Option<tokio::time::Instant> = None;
+    let mut backoff = RETRY_MIN;
     loop {
+        let mut resign = false;
         tokio::select! {
             _ = inner.cancel.cancelled() => break,
             r = w.updated() => {
@@ -1086,16 +1129,40 @@ async fn address_loop(inner: Arc<Inner>, mut w: impl Watcher<Value = iroh::Endpo
                 let rec_relays: BTreeSet<String> = rec.record().relay_urls.iter().cloned().collect();
                 if relays != rec_relays || ips != rec.record().direct_addrs {
                     debug!(?relays, ?ips, "addresses changed, republishing");
-                    if let Err(e) = inner.update_record(None).await {
-                        warn!("re-signing record after address change failed: {e}");
-                    }
+                    resign = true;
                 }
             }
-            _ = tick.tick() => {
-                if let Err(e) = inner.update_record(None).await {
-                    warn!("periodic record refresh failed: {e}");
+            _ = tick.tick() => resign = true,
+            // Only wakes the loop up; the check below schedules the retry.
+            _ = inner.publish_failed.notified() => {}
+            _ = tokio::time::sleep_until(retry_at.unwrap_or_else(tokio::time::Instant::now)),
+                if retry_at.is_some() =>
+            {
+                retry_at = None;
+                if resign_failed {
+                    resign = true;
+                } else if inner.unpublished() {
+                    let rec = inner.local_record();
+                    debug!(seq = rec.seq(), "retrying to publish our record");
+                    inner.publish(&rec).await;
                 }
             }
+        }
+        if resign {
+            match inner.update_record(None).await {
+                Ok(_) => resign_failed = false,
+                Err(e) => {
+                    warn!("re-signing our record failed, will retry: {e}");
+                    resign_failed = true;
+                }
+            }
+        }
+        if !resign_failed && !inner.unpublished() {
+            retry_at = None;
+            backoff = RETRY_MIN;
+        } else if retry_at.is_none() {
+            retry_at = Some(tokio::time::Instant::now() + backoff);
+            backoff = (backoff * 2).min(RETRY_MAX);
         }
     }
 }
