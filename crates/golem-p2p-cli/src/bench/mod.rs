@@ -546,7 +546,9 @@ impl PeerBench<'_> {
             report::fmt_bytes(size),
             fmt_dur(args.transfer_time)
         ));
-        let limit = args.transfer_time + args.timeout;
+        // A safety net: the transfers end at the time limit themselves (an
+        // upload then waits a little for the listener's count).
+        let limit = args.transfer_time + probe::COUNT_WAIT + Duration::from_secs(1);
         let before = QuicSnapshot::to(ep, self.to);
         let run = async {
             if is_upload {
@@ -584,14 +586,16 @@ impl PeerBench<'_> {
         ));
         let before = QuicSnapshot::to(ep, to);
         let start = Instant::now();
-        let deadline = start + args.transfer_time;
+        let deadline = tokio::time::Instant::from_std(start + args.transfer_time);
         let reserved = AtomicU64::new(0);
         let seq = AtomicU64::new(0);
         let done = AtomicBool::new(false);
-        let results = Mutex::new((Vec::new(), 0u64, None::<anyhow::Error>));
+        let by_time = AtomicBool::new(false);
+        let results = Mutex::new(Requests::default());
         let worker = || async {
             loop {
-                if Instant::now() >= deadline {
+                if tokio::time::Instant::now() >= deadline {
+                    by_time.store(true, Ordering::Relaxed);
                     break;
                 }
                 if reserved.fetch_add(size as u64, Ordering::Relaxed) + size as u64 > budget {
@@ -599,18 +603,25 @@ impl PeerBench<'_> {
                 }
                 let payload = probe::payload(seq.fetch_add(1, Ordering::Relaxed) + 1, size);
                 let t = Instant::now();
-                let r = ep.request(to, &payload).await;
+                // A request still running at the time limit is cut off: the
+                // phase ends there, and that is not a failure.
+                let r = tokio::time::timeout_at(deadline, ep.request(to, &payload)).await;
                 let mut res = results.lock().expect("poisoned");
                 match r {
-                    Ok(reply) if reply.ends_with(&payload) => res.0.push(t.elapsed()),
-                    Ok(_) => {
-                        res.1 += 1;
-                        res.2
+                    Err(_) => {
+                        res.unfinished += 1;
+                        by_time.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    Ok(Ok(reply)) if reply.ends_with(&payload) => res.rtts.push(t.elapsed()),
+                    Ok(Ok(_)) => {
+                        res.failed += 1;
+                        res.error
                             .get_or_insert_with(|| anyhow::anyhow!("unexpected reply"));
                     }
-                    Err(e) => {
-                        res.1 += 1;
-                        res.2.get_or_insert(e.into());
+                    Ok(Err(e)) => {
+                        res.failed += 1;
+                        res.error.get_or_insert(e.into());
                     }
                 }
             }
@@ -645,14 +656,21 @@ impl PeerBench<'_> {
         };
         let ((), small) = tokio::join!(workers, small);
         let elapsed = start.elapsed();
-        let (rtts, failed, error) = results.into_inner().expect("poisoned");
+        let Requests {
+            rtts,
+            failed,
+            unfinished,
+            error,
+        } = results.into_inner().expect("poisoned");
         let total = rtts.len() as u64 * size as u64;
         Concurrency {
-            ok: failed == 0 && !rtts.is_empty(),
+            ok: failed == 0,
             streams: args.streams,
             request_bytes: size,
             requests: rtts.len() as u64,
             failed,
+            unfinished,
+            limited_by: if by_time.into_inner() { "time" } else { "size" },
             total_bytes: total,
             duration_ms: ms(elapsed),
             throughput_mbps: (!rtts.is_empty()).then(|| round3(probe::mbps(total, elapsed))),
@@ -827,6 +845,18 @@ impl PeerBench<'_> {
         result.path_after = path_name(path_to(ep, to));
         result
     }
+}
+
+/// The outcome of the concurrency phase's requests.
+#[derive(Default)]
+struct Requests {
+    /// Round-trip times of the correct replies.
+    rtts: Vec<Duration>,
+    failed: u64,
+    /// Cut off by the time limit.
+    unfinished: u64,
+    /// The first error.
+    error: Option<anyhow::Error>,
 }
 
 /// Connects (lookup, QUIC and golem-p2p handshake), timing the lookup

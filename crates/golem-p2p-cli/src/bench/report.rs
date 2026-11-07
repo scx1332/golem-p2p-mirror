@@ -291,6 +291,11 @@ pub struct Concurrency {
     pub request_bytes: usize,
     pub requests: u64,
     pub failed: u64,
+    /// Requests still running at the time limit, cut off (not failures).
+    pub unfinished: u64,
+    /// `size` (`--concurrency-size` sent) or `time` (`--transfer-time`
+    /// reached first).
+    pub limited_by: &'static str,
     /// Payload bytes of the correct replies; each went both ways.
     pub total_bytes: u64,
     pub duration_ms: f64,
@@ -630,6 +635,14 @@ impl Report {
             if let Some(c) = &p.concurrency {
                 let v = if c.requests == 0 && !c.ok {
                     format!("FAILED: {}", c.error.as_deref().unwrap_or("?"))
+                } else if c.requests == 0 {
+                    format!(
+                        "{} streams: none of the requests of {} finished within {} (the time \
+                         limit)",
+                        c.streams,
+                        fmt_bytes(c.request_bytes as u64),
+                        fmt_ms(c.duration_ms)
+                    )
                 } else {
                     let mut v = format!(
                         "{} streams: {} requests of {} ({} each way) in {}: {}",
@@ -642,6 +655,9 @@ impl Report {
                     );
                     if c.failed > 0 {
                         let _ = write!(v, ", {} FAILED", c.failed);
+                    }
+                    if c.unfinished > 0 {
+                        let _ = write!(v, ", {} cut off at the time limit", c.unfinished);
                     }
                     if let Some(m) = c.loaded_rtt_ms.p50 {
                         let _ = write!(v, "; small requests meanwhile: median {}", fmt_ms(m));

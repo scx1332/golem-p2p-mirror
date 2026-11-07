@@ -223,7 +223,7 @@ A phase of `bench` finished. Phases run in this order; skipped ones
 | field | type | meaning |
 |---|---|---|
 | `phase` | string | phase name |
-| `ok` | bool | the phase succeeded (`local`: every relay and directory check passed; `latency`: no failed request) |
+| `ok` | bool | the phase succeeded (`local`: every relay and directory check passed; `latency`, `concurrency`: no failed request; requests cut off by the time limit are not failures) |
 | `duration_ms` | number | duration of the phase |
 | `result` | object | the phase's section of `bench_report`: `local`, `peer.connect`, `peer.latency`, `peer.upload`, `peer.download`, `peer.concurrency`, `relay_compare`, `peer.idle` |
 
@@ -314,7 +314,7 @@ discovery (QAD) over UDP, and with HTTPS):
 | `connect` | object | `ok`, `lookup_ms` (directory lookup), `connect_ms` (lookup and both handshakes), `handshake_ms` (`connect_ms - lookup_ms`), `path` and `remote_addr` right after connecting, `peer_endpoint`, `error_kind`, `error` |
 | `latency` | object or null | `duration_ms`, `sent`, `ok`, `failed`, `failed_pct`, `rtt_ms` {`min`, `p50`, `p95`, `max`, `mean`}, `rtt_samples`, `jitter_ms`, `direct_fraction`, `final_path` (as in `summary`), `quic` (below, during this phase) |
 | `upload`, `download` | object or null | `ok`, `requested_bytes` (after the relay cap), `relay_capped`, `bytes`, `duration_ms`, `throughput_mbps`, `path` (at the end), `limited_by` (`size` or `time`), `error_kind` (`refused` for a listener limit), `error`, `quic` (during this phase) |
-| `concurrency` | object or null | `ok`, `streams`, `request_bytes`, `requests` (correct replies), `failed`, `total_bytes` (payload, each way), `duration_ms`, `throughput_mbps` (payload, each way), `rtt_ms` (of these requests), `loaded_rtt_ms` and `loaded_samples` (small requests sent meanwhile), `error_kind`, `error`, `quic` (during this phase) |
+| `concurrency` | object or null | `ok`, `streams`, `request_bytes`, `requests` (correct replies), `failed`, `unfinished` (still running at `--transfer-time`, cut off; not failures), `limited_by` (`size` or `time`), `total_bytes` (payload, each way), `duration_ms`, `throughput_mbps` (payload, each way), `rtt_ms` (of these requests), `loaded_rtt_ms` and `loaded_samples` (small requests sent meanwhile), `error_kind`, `error`, `quic` (during this phase) |
 | `idle` | object or null | `idle_ms`, `ok` (a request succeeded afterwards), `survived` (the same connection was still open), `path_before`, `path_after`, `attempts` (at most 3), `recovery_ms` (first request to first reply), `rtt_ms`, `error` |
 | `path` | object | `time_to_direct_ms` (from the start of connecting), `changes`, `final_path` (`unknown` if there was no connection at the end), `final_remote_addr`, `timeline` [{`t_ms`, `path`, `remote_addr`}] (at most 64 entries) |
 | `connection_lost` | object or null | the connection made in the `connect` phase closed before the end of the run: `t_ms` (from the start of connecting), `phase` (the phase running then), `cause` (`closed_here`: a request got no answer and nothing at all arrived from the peer during the request timeout, so this node closed it; `idle_timeout`: nothing arrived for QUIC's idle timeout; `closed_by_peer`; `reset`: the peer no longer knew the connection, e.g. it restarted; `error`), `reason` (QUIC's close reason). Null if it stayed open. A loss during the `idle` phase is reported by `idle` instead of the `connection_lost` issue |
@@ -424,7 +424,12 @@ apart by their first bytes:
   and discards the bytes and replies
   `endpoint=... instance=... to=... from=... sink_bytes=N`. Used by
   `probe --bulk N` (after at least one correct reply, bounded by
-  `--bulk-timeout`, default 60 s) and by `bench`.
+  `--bulk-timeout`, default 60 s) and by `bench`. A client that stops
+  uploading at its time limit (`bench --transfer-time`) resets its sending
+  side with code 257 (0x101) instead of finishing; the listener then replies
+  with the count of what arrived before the reset. (A listener older than
+  this answers nothing; `bench` then reports that the listener did not
+  report what it received.)
 * **Source (download)**: the 23-byte header `golem-p2p-cli/source/1\n`, then
   the byte count N in decimal ASCII (optionally followed by `\n`), then the
   client finishes the stream. The listener replies with the status line
@@ -467,12 +472,16 @@ brackets):
    (`--timeout`, 10 s).
 3. `latency`: echo requests of `--payload-size` (64 B) every `--interval`
    (200 ms) for `--latency-duration` (10 s).
-4. `upload`, `download`: `--transfer-size` (10 MB) each, stopped after
-   `--transfer-time` (8 s). Throughput is the bytes over the time from
-   opening the stream to the listener's count (upload) or to the last byte
-   (download).
+4. `upload`, `download`: `--transfer-size` (10 MB) each, stopped at
+   `--transfer-time` (8 s, from opening the stream; `limited_by: "time"`). An
+   upload stopped there drops what is not delivered yet (it resets the
+   stream) and the listener reports what arrived; the bench waits at most 3 s
+   more for that count. A download stops reading. Throughput is the bytes
+   over the time from opening the stream to the listener's count (upload) or
+   to the last byte (download).
 5. `concurrency`: `--streams` (8) workers send echo requests of 256 KiB until
-   `--concurrency-size` (8 MB of requests) or `--transfer-time`; meanwhile
+   `--concurrency-size` (8 MB of requests) or `--transfer-time`; requests
+   still running at the time limit are cut off (`unfinished`). Meanwhile
    small requests every `--interval` measure the round trip under load.
 6. `relay_compare` (`--compare-relay`): a second endpoint with a temporary
    identity, relay only (no UDP sockets) and not published to the
@@ -485,4 +494,16 @@ Every phase that runs over a relay (the main connection while it is relayed,
 and `--compare-relay`) caps its size at `--relay-transfer-size` (4 MB), to
 spare shared relays. With the defaults a run moves at most about 36 MB (10 MB
 up, 10 MB down, 8 MB of parallel requests each way) plus 8 MB with
-`--compare-relay`, and takes about 30 to 60 s.
+`--compare-relay`.
+
+How long a run takes, with the defaults: `local` up to about 6 s (usually
+under 1.5 s); `connect` up to 10 s (usually under 1 s); `latency` 10 s, plus
+at most one `--timeout` for a request still running at its end (usually one
+round trip); `upload` at most 8 s plus up to 3 s for the listener's count;
+`download` and `concurrency` at most 8 s each. On a fast link the transfers
+finish early and a run takes about 15 s; on a slow or lossy link each
+transfer phase uses its 8 s and a run takes about 40 s. `--compare-relay`
+adds a second endpoint and connection (about 1 to 2 s, at most 15 s), 5 s of
+latency, and a relayed upload and download bounded the same way: about 8 s on
+a fast relay path, up to about 30 s on a slow one. `--idle D` adds D and up to
+3 requests.

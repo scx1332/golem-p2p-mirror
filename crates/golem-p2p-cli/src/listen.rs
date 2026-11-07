@@ -19,7 +19,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use golem_p2p::{Endpoint, IncomingStream, NodeId, SendStream, iroh::endpoint::VarInt};
+use golem_p2p::{
+    Endpoint, IncomingStream, NodeId, SendStream,
+    iroh::endpoint::{ReadError, VarInt},
+};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::debug;
 
@@ -40,6 +43,11 @@ pub const MAX_REQUEST: usize = 1 << 20;
 /// Stream error code with which the listener stops an upload or resets a
 /// download that exceeds a limit.
 pub const REFUSED: VarInt = VarInt::from_u32(0x100);
+
+/// Stream error code with which an uploader resets an upload that it stops
+/// at its time limit (`bench --transfer-time`). The listener ends the upload
+/// there and still replies with the bytes it received.
+pub const UPLOAD_STOPPED: VarInt = VarInt::from_u32(0x101);
 
 /// Longest time to receive an echo request, or the start of an upload or a
 /// download request, before the stream is refused. Without it a peer could
@@ -279,8 +287,15 @@ async fn sink(
                 if n > limits.max_transfer_size {
                     return Ok(Some("too_large"));
                 }
-                while let Some(chunk) = recv.read_chunk(usize::MAX).await? {
-                    n += chunk.len() as u64;
+                loop {
+                    match recv.read_chunk(usize::MAX).await {
+                        Ok(Some(chunk)) => n += chunk.len() as u64,
+                        Ok(None) => break,
+                        // Stopped by the uploader at its time limit: count
+                        // what arrived.
+                        Err(ReadError::Reset(code)) if code == UPLOAD_STOPPED => break,
+                        Err(e) => return Err(e.into()),
+                    }
                     if n > limits.max_transfer_size {
                         return Ok(Some("too_large"));
                     }

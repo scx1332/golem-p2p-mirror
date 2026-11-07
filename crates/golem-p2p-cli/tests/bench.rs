@@ -383,6 +383,66 @@ async fn bench_direct_with_relay_compare_and_idle() {
     );
 }
 
+/// Uploads, downloads and the concurrency phase end at `--transfer-time`. An
+/// upload stopped there reports what the listener received (the listener
+/// answers a stopped upload with its count), a download what arrived; the
+/// concurrency phase cuts off the requests still running, which are not
+/// failures.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phases_end_at_the_time_limit() {
+    let infra = Infra::start("bench-time-limit").await;
+    let (mut lis, lis_id) = listener(&infra, "lis", &[]).await;
+    let a = strs([
+        "--to",
+        &lis_id,
+        "--skip",
+        "local,latency",
+        "--transfer-size",
+        "90M",
+        "--transfer-time",
+        "200ms",
+        "--streams",
+        "16",
+        "--concurrency-size",
+        "1G",
+    ]);
+    let (code, r, evs) = bench(&bench_args(&infra, &a)).await;
+    assert_eq!(code, Some(0), "{r:#}");
+    let p = &r["peer"];
+    for dir in ["upload", "download"] {
+        let t = &p[dir];
+        assert_eq!(
+            (&t["ok"], &t["limited_by"]),
+            (&true.into(), &"time".into()),
+            "{t:#}"
+        );
+        let bytes = t["bytes"].as_u64().unwrap();
+        assert!(bytes > 0 && bytes < 90_000_000, "{t:#}");
+        assert!(num(t, "throughput_mbps") > 0.0, "{t:#}");
+    }
+    let v = lis
+        .wait_for(30, "the stopped upload", |v| {
+            v["event"] == "request" && v["kind"] == "sink"
+        })
+        .await;
+    assert!(v["refused"].is_null(), "{v}");
+    assert_eq!(v["bytes"], p["upload"]["bytes"], "{v}");
+
+    let c = &p["concurrency"];
+    assert_eq!((&c["ok"], &c["failed"]), (&true.into(), &0.into()), "{c:#}");
+    assert_eq!(c["limited_by"], "time", "{c:#}");
+    assert!(c["unfinished"].as_u64().unwrap() <= 16, "{c:#}");
+    assert!(r["issues"].as_array().unwrap().is_empty(), "{r:#}");
+
+    // Each phase took about the time limit, not the time limit plus a
+    // request timeout (10 s).
+    for e in events(&evs, "bench_phase") {
+        if ["upload", "download", "concurrency"].contains(&e["phase"].as_str().unwrap()) {
+            assert!(num(e, "duration_ms") < 3000.0, "{e}");
+        }
+    }
+}
+
 /// The listener's limits: uploads and downloads beyond `--max-transfer-size`
 /// are refused cleanly (exit code 5, issue `transfer_refused`), within it they
 /// work; `--max-transfers 0` refuses all. (`probe --bulk`: tests/probe.rs.)

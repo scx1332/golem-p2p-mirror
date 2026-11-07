@@ -386,6 +386,7 @@ impl<'a> Facts<'a> {
                 ));
             }
         }
+        // Requests cut off by the time limit did not fail.
         if let Some(c) = &p.concurrency
             && (!c.ok || c.failed > 0)
         {
@@ -394,7 +395,7 @@ impl<'a> Facts<'a> {
                 format!(
                     "{} of {} parallel requests failed{}.",
                     c.failed,
-                    c.requests + c.failed,
+                    c.requests + c.failed + c.unfinished,
                     c.error
                         .as_ref()
                         .map(|e| format!(": {e}"))
