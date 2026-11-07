@@ -177,6 +177,9 @@ def check_run(sc, run):
     verdict = rep.get("verdict", "")
     newf = new_format(rep)
     hard_hint = hints & {"hard_nat", "hard_nat_likely"}
+    # Emulated packet loss on the path (netem also describes other faults,
+    # e.g. the NAT flush of lab-natflush-pr, whose link is clean).
+    lossy_link = "loss" in (sc.get("netem") or "")
     exp = EXPECT_NET.get(pa)
     real = "real uplink" in (a or {}).get("location", "")
     # The real relay serves QAD on 56001 only: without ,quic=56001 iroh probes
@@ -264,7 +267,7 @@ def check_run(sc, run):
                             "relay-only without a NAT on this side (behind_nat_v4=false): the verdict names the peer's "
                             "network or a firewall in front of this machine (here ufw)"))
         lq = get(peer, "latency", "quic")
-        if "packet_loss" in hints and not sc.get("netem"):
+        if "packet_loss" in hints and not lossy_link:
             up = get(peer, "upload", "throughput_mbps")
             down = get(peer, "download", "throughput_mbps")
             if newf:
@@ -292,6 +295,14 @@ def check_run(sc, run):
             else:
                 out.append(("misleading", "connection_closed_unexplained",
                             "the connection was gone at the end (final_path unknown), the verdict does not say so"))
+        rc = rep.get("relay_compare") or {}
+        if "relay_fallback_failed" in issues and get(rc, "connect", "ok") and (
+                get(rc, "latency", "ok") or get(rc, "download", "ok")):
+            out.append(("misleading", "relay_fallback_failed_but_works",
+                        "relay_fallback_failed ('the relay-only connection did not work ... this peer cannot be "
+                        f"reached'), but it connected and worked: {get(rc, 'latency', 'ok')} latency replies, "
+                        f"download {fmt(get(rc, 'download', 'throughput_mbps'))} Mbps; failed: "
+                        f"{get(rc, 'upload', 'error') or get(rc, 'download', 'error')}"))
         cl = peer.get("connection_lost")
         if cl and cl.get("phase") != "idle" and "connection_lost" not in issues:
             out.append(("wrong", "connection_lost_missed",
@@ -303,7 +314,7 @@ def check_run(sc, run):
             elif not idle.get("survived") and "idle_reconnect" in hints:
                 out.append(("right", "idle", "idle: reconnect reported"))
         q = peer.get("quic") or {}
-        if sc.get("netem") and "loss" in (sc.get("netem") or ""):
+        if lossy_link:
             if newf:
                 lost, sent, lpct = get(lq, "lost_packets"), get(lq, "sent_packets"), get(lq, "lost_pct")
                 seen = f"{lost} of {sent} latency-phase packets lost ({lpct} %)"
