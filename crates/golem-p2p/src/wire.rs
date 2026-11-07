@@ -116,7 +116,7 @@ pub mod codes {
 }
 
 /// Error reading or writing frames.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum FrameError {
     /// Stream I/O failed.
     #[error("stream error: {0}")]

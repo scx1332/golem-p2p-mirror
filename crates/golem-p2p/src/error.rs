@@ -8,7 +8,7 @@ use crate::{
 };
 
 /// Errors returned by [`crate::Endpoint`] and [`crate::Connection`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum Error {
     /// No valid record is known for this node ID.
     #[error("no valid record found for node {0}")]

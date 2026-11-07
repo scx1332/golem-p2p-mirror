@@ -377,7 +377,10 @@ error code (`UNKNOWN_IDENTITY`, `SENDER_NOT_BOUND`, `BUSY`).
 in both directions. `connect(id)` reuses a live connection whose current peer
 record lists `id`, unless the store knows that `id` moved to another endpoint
 or that the endpoint restarted. Otherwise it looks the record up in discovery
-(cache as fallback) and dials.
+(cache as fallback) and dials. Concurrent `connect` calls for the same target
+make one lookup and one dial: the others wait for it and use its connection,
+or get its error if it failed while they waited, so a burst of requests to an
+unreachable peer fails after one connect timeout, not one per request.
 
 **Request/response.** `Endpoint::request` opens a stream, writes the request,
 finishes, and reads the response. It is not retried once the request may have

@@ -2,10 +2,20 @@
 
 mod common;
 
-use std::time::Duration;
+use std::{
+    net::{Ipv4Addr, SocketAddr},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use common::*;
-use golem_p2p::{Identities, InMemorySigner, PathKind, TransportMode, iroh::Watcher};
+use golem_p2p::{
+    Discovery, DiscoveryError, Endpoint, Identities, InMemorySigner, MemoryDiscovery, NodeId,
+    PathKind, TransportMode, VerifiedRecord, iroh::Watcher, signer::BoxFuture,
+};
 
 /// Two nodes without relays reach each other over direct UDP.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -225,6 +235,106 @@ async fn relay_down_other_stays_up() {
 
         a.close().await;
         b.close().await;
+    })
+    .await;
+}
+
+/// Discovery that counts lookups.
+#[derive(Debug, Default)]
+struct CountingDiscovery {
+    inner: MemoryDiscovery,
+    lookups: AtomicUsize,
+}
+
+impl Discovery for CountingDiscovery {
+    fn publish<'a>(
+        &'a self,
+        record: &'a VerifiedRecord,
+    ) -> BoxFuture<'a, Result<(), DiscoveryError>> {
+        self.inner.publish(record)
+    }
+
+    fn lookup(&self, id: NodeId) -> BoxFuture<'_, Result<Option<VerifiedRecord>, DiscoveryError>> {
+        self.lookups.fetch_add(1, Ordering::SeqCst);
+        self.inner.lookup(id)
+    }
+}
+
+/// Many requests to a peer without a connection yet: one directory lookup
+/// and one connection serve all of them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_requests_share_one_lookup_and_dial() {
+    with_timeout(60, async {
+        let discovery = Arc::new(CountingDiscovery::default());
+        let net = TestNet::with_discovery(0, discovery.clone()).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let a = net
+            .node(&signer, Identities::new(a_id), NodeOpts::default())
+            .await;
+        let b = net
+            .node(&signer, Identities::new(b_id), NodeOpts::default())
+            .await;
+        spawn_echo(&b);
+
+        let before = discovery.lookups.load(Ordering::SeqCst);
+        let replies = n0_future::join_all((0..16).map(|_| a.request(b_id, b"hello"))).await;
+        for r in replies {
+            assert_eq!(Echo::parse(&r.unwrap()).to, b_id);
+        }
+        let lookups = discovery.lookups.load(Ordering::SeqCst) - before;
+        assert_eq!(lookups, 1, "16 concurrent requests made {lookups} lookups");
+        assert_eq!(a.connections().len(), 1);
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}
+
+/// Concurrent requests to a peer whose record is still published but whose
+/// process is gone fail together after one connect timeout, instead of
+/// dialing one after another for one timeout each.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_requests_to_dead_peer_fail_together() {
+    with_timeout(60, async {
+        let net = TestNet::new(0).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let b = net
+            .node(&signer, Identities::new(b_id), NodeOpts::default())
+            .await;
+        b.close().await;
+        let connect_timeout = Duration::from_secs(1);
+        let a = Endpoint::builder(signer.clone(), Identities::new(a_id))
+            .discovery(net.discovery.clone())
+            .transport_mode(TransportMode::DirectOnly)
+            .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .connect_timeout(connect_timeout)
+            .bind()
+            .await
+            .unwrap();
+
+        const N: u32 = 6;
+        let start = tokio::time::Instant::now();
+        let results = n0_future::join_all((0..N).map(|_| a.request(b_id, b"ping"))).await;
+        let took = start.elapsed();
+        for r in results {
+            assert!(r.is_err());
+        }
+        tracing::info!("{N} concurrent requests to a dead peer failed after {took:?}");
+        assert!(
+            took < connect_timeout * 3,
+            "{N} concurrent requests to a dead peer took {took:?}"
+        );
+
+        // A later request tries again (and fails again) instead of
+        // returning the old failure.
+        let start = tokio::time::Instant::now();
+        assert!(a.request(b_id, b"ping").await.is_err());
+        assert!(start.elapsed() >= connect_timeout / 2);
+
+        a.close().await;
     })
     .await;
 }

@@ -446,6 +446,7 @@ impl Builder {
             instance_id,
             conns: Mutex::new(HashMap::new()),
             dial_locks: Mutex::new(HashMap::new()),
+            connect_slots: Mutex::new(HashMap::new()),
             incoming_tx,
             incoming_rx: tokio::sync::Mutex::new(incoming_rx),
             events,
@@ -489,6 +490,13 @@ struct LocalState {
     seq: u64,
 }
 
+/// Serializes the connection attempts to one target, see [`Inner::connect`].
+#[derive(Default)]
+struct ConnectSlot {
+    /// When the last attempt failed, and why.
+    failed: Option<(tokio::time::Instant, Error)>,
+}
+
 struct Inner {
     iroh: iroh::Endpoint,
     signer: Arc<dyn Signer>,
@@ -499,6 +507,7 @@ struct Inner {
     instance_id: [u8; 16],
     conns: Mutex<HashMap<usize, Connection>>,
     dial_locks: Mutex<HashMap<EndpointId, Arc<tokio::sync::Mutex<()>>>>,
+    connect_slots: Mutex<HashMap<NodeId, Arc<tokio::sync::Mutex<ConnectSlot>>>>,
     incoming_tx: mpsc::Sender<IncomingStream>,
     incoming_rx: tokio::sync::Mutex<mpsc::Receiver<IncomingStream>>,
     events: broadcast::Sender<Event>,
@@ -672,6 +681,19 @@ impl Inner {
         locks.entry(ep).or_default().clone()
     }
 
+    fn connect_slot(&self, to: NodeId) -> Arc<tokio::sync::Mutex<ConnectSlot>> {
+        let mut slots = self.connect_slots.lock().expect("poisoned");
+        slots.retain(|_, s| Arc::strong_count(s) > 1);
+        slots.entry(to).or_default().clone()
+    }
+
+    /// Returns a connection to `to`, looking it up and dialing if needed.
+    ///
+    /// Concurrent calls for the same target make one lookup and one dial:
+    /// the others wait for it and then use its connection, or return its
+    /// error if it failed while they waited. (Otherwise every caller looked
+    /// the peer up in discovery, and for an unreachable peer the callers
+    /// dialed one after another, each for a full connect timeout.)
     async fn connect(self: &Arc<Self>, to: NodeId) -> Result<Connection> {
         if self.cancel.is_cancelled() {
             return Err(Error::Closed);
@@ -682,7 +704,28 @@ impl Inner {
         if let Some(c) = self.find_connection(&to) {
             return Ok(c);
         }
+        let slot = self.connect_slot(to);
+        let queued = tokio::time::Instant::now();
+        let mut slot = slot.lock().await;
+        if let Some(c) = self.find_connection(&to) {
+            return Ok(c);
+        }
+        if let Some((failed_at, e)) = &slot.failed
+            && *failed_at >= queued
+        {
+            return Err(e.clone());
+        }
+        let res = self.lookup_and_dial(to).await;
+        slot.failed = res
+            .as_ref()
+            .err()
+            .map(|e| (tokio::time::Instant::now(), e.clone()));
+        res
+    }
+
+    async fn lookup_and_dial(self: &Arc<Self>, to: NodeId) -> Result<Connection> {
         let rec = self.lookup(to).await?;
+        // Identities of one node share its endpoint: one dial per endpoint.
         let lock = self.dial_lock(rec.endpoint_id());
         let _guard = lock.lock().await;
         if let Some(c) = self.find_connection(&to) {
