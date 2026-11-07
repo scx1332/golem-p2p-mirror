@@ -11,7 +11,7 @@
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex, OnceLock},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use golem_p2p::{
@@ -76,6 +76,15 @@ pub fn path_to(ep: &Endpoint, to: NodeId) -> PathKind {
     connection_to(ep, to)
         .map(|c| SelectedPath::of(&c).kind)
         .unwrap_or(PathKind::Unknown)
+}
+
+/// The round-trip time estimate of the selected path towards `to` (QUIC's
+/// smoothed RTT, which includes queueing delay), if there is a connection.
+pub fn path_rtt(ep: &Endpoint, to: NodeId) -> Option<Duration> {
+    let conn = connection_to(ep, to)?;
+    let paths = conn.iroh_connection().paths();
+    let rtt = paths.iter().find(|p| p.is_selected())?.rtt();
+    Some(rtt)
 }
 
 /// The history of the selected path towards one peer: when a direct path

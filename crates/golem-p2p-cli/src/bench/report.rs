@@ -385,7 +385,12 @@ pub struct QuicStats {
 pub struct RelayCompare {
     /// Why it did not run; null if it ran.
     pub skipped: Option<String>,
+    /// Everything worked: connected, every request answered, and the
+    /// upload and download succeeded.
     pub ok: bool,
+    /// The peer is reachable through the relay: connected, and at least one
+    /// request got a correct reply (or a transfer succeeded).
+    pub reachable: bool,
     /// The relay the connection went through.
     pub relay: Option<String>,
     pub connect: Option<Connect>,

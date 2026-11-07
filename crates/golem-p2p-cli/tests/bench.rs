@@ -357,7 +357,11 @@ async fn bench_direct_with_relay_compare_and_idle() {
     let rc = &r["relay_compare"];
     let relay_url = format!("{}/", infra.relay_url);
     assert!(rc["skipped"].is_null(), "{rc:#}");
-    assert_eq!(rc["ok"], true, "{rc:#}");
+    assert_eq!(
+        (&rc["ok"], &rc["reachable"]),
+        (&true.into(), &true.into()),
+        "{rc:#}"
+    );
     assert_eq!(rc["relay"], relay_url.as_str());
     assert_eq!(rc["connect"]["path"], "relay");
     check_latency(&rc["latency"], "relay");

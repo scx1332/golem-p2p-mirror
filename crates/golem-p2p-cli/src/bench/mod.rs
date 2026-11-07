@@ -564,8 +564,8 @@ impl PeerBench<'_> {
             fmt_dur(args.transfer_time)
         ));
         // A safety net: the transfers end at the time limit themselves (an
-        // upload then waits a little for the listener's count).
-        let limit = args.transfer_time + probe::COUNT_WAIT + Duration::from_secs(1);
+        // upload then waits for the listener's count, see `count_wait`).
+        let limit = args.transfer_time + probe::COUNT_WAIT_MAX + Duration::from_secs(1);
         let before = QuicSnapshot::to(ep, self.to);
         let run = async {
             if is_upload {
@@ -767,7 +767,11 @@ impl PeerBench<'_> {
             } else {
                 None
             };
-            rc.ok = connected
+            // Reachable: something went through. Everything else that
+            // failed (slow transfers, some requests) makes it not `ok`.
+            rc.reachable =
+                connected && (l.ok > 0 || [&up, &down].into_iter().flatten().any(|t| t.ok));
+            rc.ok = rc.reachable
                 && l.failed == 0
                 && l.ok > 0
                 && up.as_ref().is_none_or(|t| t.ok)

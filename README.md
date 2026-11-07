@@ -200,7 +200,9 @@ request per 200 ms for 12 s: round-trip min/median/p95/max, jitter, failures,
 path over time, time until direct, fraction direct, path changes); upload and
 download (10 MB each or 8 s); concurrency (8 streams of 256 KiB requests, 8 MB,
 plus the round trip of small requests meanwhile); with `--compare-relay` the
-same over a relay-only connection, i.e. what you get if hole punching fails;
+same over a relay-only connection, i.e. what you get if hole punching fails
+(the peer counts as unreachable through the relay only if nothing gets
+through; a failed or very slow relayed transfer is a hint);
 with `--idle 60s` whether the connection survives a minute without traffic.
 QUIC packet loss is reported per phase; only loss while measuring latency
 (when the connection is nearly idle), counted once the path has settled after
@@ -209,8 +211,8 @@ packets by design while congestion control probes for the link's capacity,
 and so does setting up a path. Transfers through a relay
 are capped at `--relay-transfer-size` (4 MB) to spare shared relays. With the
 defaults a run moves at most about 36 MB (44 MB with `--compare-relay`) and
-takes about 17 s on a fast link and about 40 s on a slow one, where every
-transfer phase stops at its time limit (`--compare-relay` adds about 8 to 30
+takes about 17 s on a fast link and about 45 s on a slow one, where every
+transfer phase stops at its time limit (`--compare-relay` adds about 8 to 35
 s; details in [docs/cli-events.md](docs/cli-events.md)). See
 `golem-p2p bench --help` for all options.
 
