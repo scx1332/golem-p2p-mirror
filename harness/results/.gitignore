@@ -1,0 +1,3 @@
+# Scratch files of campaign scripts: throwaway keys of local test nodes, logs.
+.keys/
+.*.log

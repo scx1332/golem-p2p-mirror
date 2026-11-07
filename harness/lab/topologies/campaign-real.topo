@@ -1,0 +1,10 @@
+# Benchmark campaign 1 (harness/campaign/campaign1.sh realworld/startup): lab
+# nodes whose traffic leaves through the VM's real uplink (uplink=real: the
+# emulated NAT, then the VM's masquerade, then the i3D host's masquerade to
+# 213.163.75.157), talking to the real relay p2p-relay1 and to a node on the
+# build machine. See README "uplink=real".
+real1    easy             uplink=real
+real2    symmetric        uplink=real
+real3    udp-blocked      uplink=real
+# A lab-internal node, so the local relay/directory and selftest still work.
+lab1     easy
