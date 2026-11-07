@@ -1157,6 +1157,7 @@ dependencies = [
  "pem 3.0.6",
  "rustls-pki-types",
  "serde_json",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "tracing-subscriber",

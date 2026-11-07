@@ -332,7 +332,7 @@ impl Bulk {
         if let Err(e) = &self.result {
             out.event("error")
                 .field("kind", "bulk")
-                .field("cause", anyhow_kind(e, "bulk"))
+                .field("cause", transfer_error_kind(e, "bulk"))
                 .field(
                     "message",
                     format!("bulk transfer of {} bytes: {e:#}", self.bytes),
@@ -345,18 +345,34 @@ impl Bulk {
 async fn transfer(ep: &Endpoint, to: NodeId, bytes: u64) -> anyhow::Result<Duration> {
     let start = Instant::now();
     let (mut send, mut recv) = ep.open_bi(to).await?;
-    send.write_all(SINK_MAGIC).await?;
-    let chunk = vec![0u8; 64 * 1024];
-    let mut left = bytes;
-    while left > 0 {
-        let n = left.min(chunk.len() as u64) as usize;
-        send.write_all(&chunk[..n]).await?;
-        left -= n as u64;
+    let write = async {
+        send.write_all(SINK_MAGIC).await?;
+        let chunk = vec![0u8; 64 * 1024];
+        let mut left = bytes;
+        while left > 0 {
+            let n = left.min(chunk.len() as u64) as usize;
+            send.write_all(&chunk[..n]).await?;
+            left -= n as u64;
+        }
+        send.finish()?;
+        Ok::<_, anyhow::Error>(())
     }
-    send.finish()?;
-    let reply = recv.read_to_end(4096).await?;
+    .await;
+    // Read the reply also if writing failed: a refusal says why.
+    let reply = match write {
+        Ok(()) => recv.read_to_end(4096).await?,
+        Err(e) => {
+            match tokio::time::timeout(Duration::from_secs(5), recv.read_to_end(4096)).await {
+                Ok(Ok(r)) if r.starts_with(b"refused") => r,
+                _ => return Err(e),
+            }
+        }
+    };
     let elapsed = start.elapsed();
     let reply = String::from_utf8_lossy(&reply);
+    if let Some(r) = Refused::parse(&reply) {
+        return Err(r.into());
+    }
     let got: u64 = reply
         .split_whitespace()
         .find_map(|kv| kv.strip_prefix("sink_bytes="))
@@ -367,6 +383,75 @@ async fn transfer(ep: &Endpoint, to: NodeId, bytes: u64) -> anyhow::Result<Durat
         bail!("listener received {got} of {bytes} bytes");
     }
     Ok(elapsed)
+}
+
+/// The listener refused an upload or download because of one of its limits
+/// (`listen --max-transfer-size`, `--max-transfers`, `--max-transfer-time`).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{}", describe_refusal(.reason, .detail))]
+pub struct Refused {
+    /// `too_large`, `busy`, `timeout`, `bad_request`, ...
+    pub reason: String,
+    /// The rest of the reply, e.g. `max_bytes=1000`.
+    pub detail: String,
+}
+
+impl Refused {
+    /// Parses a `refused reason=... key=value` reply.
+    pub fn parse(reply: &str) -> Option<Self> {
+        let rest = reply.trim().strip_prefix("refused")?;
+        let mut reason = String::new();
+        let mut detail = Vec::new();
+        for kv in rest.split_whitespace() {
+            match kv.strip_prefix("reason=") {
+                Some(r) => reason = r.to_string(),
+                None => detail.push(kv),
+            }
+        }
+        Some(Self {
+            reason,
+            detail: detail.join(" "),
+        })
+    }
+
+    /// The value of `key=` in the detail.
+    pub fn value(&self, key: &str) -> Option<&str> {
+        self.detail
+            .split_whitespace()
+            .find_map(|kv| kv.strip_prefix(key)?.strip_prefix('='))
+    }
+}
+
+fn describe_refusal(reason: &str, detail: &str) -> String {
+    let r = Refused {
+        reason: reason.to_string(),
+        detail: detail.to_string(),
+    };
+    match reason {
+        "too_large" => format!(
+            "the listener refused the transfer: it allows at most {} bytes per transfer",
+            r.value("max_bytes").unwrap_or("?")
+        ),
+        "busy" => format!(
+            "the listener refused the transfer: it already serves its maximum of {} transfers",
+            r.value("max_transfers").unwrap_or("?")
+        ),
+        "timeout" => format!(
+            "the listener stopped the transfer after its time limit of {} s",
+            r.value("max_seconds").unwrap_or("?")
+        ),
+        _ => format!("the listener refused the transfer ({reason} {detail})"),
+    }
+}
+
+/// The error kind of a failed transfer: `refused` for a listener limit,
+/// else the library error kind, else `fallback`.
+pub fn transfer_error_kind(e: &anyhow::Error, fallback: &'static str) -> &'static str {
+    if e.chain().any(|c| c.is::<Refused>()) {
+        "refused"
+    } else {
+        anyhow_kind(e, fallback)
+    }
 }
 
 #[cfg(test)]
@@ -396,6 +481,21 @@ mod tests {
     fn throughput() {
         let v = mbps(1_000_000, Duration::from_secs(1));
         assert!((v - 8.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn refusals() {
+        let r = Refused::parse("refused reason=too_large max_bytes=1000\n").unwrap();
+        assert_eq!(r.reason, "too_large");
+        assert_eq!(r.value("max_bytes"), Some("1000"));
+        assert!(r.to_string().contains("at most 1000 bytes"), "{r}");
+        let r = Refused::parse("refused reason=busy max_transfers=0").unwrap();
+        assert!(r.to_string().contains("maximum of 0 transfers"), "{r}");
+        assert_eq!(Refused::parse("endpoint=x sink_bytes=3"), None);
+        let e = anyhow::Error::from(r).context("upload");
+        assert_eq!(transfer_error_kind(&e, "bulk"), "refused");
+        let e = anyhow::Error::from(golem_p2p::Error::Timeout);
+        assert_eq!(transfer_error_kind(&e, "bulk"), "timeout");
     }
 
     #[test]

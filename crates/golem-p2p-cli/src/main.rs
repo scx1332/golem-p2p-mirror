@@ -41,6 +41,7 @@ use serde_json::json;
 use tokio::sync::watch;
 
 use crate::{
+    listen::Limits,
     observe::{FirstDirect, Observer, strings},
     out::{Out, anyhow_kind, ms, path_name},
     parse::{QuicPort, RelaySpec},
@@ -87,14 +88,16 @@ enum Cmd {
         #[arg(long, default_value = "127.0.0.1:8080")]
         listen: SocketAddr,
     },
-    /// Run a node that answers every request with an echo, and accepts bulk
-    /// transfers from `probe --bulk`.
+    /// Run a node that answers every request with an echo, and accepts
+    /// uploads (`probe --bulk`) and serves downloads within limits.
     Listen {
         #[command(flatten)]
         node: NodeArgs,
         /// Exit after this long (default: run until SIGINT or SIGTERM).
         #[arg(long, value_parser = parse::duration)]
         duration: Option<Duration>,
+        #[command(flatten)]
+        limits: LimitArgs,
     },
     /// Send a request to a node and print the reply.
     Send {
@@ -116,6 +119,33 @@ enum Cmd {
     /// transfer, if requested, succeeded), 1 if no request succeeded or setup
     /// failed, 2 for invalid arguments, 3 if only the bulk transfer failed.
     Probe(ProbeArgs),
+}
+
+/// Server-side limits of `listen` for uploads and downloads.
+#[derive(Args)]
+struct LimitArgs {
+    /// Largest upload or download per stream, e.g. `100M`. Larger uploads
+    /// are stopped and larger downloads refused. Echo requests are limited to
+    /// 1 MiB separately.
+    #[arg(long, default_value = "100M", value_parser = parse::bytes)]
+    max_transfer_size: u64,
+    /// Uploads and downloads served at once, over all peers; more are
+    /// refused as busy. 0 serves echo requests only.
+    #[arg(long, default_value_t = 8)]
+    max_transfers: usize,
+    /// Longest time one upload or download may take.
+    #[arg(long, default_value = "120s", value_parser = parse::duration)]
+    max_transfer_time: Duration,
+}
+
+impl LimitArgs {
+    fn limits(&self) -> Limits {
+        Limits {
+            max_transfer_size: self.max_transfer_size,
+            max_transfers: self.max_transfers,
+            max_transfer_time: self.max_transfer_time,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -382,7 +412,12 @@ async fn run(cmd: Cmd, out: &Out) -> anyhow::Result<ExitCode> {
                 _ = shutdown_signal() => {}
             }
         }
-        Cmd::Listen { node, duration } => {
+        Cmd::Listen {
+            node,
+            duration,
+            limits,
+        } => {
+            let limits = limits.limits();
             let node = Node::start(&node, out, None, None).await?;
             let ep = &node.ep;
             if !out.json() {
@@ -399,6 +434,14 @@ async fn run(cmd: Cmd, out: &Out) -> anyhow::Result<ExitCode> {
                     rec.record().relay_urls,
                     rec.record().direct_addrs,
                 );
+                eprintln!(
+                    "limits: uploads and downloads of at most {} bytes, {} at once, {} s each; \
+                     echo requests of at most {} bytes",
+                    limits.max_transfer_size,
+                    limits.max_transfers,
+                    limits.max_transfer_time.as_secs_f64(),
+                    listen::MAX_REQUEST
+                );
             }
             let stop = async {
                 match duration {
@@ -407,7 +450,7 @@ async fn run(cmd: Cmd, out: &Out) -> anyhow::Result<ExitCode> {
                 }
             };
             tokio::select! {
-                _ = listen::serve(ep.clone(), out.clone()) => {}
+                _ = listen::serve(ep.clone(), out.clone(), limits) => {}
                 _ = shutdown_signal() => {}
                 _ = stop => {}
             }

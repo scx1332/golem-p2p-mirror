@@ -288,6 +288,60 @@ async fn sigterm_ends_probe_with_summary() {
     assert_eq!(status.code(), Some(0));
 }
 
+/// A listener's `--max-transfer-size` refuses a larger `--bulk` upload
+/// cleanly: exit code 3 and an `error` event with cause `refused`. Within the
+/// limit the upload works.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bulk_refused_by_listener_limit() {
+    let infra = Infra::start("probe-limit").await;
+    let (mut lis, ready) = listener(&infra, "lis", &strs(["--max-transfer-size", "100k"])).await;
+    let lis_id = ready["node_id"].as_str().unwrap();
+
+    let extra = strs(["--duration", "500ms", "--interval", "100ms", "--bulk", "1M"]);
+    let (status, evs) = run(&probe_args(&infra, "prb", lis_id, &extra), 60).await;
+    assert_eq!(status.code(), Some(3), "{evs:#?}");
+    let s = check_probe_output(&evs, "prb");
+    assert_eq!(
+        (&s["bulk_ok"], &s["ok"]),
+        (&false.into(), &s["sent"]),
+        "{s}"
+    );
+    let err = events(&evs, "error");
+    assert_eq!(err.len(), 1, "{evs:#?}");
+    assert_eq!(
+        (&err[0]["kind"], &err[0]["cause"]),
+        (&"bulk".into(), &"refused".into())
+    );
+    let msg = err[0]["message"].as_str().unwrap();
+    assert!(msg.contains("at most 100000 bytes"), "{msg}");
+    // The listener stopped the upload right after its limit.
+    let sink = lis
+        .wait_for(30, "refused upload", |v| {
+            v["event"] == "request" && v["kind"] == "sink"
+        })
+        .await;
+    assert_eq!(sink["refused"], "too_large", "{sink}");
+    assert!(sink["bytes"].as_u64().unwrap() < 1_000_000, "{sink}");
+
+    let extra = strs([
+        "--duration",
+        "500ms",
+        "--interval",
+        "100ms",
+        "--bulk",
+        "100k",
+    ]);
+    let (status, evs) = run(&probe_args(&infra, "prb2", lis_id, &extra), 60).await;
+    assert_eq!(status.code(), Some(0), "{evs:#?}");
+    assert_eq!(evs.last().unwrap()["bulk_ok"], true);
+    let sink = lis
+        .wait_for(30, "upload", |v| {
+            v["event"] == "request" && v["kind"] == "sink" && v["refused"].is_null()
+        })
+        .await;
+    assert_eq!(sink["bytes"], 100_000, "{sink}");
+}
+
 /// `--json` works for every command, and `run`/`node` are null when unset.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn json_keygen_and_directory() {
