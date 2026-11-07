@@ -319,6 +319,7 @@ async fn bench_direct_with_relay_compare_and_idle() {
     let p = &r["peer"];
     check_latency(&p["latency"], "direct");
     assert_eq!(p["path"]["final_path"], "direct");
+    assert!(p["connection_lost"].is_null(), "{p:#}");
     assert!(num(&p["path"], "time_to_direct_ms") >= 0.0);
     for dir in ["upload", "download"] {
         check_transfer(&p[dir], 3_000_000, "direct");

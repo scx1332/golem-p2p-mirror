@@ -203,6 +203,27 @@ pub struct Peer {
     pub idle: Option<Idle>,
     pub path: PathReport,
     pub quic: Option<QuicStats>,
+    /// The connection made in the connect phase closed before the end of
+    /// the run; null if it stayed open.
+    pub connection_lost: Option<ConnectionLost>,
+}
+
+/// When and why the bench's connection to the peer closed during the run.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ConnectionLost {
+    /// Since the start of connecting.
+    pub t_ms: f64,
+    /// The phase that was running: `latency`, `upload`, `download`,
+    /// `concurrency`, `relay_compare` or `idle`.
+    pub phase: &'static str,
+    /// `closed_here` (this node closed it: a request got no answer and
+    /// nothing at all arrived from the peer during the request timeout),
+    /// `idle_timeout` (nothing arrived from the peer for QUIC's idle
+    /// timeout), `closed_by_peer`, `reset` (the peer no longer knew the
+    /// connection, e.g. it restarted) or `error`.
+    pub cause: &'static str,
+    /// QUIC's close reason.
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -584,6 +605,18 @@ impl Report {
                         .unwrap_or_default()
                 ));
                 line(s, "path", v.join("; "));
+            }
+            if let Some(c) = &p.connection_lost {
+                line(
+                    s,
+                    "connection",
+                    format!(
+                        "LOST after {} (during the {} phase): {}",
+                        fmt_ms(c.t_ms),
+                        c.phase.replace('_', " "),
+                        c.reason
+                    ),
+                );
             }
             if let Some(t) = &p.upload {
                 line(s, "upload", transfer_line(t));

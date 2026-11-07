@@ -341,6 +341,39 @@ impl<'a> Facts<'a> {
                 ),
             ));
         }
+        // Losing the connection while idle on purpose is the idle phase's
+        // finding (`idle_reconnect`).
+        if let Some(c) = &p.connection_lost
+            && c.phase != "idle"
+        {
+            let why = match c.cause {
+                "closed_here" => format!(
+                    "a request got no answer, and nothing at all arrived from the peer for {} \
+                     (it may have crashed or hung, or the network path broke), so this node \
+                     closed the connection",
+                    self.timeout()
+                ),
+                "idle_timeout" => "nothing arrived from the peer for QUIC's idle timeout (it may \
+                                   have crashed, or the network path broke)"
+                    .into(),
+                "closed_by_peer" => format!("the peer closed it ({})", c.reason),
+                "reset" => "the peer no longer knew the connection (it probably restarted)".into(),
+                _ => c.reason.clone(),
+            };
+            let after = if p.path.final_path == "unknown" {
+                "; at the end there was no connection"
+            } else {
+                "; a later request connected again"
+            };
+            issues.push(finding(
+                "connection_lost",
+                format!(
+                    "The connection was lost after {}, during the {} phase: {why}{after}.",
+                    fmt_ms(c.t_ms),
+                    c.phase.replace('_', " "),
+                ),
+            ));
+        }
         if self.direct_seen && p.path.final_path == "relay" {
             issues.push(finding(
                 "direct_path_lost",
@@ -551,14 +584,30 @@ impl<'a> Facts<'a> {
                 covered = code;
                 format!("Connected to {name}, but only through a relay{via}{perf}. {reason}")
             }
-            Status::Degraded => format!(
-                "Connected to {name} ({}), but with problems{perf}.",
-                if p.path.final_path == "direct" {
-                    "direct"
+            Status::Degraded => {
+                // The path at the end, else the last one seen (no path is
+                // selected for a moment, or the connection is gone).
+                let last = match p.path.final_path {
+                    "unknown" => p.path.timeline.last().map_or("unknown", |e| e.path),
+                    known => known,
+                };
+                let how = match last {
+                    "direct" => "direct",
+                    "relay" => "through a relay",
+                    _ => "path unknown",
+                };
+                let lost = p.connection_lost.as_ref().filter(|c| c.phase != "idle");
+                if lost.is_some() && p.path.final_path == "unknown" {
+                    format!("Connected to {name} ({how}), but the connection was lost{perf}.")
+                } else if lost.is_some() {
+                    format!(
+                        "Connected to {name} ({how}), but the connection was lost once and had \
+                         to be made again{perf}."
+                    )
                 } else {
-                    "through a relay"
+                    format!("Connected to {name} ({how}), but with problems{perf}.")
                 }
-            ),
+            }
             Status::Healthy => {
                 let punched = match (p.path.timeline.first(), p.path.time_to_direct_ms) {
                     (Some(first), Some(t)) if first.path != "direct" => {
@@ -680,8 +729,8 @@ mod tests {
     use super::*;
     use crate::{
         bench::report::{
-            Connect, DirectoryCheck, HomeRelay, Local, PathPoint, PathReport, QuicStats,
-            RelayCompare, Settings,
+            Concurrency, Connect, ConnectionLost, DirectoryCheck, HomeRelay, Local, PathPoint,
+            PathReport, QuicStats, RelayCompare, Settings,
         },
         probe::Stats,
     };
@@ -823,6 +872,7 @@ mod tests {
                 }],
             },
             quic: None,
+            connection_lost: None,
         }
     }
 
@@ -984,6 +1034,95 @@ mod tests {
         assert_eq!((r.status, r.exit_code), (Status::Degraded, 5));
         assert_eq!(codes(&r.issues), ["requests_failed", "transfer_refused"]);
         assert!(r.verdict.contains("but with problems"), "{}", r.verdict);
+    }
+
+    /// Direct until the connection was closed in the concurrency phase, as on
+    /// the lossy link of campaign 1 (runs 2 and 3).
+    fn lost_direct_peer() -> Peer {
+        let mut p = peer(true);
+        p.path.timeline.push(PathPoint {
+            t_ms: 1200.0,
+            path: "direct",
+            remote_addr: Some("1.2.3.4:5".into()),
+        });
+        p.path.final_path = "unknown";
+        p.path.final_remote_addr = None;
+        p.concurrency = Some(Concurrency {
+            streams: 8,
+            failed: 8,
+            error: Some("timed out".into()),
+            ..Default::default()
+        });
+        p.connection_lost = Some(ConnectionLost {
+            t_ms: 52_000.0,
+            phase: "concurrency",
+            cause: "closed_here",
+            reason: "closed".into(),
+        });
+        p
+    }
+
+    #[test]
+    fn lost_connection_is_not_called_relayed() {
+        let mut r = report(Some(local()), Some(lost_direct_peer()));
+        analyze(&mut r);
+        assert_eq!((r.status, r.exit_code), (Status::Degraded, 5));
+        assert!(!r.verdict.contains("relay"), "{}", r.verdict);
+        assert!(
+            r.verdict
+                .starts_with("Connected to 0x1111...1111 (direct), but the connection was lost:"),
+            "{}",
+            r.verdict
+        );
+        assert_eq!(codes(&r.issues), ["parallel_failed", "connection_lost"]);
+        let m = &r.issues[1].message;
+        assert!(
+            m.contains("after 52 s, during the concurrency phase"),
+            "{m}"
+        );
+        assert!(
+            m.contains("nothing at all arrived from the peer for 10 s"),
+            "{m}"
+        );
+        assert!(m.ends_with("at the end there was no connection."), "{m}");
+
+        // Reconnected by a later request: said so.
+        let mut p = lost_direct_peer();
+        p.path.final_path = "direct";
+        let mut r = report(Some(local()), Some(p));
+        analyze(&mut r);
+        assert!(
+            r.verdict
+                .contains("(direct), but the connection was lost once")
+        );
+        assert!(
+            r.issues[1]
+                .message
+                .ends_with("a later request connected again.")
+        );
+
+        // Problems without a lost connection: the last path seen, not "relay"
+        // for an unknown one.
+        let mut p = lost_direct_peer();
+        p.connection_lost = None;
+        let mut r = report(Some(local()), Some(p));
+        analyze(&mut r);
+        assert!(
+            r.verdict.contains("(direct), but with problems"),
+            "{}",
+            r.verdict
+        );
+
+        // Lost while idle on purpose: that is the idle finding's business.
+        let mut p = peer(true);
+        p.connection_lost = Some(ConnectionLost {
+            phase: "idle",
+            cause: "idle_timeout",
+            ..Default::default()
+        });
+        let mut r = report(Some(local()), Some(p));
+        analyze(&mut r);
+        assert_eq!(r.status, Status::Healthy, "{:?}", r.issues);
     }
 
     fn quic(sent: u64, lost: u64) -> QuicStats {

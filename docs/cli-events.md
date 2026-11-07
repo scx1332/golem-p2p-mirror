@@ -256,7 +256,7 @@ sections of phases that did not run.
 Issue codes: `relay_unreachable`, `no_home_relay`, `directory_unreachable`,
 `identity_in_use`, `record_not_published`, `udp_blocked`, `connect_failed`,
 `requests_failed`, `transfer_refused`, `transfer_failed`, `parallel_failed`,
-`direct_path_lost`, `idle_failed`, `relay_fallback_failed`. Hint codes:
+`connection_lost`, `direct_path_lost`, `idle_failed`, `relay_fallback_failed`. Hint codes:
 `qad_failed`, `hard_nat`, `no_relays`, `idle_reconnect`, `idle_path_lost`,
 `packet_loss`, `jitter`, `latency_under_load`, `relay_fallback`. Unknown
 items: `local_network`, `port_mapping`, `udp`, `nat_mapping`, `peer_network`,
@@ -314,7 +314,8 @@ discovery (QAD) over UDP, and with HTTPS):
 | `upload`, `download` | object or null | `ok`, `requested_bytes` (after the relay cap), `relay_capped`, `bytes`, `duration_ms`, `throughput_mbps`, `path` (at the end), `limited_by` (`size` or `time`), `error_kind` (`refused` for a listener limit), `error`, `quic` (during this phase) |
 | `concurrency` | object or null | `ok`, `streams`, `request_bytes`, `requests` (correct replies), `failed`, `total_bytes` (payload, each way), `duration_ms`, `throughput_mbps` (payload, each way), `rtt_ms` (of these requests), `loaded_rtt_ms` and `loaded_samples` (small requests sent meanwhile), `error_kind`, `error`, `quic` (during this phase) |
 | `idle` | object or null | `idle_ms`, `ok` (a request succeeded afterwards), `survived` (the same connection was still open), `path_before`, `path_after`, `attempts` (at most 3), `recovery_ms` (first request to first reply), `rtt_ms`, `error` |
-| `path` | object | `time_to_direct_ms` (from the start of connecting), `changes`, `final_path`, `final_remote_addr`, `timeline` [{`t_ms`, `path`, `remote_addr`}] (at most 64 entries) |
+| `path` | object | `time_to_direct_ms` (from the start of connecting), `changes`, `final_path` (`unknown` if there was no connection at the end), `final_remote_addr`, `timeline` [{`t_ms`, `path`, `remote_addr`}] (at most 64 entries) |
+| `connection_lost` | object or null | the connection made in the `connect` phase closed before the end of the run: `t_ms` (from the start of connecting), `phase` (the phase running then), `cause` (`closed_here`: a request got no answer and nothing at all arrived from the peer during the request timeout, so this node closed it; `idle_timeout`: nothing arrived for QUIC's idle timeout; `closed_by_peer`; `reset`: the peer no longer knew the connection, e.g. it restarted; `error`), `reason` (QUIC's close reason). Null if it stayed open. A loss during the `idle` phase is reported by `idle` instead of the `connection_lost` issue |
 | `quic` | object or null | QUIC counters of the connection since connecting (of the current connection if it changed; null without one): `sent_packets`, `lost_packets` (sent by us and declared lost), `lost_pct`, `sent_bytes`, `received_bytes` (UDP payload bytes). Path MTU probes are not counted: they are lost by design when larger than the path allows. The `quic` object of a phase has the same fields, counted over that phase; it is null if the connection changed during the phase |
 
 `relay_compare`: `skipped` (string or null: why it did not run), `ok`,

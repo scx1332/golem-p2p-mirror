@@ -15,7 +15,7 @@ use std::{
     collections::HashMap,
     process::ExitCode,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -30,8 +30,8 @@ use golem_p2p::{
 use serde::Serialize;
 
 use self::report::{
-    Concurrency, Connect, Idle, Latency, PathPoint, PathReport, Peer, QuicStats, RelayCompare,
-    Report, Settings, Status, TransferReport,
+    Concurrency, Connect, ConnectionLost, Idle, Latency, PathPoint, PathReport, Peer, QuicStats,
+    RelayCompare, Report, Settings, Status, TransferReport,
 };
 use crate::{
     Node, NodeArgs, listen,
@@ -328,6 +328,7 @@ pub async fn run(args: BenchArgs, out: &Out) -> anyhow::Result<ExitCode> {
             out,
             progress: &progress,
             payload_size,
+            phase: Arc::new(Mutex::new("connect")),
         };
         let (peer, relay_compare, interrupted) = bench.run(log, &discovery, &stop).await;
         report.peer = Some(peer);
@@ -354,9 +355,15 @@ struct PeerBench<'a> {
     out: &'a Out,
     progress: &'a Progress,
     payload_size: usize,
+    /// The phase that is running, to tell when a connection was lost.
+    phase: Arc<Mutex<&'static str>>,
 }
 
 impl PeerBench<'_> {
+    fn enter(&self, phase: &'static str) {
+        *self.phase.lock().expect("poisoned") = phase;
+    }
+
     /// Runs the phases of part B. Returns the peer section, the relay-only
     /// comparison, and whether a signal ended the run early.
     async fn run<F: Future<Output = ()>>(
@@ -382,6 +389,7 @@ impl PeerBench<'_> {
             idle: None,
             path: PathReport::default(),
             quic: None,
+            connection_lost: None,
         };
         let Some((connect, conn)) = connect else {
             peer.connect = Connect {
@@ -398,11 +406,30 @@ impl PeerBench<'_> {
         let mut interrupted = false;
         if let Some(conn) = conn {
             let base = QuicSnapshot::of(&conn);
+            let lost = Arc::new(OnceLock::new());
+            let watch = tokio::spawn({
+                let (conn, phase, lost) = (conn.clone(), self.phase.clone(), lost.clone());
+                async move {
+                    conn.closed().await;
+                    let phase = *phase.lock().expect("poisoned");
+                    let _ = lost.set((Instant::now(), phase));
+                }
+            });
             interrupted = self.phases(&mut peer, &mut relay_compare, log, stop).await;
+            watch.abort();
             // QUIC counters of the connection: since connecting if it is
             // still the same one, else of the current one.
             peer.quic = QuicSnapshot::to(ep, to)
                 .map(|now| now.since((now.conn == base.conn).then_some(&base)));
+            if let Some(reason) = conn.iroh_connection().close_reason() {
+                let (at, phase) = lost.get().copied().unwrap_or((Instant::now(), "unknown"));
+                peer.connection_lost = Some(ConnectionLost {
+                    t_ms: ms(at.saturating_duration_since(t0)),
+                    phase,
+                    cause: close_cause(&reason),
+                    reason: reason.to_string(),
+                });
+            }
         }
         peer.path = path_report(ep, to, log, t0);
         (peer, relay_compare, interrupted)
@@ -420,6 +447,7 @@ impl PeerBench<'_> {
         let (ep, to, out) = (self.ep, self.to, self.out);
 
         if args.runs(Phase::Latency) {
+            self.enter("latency");
             self.progress.say(format!(
                 "Measuring latency for {} (one request every {})...",
                 fmt_dur(args.latency_duration),
@@ -451,6 +479,7 @@ impl PeerBench<'_> {
             if !args.runs(phase) {
                 continue;
             }
+            self.enter(phase.name());
             let t = Instant::now();
             let r = self.transfer(ep, is_upload, args.transfer_size);
             let Some(r) = unless_stopped(r, stop).await else {
@@ -465,6 +494,7 @@ impl PeerBench<'_> {
         }
 
         if args.runs(Phase::Concurrency) && args.streams > 0 && args.concurrency_size > 0 {
+            self.enter("concurrency");
             let t = Instant::now();
             let Some(c) = unless_stopped(self.concurrency(), stop).await else {
                 return true;
@@ -474,6 +504,7 @@ impl PeerBench<'_> {
         }
 
         if args.compare_relay {
+            self.enter("relay_compare");
             let t = Instant::now();
             let Some(rc) = unless_stopped(self.relay_compare(stop), stop).await else {
                 return true;
@@ -483,6 +514,7 @@ impl PeerBench<'_> {
         }
 
         if let Some(d) = args.idle {
+            self.enter("idle");
             let t = Instant::now();
             let Some(i) = unless_stopped(self.idle(d, log), stop).await else {
                 return true;
@@ -939,6 +971,18 @@ fn phase_quic(ep: &Endpoint, to: NodeId, before: Option<&QuicSnapshot>) -> Optio
     let before = before?;
     let now = QuicSnapshot::to(ep, to)?;
     (now.conn == before.conn).then(|| now.since(Some(before)))
+}
+
+/// Why a connection closed, as `ConnectionLost::cause`.
+fn close_cause(e: &golem_p2p::iroh::endpoint::ConnectionError) -> &'static str {
+    use golem_p2p::iroh::endpoint::ConnectionError as E;
+    match e {
+        E::LocallyClosed => "closed_here",
+        E::TimedOut => "idle_timeout",
+        E::ApplicationClosed(_) | E::ConnectionClosed(_) => "closed_by_peer",
+        E::Reset => "reset",
+        _ => "error",
+    }
 }
 
 fn path_report(ep: &Endpoint, to: NodeId, log: &PathLog, t0: Instant) -> PathReport {
