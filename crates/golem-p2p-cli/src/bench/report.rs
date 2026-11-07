@@ -309,6 +309,9 @@ pub struct Concurrency {
     pub ok: bool,
     pub streams: usize,
     pub request_bytes: usize,
+    /// The requests were made smaller for a slow link: its throughput as
+    /// measured (the slower of upload and download); null if not.
+    pub sized_for_mbps: Option<f64>,
     pub requests: u64,
     pub failed: u64,
     /// Requests still running at the time limit, cut off (not failures).
@@ -662,18 +665,24 @@ impl Report {
                     format!("FAILED: {}", c.error.as_deref().unwrap_or("?"))
                 } else if c.requests == 0 {
                     format!(
-                        "{} streams: none of the requests of {} finished within {} (the time \
+                        "{} streams: none of the requests of {}{} finished within {} (the time \
                          limit)",
                         c.streams,
                         fmt_bytes(c.request_bytes as u64),
+                        c.sized_for_mbps
+                            .map(|m| format!(" (sized for {})", fmt_mbps(m)))
+                            .unwrap_or_default(),
                         fmt_ms(c.duration_ms)
                     )
                 } else {
                     let mut v = format!(
-                        "{} streams: {} requests of {} ({} each way) in {}: {}",
+                        "{} streams: {} requests of {} ({}{} each way) in {}: {}",
                         c.streams,
                         c.requests,
                         fmt_bytes(c.request_bytes as u64),
+                        c.sized_for_mbps
+                            .map(|m| format!("sized for {}; ", fmt_mbps(m)))
+                            .unwrap_or_default(),
                         fmt_bytes(c.total_bytes),
                         fmt_ms(c.duration_ms),
                         c.throughput_mbps.map_or("-".into(), fmt_mbps)

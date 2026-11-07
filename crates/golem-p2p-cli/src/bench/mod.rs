@@ -41,8 +41,16 @@ use crate::{
     probe::{self, Pinger, Stats},
 };
 
-/// Size of each request of the concurrency phase.
+/// Size of each request of the concurrency phase (smaller on slow links,
+/// see [`concurrency_request_size`]).
 const CONCURRENCY_REQUEST: usize = 256 * 1024;
+
+/// The smallest request of the concurrency phase on a slow link.
+const MIN_CONCURRENCY_REQUEST: usize = 4 * 1024;
+
+/// On a slow link the concurrency phase's requests are made smaller, so that
+/// every stream can finish about this many within `--transfer-time`.
+const REQUESTS_PER_STREAM: f64 = 4.0;
 
 /// The relay-only comparison measures latency for at most this long.
 const RELAY_LATENCY_MAX: Duration = Duration::from_secs(5);
@@ -513,7 +521,14 @@ impl PeerBench<'_> {
         if args.runs(Phase::Concurrency) && args.streams > 0 && args.concurrency_size > 0 {
             self.enter("concurrency");
             let t = Instant::now();
-            let Some(c) = unless_stopped(self.concurrency(), stop).await else {
+            // The slower direction of the transfers just measured.
+            let link_mbps = [&peer.upload, &peer.download]
+                .into_iter()
+                .flatten()
+                .filter(|t| t.ok)
+                .filter_map(|t| t.throughput_mbps)
+                .reduce(f64::min);
+            let Some(c) = unless_stopped(self.concurrency(link_mbps), stop).await else {
                 return true;
             };
             phase_event(out, "concurrency", c.ok, t.elapsed(), &c);
@@ -582,10 +597,12 @@ impl PeerBench<'_> {
         r
     }
 
-    /// `--streams` parallel workers sending echo requests of 256 KiB until
-    /// `--concurrency-size` bytes or `--transfer-time`, while small requests
-    /// measure the round-trip time under load.
-    async fn concurrency(&self) -> Concurrency {
+    /// `--streams` parallel workers sending echo requests of 256 KiB (less
+    /// on a link measured at under `link_mbps`, see
+    /// [`concurrency_request_size`]) until `--concurrency-size` bytes or
+    /// `--transfer-time`, while small requests measure the round-trip time
+    /// under load.
+    async fn concurrency(&self, link_mbps: Option<f64>) -> Concurrency {
         let args = self.args;
         let (ep, to) = (self.ep, self.to);
         let relayed = path_to(ep, to) == PathKind::Relay;
@@ -594,7 +611,12 @@ impl PeerBench<'_> {
         } else {
             args.concurrency_size
         };
-        let size = args.request_size();
+        let size = concurrency_request_size(
+            args.request_size(),
+            link_mbps,
+            args.streams,
+            args.transfer_time,
+        );
         self.progress.say(format!(
             "Sending {} in parallel over {} streams (at most {})...",
             report::fmt_bytes(budget),
@@ -684,6 +706,7 @@ impl PeerBench<'_> {
             ok: failed == 0,
             streams: args.streams,
             request_bytes: size,
+            sized_for_mbps: link_mbps.filter(|_| size < args.request_size()),
             requests: rtts.len() as u64,
             failed,
             unfinished,
@@ -967,6 +990,27 @@ struct Requests {
     error: Option<anyhow::Error>,
 }
 
+/// The size of the concurrency phase's requests: `max` (256 KiB, or
+/// `--concurrency-size` if smaller), or less on a link measured at
+/// `link_mbps`, so that each of the `streams` can finish about
+/// [`REQUESTS_PER_STREAM`] echo requests within `time` (in whole KiB, at
+/// least [`MIN_CONCURRENCY_REQUEST`]). Requests still running at the time
+/// limit are cut off and not counted, so on a slow link 256 KiB requests
+/// gave no throughput at all (campaign 2: 8 x 256 KiB at ~1-4 Mbps).
+fn concurrency_request_size(
+    max: usize,
+    link_mbps: Option<f64>,
+    streams: usize,
+    time: Duration,
+) -> usize {
+    let Some(mbps) = link_mbps.filter(|m| m.is_finite() && *m > 0.0) else {
+        return max;
+    };
+    let per_stream = mbps * 1e6 / 8.0 * time.as_secs_f64() / streams.max(1) as f64;
+    let fit = (per_stream / REQUESTS_PER_STREAM) as usize / 1024 * 1024;
+    fit.clamp(MIN_CONCURRENCY_REQUEST.min(max), max)
+}
+
 /// Connects (lookup, QUIC and golem-p2p handshake), timing the lookup
 /// separately.
 async fn connect(
@@ -1208,5 +1252,29 @@ mod tests {
         assert_eq!(c.settle(), Duration::from_millis(1800));
         c.min_rtt = Some(Duration::from_secs(30));
         assert_eq!(c.settle(), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn concurrency_requests_fit_the_link() {
+        let size = |mbps: Option<f64>| {
+            concurrency_request_size(CONCURRENCY_REQUEST, mbps, 8, Duration::from_secs(8))
+        };
+        // Fast links, or nothing measured: 256 KiB.
+        assert_eq!(size(None), CONCURRENCY_REQUEST);
+        assert_eq!(size(Some(123.0)), CONCURRENCY_REQUEST);
+        assert_eq!(size(Some(f64::NAN)), CONCURRENCY_REQUEST);
+        // From about 8.4 Mbps down, 4 requests per stream fit in 8 s.
+        assert_eq!(size(Some(8.4)), CONCURRENCY_REQUEST);
+        assert_eq!(size(Some(8.0)), 244 * 1024);
+        // Campaign 2's lossy link: 3.7 and 1.1 Mbps (the slower direction).
+        assert_eq!(size(Some(3.658)), 111 * 1024);
+        assert_eq!(size(Some(1.1)), 33 * 1024);
+        // Very slow: at least 4 KiB.
+        assert_eq!(size(Some(0.05)), MIN_CONCURRENCY_REQUEST);
+        // Never more than --concurrency-size.
+        assert_eq!(
+            concurrency_request_size(1000, Some(0.05), 8, Duration::from_secs(8)),
+            1000
+        );
     }
 }
