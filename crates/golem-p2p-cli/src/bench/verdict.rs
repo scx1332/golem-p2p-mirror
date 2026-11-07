@@ -217,20 +217,12 @@ impl<'a> Facts<'a> {
             ));
         }
 
-        let pm = &l.port_mapping;
-        if !pm.available {
-            unknowns.push(unknown(
-                "port_mapping",
-                "port mapping (UPnP, PCP, NAT-PMP): this build of golem-p2p does not use it, \
-                 and whether your router supports it is not probed",
-            ));
-        } else if pm.enabled && !pm.mapped {
-            unknowns.push(unknown(
-                "port_mapping",
-                "whether your router supports UPnP, PCP or NAT-PMP is not probed; no port \
-                 mapping was obtained",
-            ));
-        }
+        unknowns.push(unknown(
+            "port_mapping",
+            "port mapping (UPnP, PCP, NAT-PMP): golem-p2p deliberately does not use it, so it \
+             never changes your router's settings; whether your router supports it is not \
+             probed",
+        ));
         match self.nr {
             None if l.relays.is_empty() => unknowns.push(unknown(
                 "udp",
@@ -667,8 +659,8 @@ mod tests {
     use super::*;
     use crate::{
         bench::report::{
-            Connect, DirectoryCheck, HomeRelay, Local, PathPoint, PathReport, PortMapping,
-            RelayCompare, Settings,
+            Connect, DirectoryCheck, HomeRelay, Local, PathPoint, PathReport, RelayCompare,
+            Settings,
         },
         probe::Stats,
     };
@@ -706,7 +698,6 @@ mod tests {
                 qad_relays_v4: 1,
                 ..Default::default()
             }),
-            port_mapping: PortMapping::default(),
             relays: vec![RelayCheck {
                 url: "https://r1/".into(),
                 quic_port: Some(7842),

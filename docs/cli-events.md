@@ -259,7 +259,9 @@ Issue codes: `relay_unreachable`, `no_home_relay`, `directory_unreachable`,
 `qad_failed`, `hard_nat`, `no_relays`, `idle_reconnect`, `idle_path_lost`,
 `packet_loss`, `jitter`, `latency_under_load`, `relay_fallback`. Unknown
 items: `local_network`, `port_mapping`, `udp`, `nat_mapping`, `peer_network`,
-`download_loss`.
+`download_loss`. `port_mapping` is always listed with the local check:
+golem-p2p deliberately does not use port mapping (UPnP, PCP, NAT-PMP), so
+there is nothing to measure.
 
 `local`:
 
@@ -270,7 +272,6 @@ items: `local_network`, `port_mapping`, `udp`, `nat_mapping`, `peer_network`,
 | `direct_addrs` | [string] | direct addresses as published in the record, best first: the public address from QAD and local interface addresses, without container and VM bridges |
 | `home_relay` | {`url`, `connected`, `error`} or null | null without relays |
 | `net_report` | object or null | iroh's net report, below; null without relays, with `--relay-only`, or if none finished within 6 s |
-| `port_mapping` | {`available`, `enabled`, `mapped`} | `available`: this build has a port mapper (currently false); `enabled`: no `--no-portmapper`; `mapped`: a UPnP/PCP/NAT-PMP mapping was obtained |
 | `relays` | [object] | one check per configured relay, below |
 | `directories` | [{`url`, `ok`, `lookup_ms`, `own_record`, `error`}] | lookup of our own node ID; `own_record`: `published` (our endpoint), `missing`, `other_endpoint` (another process published a newer record for this identity) |
 | `record_published` | bool or null | our record is in at least one directory; false if in none of those that answered; null if none answered |

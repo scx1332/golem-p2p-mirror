@@ -97,8 +97,7 @@ impl Infra {
         (id, path)
     }
 
-    /// Node arguments without relays: key, directory, relay CA, loopback,
-    /// no port mapping.
+    /// Node arguments without relays: key, directory, relay CA, loopback.
     pub fn node_args(&self, key: &Path) -> Vec<String> {
         vec![
             "--key".into(),
@@ -109,7 +108,6 @@ impl Infra {
             self.ca_file.display().to_string(),
             "--bind".into(),
             "127.0.0.1:0".into(),
-            "--no-portmapper".into(),
         ]
     }
 

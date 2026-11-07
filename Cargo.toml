@@ -11,6 +11,11 @@ publish = false
 
 [workspace.dependencies]
 golem-p2p = { path = "crates/golem-p2p" }
+# No default features. In particular not `portmapper`: golem-p2p deliberately
+# does not map ports on the user's router (UPnP, PCP, NAT-PMP), see
+# docs/design.md, section 9. Do not enable it. The endpoint also disables port
+# mapping at runtime, in case another crate of a larger build enables the
+# feature (Cargo unifies features).
 iroh = { version = "=1.4.1", default-features = false, features = ["tls-ring", "metrics"] }
 iroh-relay = { version = "=1.4.1", default-features = false }
 anyhow = "1"

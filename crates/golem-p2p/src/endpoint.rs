@@ -171,7 +171,6 @@ pub struct Builder {
     bind_addr: Option<SocketAddr>,
     secret_key: Option<SecretKey>,
     min_seq: u64,
-    portmapper: bool,
     online_timeout: Duration,
     store_capacity: usize,
     config: Config,
@@ -200,7 +199,6 @@ impl Builder {
             bind_addr: None,
             secret_key: None,
             min_seq: 0,
-            portmapper: true,
             online_timeout: Duration::from_secs(5),
             store_capacity: DEFAULT_CAPACITY,
             config: Config {
@@ -303,12 +301,6 @@ impl Builder {
         self
     }
 
-    /// Enables or disables UPnP/PCP/NAT-PMP port mapping (enabled by default).
-    pub fn portmapper(mut self, enabled: bool) -> Self {
-        self.portmapper = enabled;
-        self
-    }
-
     /// Leaves the addresses of more network interfaces out of the published
     /// record.
     ///
@@ -379,11 +371,10 @@ impl Builder {
             .alpns(vec![ALPN.to_vec()])
             .address_lookup(RecordLookup::new(store.clone()))
             .transport_config(transport)
-            .portmapper_config(if self.portmapper {
-                PortmapperConfig::default()
-            } else {
-                PortmapperConfig::Disabled
-            });
+            // Never map ports on the user's router (UPnP, PCP, NAT-PMP); see
+            // the design document. iroh is built without its `portmapper`
+            // feature, and this keeps it off if a larger build enables it.
+            .portmapper_config(PortmapperConfig::Disabled);
         if let Some(tls) = self.relay_tls {
             b = b.ca_tls_config(tls);
         }

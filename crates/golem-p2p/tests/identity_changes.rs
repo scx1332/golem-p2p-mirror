@@ -294,7 +294,6 @@ async fn locked_key_blocks_update() {
         let res = golem_p2p::Endpoint::builder(signer.clone(), Identities::new(x))
             .transport_mode(TransportMode::DirectOnly)
             .bind_addr("127.0.0.1:0".parse().unwrap())
-            .portmapper(false)
             .bind()
             .await;
         assert!(res.is_err());

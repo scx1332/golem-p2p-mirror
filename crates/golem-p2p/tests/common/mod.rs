@@ -177,7 +177,6 @@ impl TestNet {
         let mut b = Endpoint::builder(signer.clone(), ids)
             .discovery(self.discovery.clone())
             .transport_mode(opts.mode)
-            .portmapper(false)
             .request_timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(10))
             .online_timeout(Duration::from_secs(10));

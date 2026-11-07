@@ -5,9 +5,8 @@
 //!   `unstable-net-report`): UDP over IPv4/IPv6 (QUIC address discovery to
 //!   the relays), the public addresses the relays saw, whether they differ
 //!   between relays (hard NAT), per-relay latencies, the preferred relay.
-//! * Our own direct addresses as published in our record, the home relay
-//!   (`home_relay_status`), and whether a port mapping was obtained (iroh
-//!   metrics).
+//! * Our own direct addresses as published in our record, and the home
+//!   relay (`home_relay_status`).
 //! * Each configured relay: DNS, TCP, TLS with the configured trust roots,
 //!   and `GET /ping`, each step timed.
 //! * Each configured directory: a lookup of our own node ID, to see whether
@@ -34,17 +33,11 @@ use tokio_rustls::{
     rustls::{CertificateError, ClientConfig, Error as TlsError, pki_types::ServerName},
 };
 
-use super::report::{DirectoryCheck, HomeRelay, Local, NetReport, PortMapping, RelayCheck};
+use super::report::{DirectoryCheck, HomeRelay, Local, NetReport, RelayCheck};
 use crate::{NodeArgs, out::ms};
 
 /// Time limit for each relay and directory check.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Whether this build of golem-p2p includes iroh's port mapper. The
-/// workspace builds iroh without its `portmapper` feature, so the endpoint
-/// never maps a port (and `--no-portmapper` changes nothing). Update this
-/// when the feature is enabled in the workspace `Cargo.toml`.
-pub const PORT_MAPPER_IN_BUILD: bool = false;
 
 /// Runs the local network check.
 pub async fn check(ep: &Endpoint, args: &NodeArgs) -> Local {
@@ -110,17 +103,6 @@ pub async fn check(ep: &Endpoint, args: &NodeArgs) -> Local {
             })
         }),
         net_report,
-        port_mapping: PortMapping {
-            available: PORT_MAPPER_IN_BUILD,
-            enabled: !args.no_portmapper,
-            mapped: ep
-                .iroh()
-                .metrics()
-                .net_report
-                .portmap_external_address_updated
-                .get()
-                > 0,
-        },
         relays,
         directories,
         record_published,

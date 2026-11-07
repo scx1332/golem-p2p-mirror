@@ -117,7 +117,6 @@ pub struct Local {
     pub home_relay: Option<HomeRelay>,
     /// iroh's net report; null without one (no relays, or not in time).
     pub net_report: Option<NetReport>,
-    pub port_mapping: PortMapping,
     pub relays: Vec<RelayCheck>,
     pub directories: Vec<DirectoryCheck>,
     /// Our current record is in at least one directory (true), in none of
@@ -154,16 +153,6 @@ pub struct NetReport {
     /// iroh's captive portal check (plain HTTP to port 80 of a relay host);
     /// only meaningful if the relay serves port 80.
     pub captive_portal: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct PortMapping {
-    /// This build includes a port mapper (UPnP/PCP/NAT-PMP).
-    pub available: bool,
-    /// Port mapping is enabled (no `--no-portmapper`).
-    pub enabled: bool,
-    /// A port mapping was obtained.
-    pub mapped: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -522,20 +511,6 @@ impl Report {
                 }
                 None => line(s, "UDP", "not measured".into()),
             }
-            let pm = &l.port_mapping;
-            line(
-                s,
-                "port mapping",
-                if !pm.available {
-                    "not available in this build".into()
-                } else if !pm.enabled {
-                    "disabled (--no-portmapper)".into()
-                } else if pm.mapped {
-                    "mapping obtained (UPnP/PCP/NAT-PMP)".into()
-                } else {
-                    "no mapping obtained".into()
-                },
-            );
             if !l.direct_addrs.is_empty() {
                 line(s, "direct addrs", l.direct_addrs.join(", "));
             }

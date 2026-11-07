@@ -145,7 +145,6 @@ async fn forged_record_from_directory_rejected() {
             .discovery(evil)
             .transport_mode(TransportMode::DirectOnly)
             .bind_addr("127.0.0.1:0".parse().unwrap())
-            .portmapper(false)
             .bind()
             .await
             .unwrap();

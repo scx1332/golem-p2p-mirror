@@ -147,7 +147,8 @@ async fn bench_relay_only() {
     assert_eq!(l["record_published"], true);
     assert_eq!(l["home_relay"]["url"], relay_url.as_str());
     assert_eq!(l["home_relay"]["connected"], true);
-    assert_eq!(l["port_mapping"]["available"], false);
+    // golem-p2p does not map ports: nothing to report but the unknown.
+    assert!(l.get("port_mapping").is_none(), "{l:#}");
     // Without UDP, UDP and NAT are not tested; the relay's HTTPS latency is.
     assert!(l["net_report"].is_null(), "{l:#}");
     assert!(num(rc, "https_latency_ms") > 0.0, "{rc:#}");

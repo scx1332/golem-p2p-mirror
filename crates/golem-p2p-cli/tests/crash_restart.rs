@@ -39,7 +39,6 @@ async fn start_node(key: &PathBuf, dir: &str, relay: &str, relay_ca: &PathBuf) -
             relay,
             "--bind",
             "127.0.0.1:0",
-            "--no-portmapper",
             "--relay-ca",
         ])
         .arg(relay_ca)
@@ -135,7 +134,6 @@ async fn crash_and_restart() {
         .relay(relay_url.parse().unwrap())
         .relay_tls(CaTlsConfig::custom_roots(certs))
         .bind_addr("127.0.0.1:0".parse().unwrap())
-        .portmapper(false)
         .request_timeout(Duration::from_secs(3))
         .connect_timeout(Duration::from_secs(5))
         .bind()

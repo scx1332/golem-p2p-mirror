@@ -474,6 +474,38 @@ QUIC NAT traversal (section 5, "What golem-p2p does not control").
   `--relay-ca`) trusts additional roots, for relays with a self-signed or
   private-CA certificate. Tests run self-signed local relays.
 
+### Decision: no port mapping
+
+golem-p2p does not ask the user's router to open or forward ports: no UPnP
+IGD, no PCP, no NAT-PMP. Reachability comes from QAD, hole punching and
+relays only. Reasons:
+
+* **It changes a device golem-p2p does not own.** A mapping opens an inbound
+  port on the user's router, usually without the user knowing, and it can
+  outlive the process (UPnP leases are long or permanent, and a crash leaves
+  them behind). Golem providers often run on networks where an admin decides
+  what is open; a library should not quietly change that.
+* **Exposure.** A mapped port accepts unsolicited packets from the whole
+  internet. TLS protects the traffic, but it is still attack surface a
+  hole-punched path does not have, and UPnP's SSDP discovery multicasts on
+  the LAN and can trigger firewall prompts.
+* **One code path.** Router implementations of these protocols vary widely;
+  not using them leaves nothing per router to test or support.
+
+How it is enforced: the workspace builds iroh without its `portmapper`
+feature (see the comment in `Cargo.toml`), so the `portmapper` crate is not
+compiled in, and the endpoint sets `PortmapperConfig::Disabled` on iroh
+anyway, so that a larger build that enables the feature (Cargo unifies
+features across a dependency graph such as yagna's) still never maps a port.
+There is no builder option and no CLI flag to turn it on (the former
+`Builder::portmapper` and `--no-portmapper` had no effect and are removed).
+`bench` lists port mapping under "Not measured" with this reason.
+
+If port mapping is ever wanted, it should come as a separate, explicit
+command (for example `golem-p2p port-map`) that a user runs knowingly, that
+says which port it opens on which router and for how long, and how to remove
+it again; not as something the library does by default.
+
 ## 10. Restarts and the iroh key
 
 **Decision: by default a node generates a new iroh endpoint key on every
@@ -577,16 +609,13 @@ GSB integration itself is out of scope for this seed.
   names are only matched as Linux, macOS and BSD name them; Windows adapter
   names (Hyper-V's `vEthernet`, WSL) are not recognized.
 * A loader for yagna's encrypted key files in the CLI (it reads raw hex keys).
-* Port mapping (UPnP, PCP, NAT-PMP). The workspace builds iroh without its
-  `portmapper` feature, so `Builder::portmapper(true)` (the default) and the
-  CLI's `--no-portmapper` have no effect: no port is ever mapped. Enabling the
-  feature adds the `portmapper` crate and its UPnP/SSDP discovery; `bench`
-  reports port mapping as not available until then.
 
 ## 15. Open questions for the owner
 
 Resolved: encryption (section 4). Traffic is always encrypted with iroh's
 QUIC/TLS 1.3, with no opt-out and no second layer; relays are https only.
+Port mapping (section 9): not used; maybe later as a separate, explicit
+command.
 
 1. Who operates directories and relays, and how many? Should records also be
    published somewhere decentralized?

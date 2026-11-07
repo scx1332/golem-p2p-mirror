@@ -6,6 +6,8 @@ relay-based networking in yagna (`ya-relay`).
 
 * **Transport:** iroh 1.4 (QUIC, TLS 1.3, hole punching, relays). Direct
   connections where possible, relayed otherwise, with any number of relays.
+  No port mapping: golem-p2p never asks the router to open ports (UPnP, PCP,
+  NAT-PMP).
 * **Encryption:** always on, in one mode. Every connection is end-to-end
   QUIC/TLS 1.3 between the two endpoints, also through relays, which see only
   ciphertext and endpoint IDs. There is no plaintext mode, no opt-out and no
@@ -228,9 +230,9 @@ measurement, the verdict, the issues, hints and what could not be measured
 ([docs/cli-events.md](docs/cli-events.md)).
 
 What `bench` cannot tell: whether the router supports UPnP, PCP or NAT-PMP
-(iroh's port mapper is not part of this build, see the design document), the
-NAT behaviour with only one relay, packet loss towards this node, and anything
-about the peer's NAT or firewall.
+(golem-p2p deliberately does not use port mapping, see the design document),
+the NAT behaviour with only one relay, packet loss towards this node, and
+anything about the peer's NAT or firewall.
 
 **Running a bench node.** A public `listen` node bounds what it serves:
 uploads and downloads of at most `--max-transfer-size` (default 100 MB) each,

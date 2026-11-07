@@ -204,9 +204,6 @@ struct NodeArgs {
     /// `br-<id>`, `veth*`, `virbr*`, ...) are never published.
     #[arg(long, value_name = "NAME|PREFIX*")]
     exclude_interface: Vec<String>,
-    /// Disable UPnP/PCP/NAT-PMP port mapping.
-    #[arg(long)]
-    no_portmapper: bool,
 }
 
 impl NodeArgs {
@@ -304,8 +301,7 @@ fn builder(
 ) -> anyhow::Result<Builder> {
     let mut b = Endpoint::builder(signer, ids)
         .discovery(discovery)
-        .transport_mode(args.mode())
-        .portmapper(!args.no_portmapper);
+        .transport_mode(args.mode());
     for r in &args.relay {
         b = b.relay_config(r.config(args.relay_quic_port));
     }
