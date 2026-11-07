@@ -5,8 +5,8 @@
 //!   `unstable-net-report`): UDP over IPv4/IPv6 (QUIC address discovery to
 //!   the relays), the public addresses the relays saw, whether they differ
 //!   between relays (hard NAT), per-relay latencies, the preferred relay.
-//! * Our own direct addresses and home relay (`watch_addr`,
-//!   `home_relay_status`), and whether a port mapping was obtained (iroh
+//! * Our own direct addresses as published in our record, the home relay
+//!   (`home_relay_status`), and whether a port mapping was obtained (iroh
 //!   metrics).
 //! * Each configured relay: DNS, TCP, TLS with the configured trust roots,
 //!   and `GET /ping`, each step timed.
@@ -95,7 +95,13 @@ pub async fn check(ep: &Endpoint, args: &NodeArgs) -> Local {
             .iter()
             .map(|a| a.to_string())
             .collect(),
-        direct_addrs: ep.iroh().addr().ip_addrs().map(|a| a.to_string()).collect(),
+        direct_addrs: ep
+            .local_record()
+            .record()
+            .direct_addrs
+            .iter()
+            .map(|a| a.to_string())
+            .collect(),
         home_relay: home_relay.or_else(|| {
             (!args.relay.is_empty()).then_some(HomeRelay {
                 url: None,

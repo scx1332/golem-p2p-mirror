@@ -198,6 +198,12 @@ struct NodeArgs {
     /// Use relays only, no direct UDP.
     #[arg(long)]
     relay_only: bool,
+    /// Do not publish the addresses of this network interface in the node
+    /// record: a name, or a prefix followed by `*`, e.g. `wg*`. Repeat for
+    /// several. Addresses of container and VM bridges (`docker0`, Docker's
+    /// `br-<id>`, `veth*`, `virbr*`, ...) are never published.
+    #[arg(long, value_name = "NAME|PREFIX*")]
+    exclude_interface: Vec<String>,
     /// Disable UPnP/PCP/NAT-PMP port mapping.
     #[arg(long)]
     no_portmapper: bool,
@@ -302,6 +308,9 @@ fn builder(
         .portmapper(!args.no_portmapper);
     for r in &args.relay {
         b = b.relay_config(r.config(args.relay_quic_port));
+    }
+    for pattern in &args.exclude_interface {
+        b = b.exclude_interface(pattern.clone());
     }
     if !args.relay_ca.is_empty() {
         let mut roots = Vec::new();

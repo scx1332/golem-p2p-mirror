@@ -68,7 +68,7 @@ endpoint is bound.
 | `endpoint_id` | string | iroh endpoint ID (new on every start) |
 | `instance_id` | string | 32 hex characters, new on every start |
 | `relays` | [string] | home relay(s) in the published record; empty if no relay connection (yet), e.g. an untrusted relay certificate |
-| `direct_addrs` | [string] | direct UDP addresses in the published record |
+| `direct_addrs` | [string] | direct UDP addresses in the published record, best first (public before private; container and VM bridges and `--exclude-interface` interfaces left out) |
 | `relay_config` | [{`url`, `quic_port`}] | configured relays and their QUIC address discovery port (null: QAD off) |
 | `transport` | string | `direct_and_relay`, `relay_only` or `direct_only` |
 | `bind_ms` | number | time to bind, including waiting (at most 5 s) for the relay and for addresses |
@@ -267,7 +267,7 @@ items: `local_network`, `port_mapping`, `udp`, `nat_mapping`, `peer_network`,
 |---|---|---|
 | `duration_ms` | number | duration of the check |
 | `bound_sockets` | [string] | local UDP sockets of the endpoint |
-| `direct_addrs` | [string] | direct addresses (local interfaces and the public address from QAD) |
+| `direct_addrs` | [string] | direct addresses as published in the record, best first: the public address from QAD and local interface addresses, without container and VM bridges |
 | `home_relay` | {`url`, `connected`, `error`} or null | null without relays |
 | `net_report` | object or null | iroh's net report, below; null without relays, with `--relay-only`, or if none finished within 6 s |
 | `port_mapping` | {`available`, `enabled`, `mapped`} | `available`: this build has a port mapper (currently false); `enabled`: no `--no-portmapper`; `mapped`: a UPnP/PCP/NAT-PMP mapping was obtained |

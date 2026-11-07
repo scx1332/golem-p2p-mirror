@@ -110,8 +110,9 @@ pub struct Local {
     pub duration_ms: f64,
     /// Local UDP sockets of the endpoint.
     pub bound_sockets: Vec<String>,
-    /// Direct addresses of the endpoint (local interfaces and the public
-    /// address from QUIC address discovery), as published in its record.
+    /// Direct addresses as published in the node's record, best first: the
+    /// public address from QUIC address discovery and the addresses of local
+    /// interfaces, without those of container and VM bridges.
     pub direct_addrs: Vec<String>,
     pub home_relay: Option<HomeRelay>,
     /// iroh's net report; null without one (no relays, or not in time).

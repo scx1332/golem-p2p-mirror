@@ -122,7 +122,9 @@ golem-p2p send --key bob.key \
 `direct` or `relay`. Repeat `--relay` and `--directory` to use several.
 `send`, `probe` and `bench` work without `--key`: they then use a temporary
 identity that is not saved. `listen` needs `--key`.
-`--alias-key` adds secondary identities, `--relay-only` disables direct UDP.
+`--alias-key` adds secondary identities, `--relay-only` disables direct UDP,
+`--exclude-interface wg0` keeps an interface's addresses out of the record
+(container and VM bridges are always left out).
 `listen` prints the relays it is homed on in its `READY` line. An empty list
 usually means the relay's certificate is not trusted.
 
