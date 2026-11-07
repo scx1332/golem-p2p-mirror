@@ -9,12 +9,15 @@
 //!                  --to 0x<alice node id> "hello"
 //! golem-p2p --json probe --key bob.key --directory http://dir:8080/ \
 //!                  --relay https://relay.example/ --to 0x<alice node id> --duration 30s --bulk 4M
+//! golem-p2p bench  --directory http://dir:8080/ --relay https://relay.example/ \
+//!                  --to 0x<alice node id>
 //! ```
 //!
 //! Relay URLs must use `https`. For a relay with a self-signed certificate,
 //! pass the certificate with `--relay-ca`. `--json` prints machine-readable
 //! events, one JSON object per line, as described in `docs/cli-events.md`.
 
+mod bench;
 mod listen;
 mod observe;
 mod out;
@@ -31,10 +34,10 @@ use std::{
 };
 
 use anyhow::{Context, anyhow, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use golem_p2p::{
-    Endpoint, HttpDirectory, Identities, InMemorySigner, MultiDiscovery, NodeId, RecordStore,
-    TransportMode, iroh::tls::CaTlsConfig,
+    Builder, Discovery, Endpoint, HttpDirectory, Identities, InMemorySigner, MultiDiscovery,
+    NodeId, RecordStore, TransportMode, iroh::tls::CaTlsConfig,
 };
 use rustls_pki_types::{CertificateDer, pem::PemObject};
 use serde_json::json;
@@ -42,7 +45,7 @@ use tokio::sync::watch;
 
 use crate::{
     listen::Limits,
-    observe::{FirstDirect, Observer, strings},
+    observe::{Observer, PathLog, strings},
     out::{Out, anyhow_kind, ms, path_name},
     parse::{QuicPort, RelaySpec},
     probe::{Bulk, Pinger},
@@ -88,8 +91,8 @@ enum Cmd {
         #[arg(long, default_value = "127.0.0.1:8080")]
         listen: SocketAddr,
     },
-    /// Run a node that answers every request with an echo, and accepts
-    /// uploads (`probe --bulk`) and serves downloads within limits.
+    /// Run a node that answers every request with an echo, and serves the
+    /// uploads and downloads of `probe --bulk` and `bench` within limits.
     Listen {
         #[command(flatten)]
         node: NodeArgs,
@@ -119,6 +122,20 @@ enum Cmd {
     /// transfer, if requested, succeeded), 1 if no request succeeded or setup
     /// failed, 2 for invalid arguments, 3 if only the bulk transfer failed.
     Probe(ProbeArgs),
+    /// Check the local network and, with `--to`, benchmark the connection to
+    /// a node that runs `listen`; then explain the result in plain words.
+    ///
+    /// Measures relays, directories, UDP, the public address and NAT; and
+    /// with `--to`: connection setup, latency, path (direct or relay),
+    /// throughput in both directions and under parallel load, optionally the
+    /// relay-only fallback (`--compare-relay`) and an idle period (`--idle`).
+    /// Traffic and time are bounded: by default at most about 36 MB (44 MB
+    /// with `--compare-relay`) and about 30 to 60 s.
+    ///
+    /// Exit code: 0 healthy, 1 setup failed, 2 invalid arguments, 3 could not
+    /// connect to the node, 4 connected only through a relay, 5 degraded
+    /// (connected, or local check only, but problems were found).
+    Bench(bench::BenchArgs),
 }
 
 /// Server-side limits of `listen` for uploads and downloads.
@@ -150,9 +167,11 @@ impl LimitArgs {
 
 #[derive(Args)]
 struct NodeArgs {
-    /// Hex-encoded secret key file of the default identity.
+    /// Hex-encoded secret key file of the default identity. Required for
+    /// `listen`; without it, `send`, `probe` and `bench` use a temporary
+    /// identity that is not saved.
     #[arg(long)]
-    key: PathBuf,
+    key: Option<PathBuf>,
     /// Additional identity key files (aliases).
     #[arg(long)]
     alias_key: Vec<PathBuf>,
@@ -244,19 +263,40 @@ fn read_key(path: &PathBuf) -> anyhow::Result<[u8; 32]> {
     Ok(key)
 }
 
-/// Binds an endpoint. `timeout` sets the connect and request timeouts.
-async fn bind(args: &NodeArgs, timeout: Option<Duration>) -> anyhow::Result<Endpoint> {
+/// The signer and identities of `args`: the `--key` identity (or a new
+/// temporary one) and the `--alias-key` identities.
+fn identities(args: &NodeArgs) -> anyhow::Result<(InMemorySigner, Identities)> {
     let signer = InMemorySigner::new();
-    let default = signer.add_secret(&read_key(&args.key)?)?;
+    let default = match &args.key {
+        Some(k) => signer.add_secret(&read_key(k)?)?,
+        None => signer.generate(),
+    };
     let mut aliases = Vec::new();
     for k in &args.alias_key {
         aliases.push(signer.add_secret(&read_key(k)?)?);
     }
+    Ok((signer, Identities::with_aliases(default, aliases)))
+}
+
+/// The `--directory` services.
+fn directories(args: &NodeArgs) -> anyhow::Result<MultiDiscovery> {
     let mut discovery = MultiDiscovery::new();
     for d in &args.directory {
         discovery = discovery.with(HttpDirectory::new(d.clone())?);
     }
-    let mut b = Endpoint::builder(signer, Identities::with_aliases(default, aliases))
+    Ok(discovery)
+}
+
+/// An endpoint builder configured from `args`, with the given identities and
+/// discovery. `timeout` sets the connect and request timeouts.
+fn builder(
+    args: &NodeArgs,
+    signer: InMemorySigner,
+    ids: Identities,
+    discovery: impl Discovery,
+    timeout: Option<Duration>,
+) -> anyhow::Result<Builder> {
+    let mut b = Endpoint::builder(signer, ids)
         .discovery(discovery)
         .transport_mode(args.mode())
         .portmapper(!args.no_portmapper);
@@ -276,6 +316,13 @@ async fn bind(args: &NodeArgs, timeout: Option<Duration>) -> anyhow::Result<Endp
     if let Some(t) = timeout {
         b = b.connect_timeout(t).request_timeout(t);
     }
+    Ok(b)
+}
+
+/// Binds an endpoint. `timeout` sets the connect and request timeouts.
+async fn bind(args: &NodeArgs, timeout: Option<Duration>) -> anyhow::Result<Endpoint> {
+    let (signer, ids) = identities(args)?;
+    let b = builder(args, signer, ids, directories(args)?, timeout)?;
     Ok(b.bind().await?)
 }
 
@@ -291,13 +338,24 @@ impl Node {
         args: &NodeArgs,
         out: &Out,
         timeout: Option<Duration>,
-        first_direct: Option<Arc<FirstDirect>>,
+        path_log: Option<Arc<PathLog>>,
     ) -> anyhow::Result<Self> {
         let started = Instant::now();
         let ep = bind(args, timeout).await?;
+        Ok(Self::bound(ep, started.elapsed(), args, out, path_log))
+    }
+
+    /// Emits the `ready` event for an endpoint that was just bound (in
+    /// `bind_time`) and starts reporting its events.
+    fn bound(
+        ep: Endpoint,
+        bind_time: Duration,
+        args: &NodeArgs,
+        out: &Out,
+        path_log: Option<Arc<PathLog>>,
+    ) -> Self {
         // Subscribe before `ready`, so nothing after it is missed.
         let events = ep.subscribe();
-        let bind_time = started.elapsed();
         let rec = ep.local_record();
         let relay_config: Vec<_> = args
             .relay
@@ -331,10 +389,26 @@ impl Node {
             )
             .field("bind_ms", ms(bind_time))
             .emit();
-        let observer = Observer::spawn(&ep, events, out, first_direct);
-        Ok(Self {
+        let observer = Observer::spawn(&ep, events, out, path_log);
+        Self {
             ep,
             _observer: observer,
+        }
+    }
+}
+
+/// A function returning a future that resolves once SIGINT or SIGTERM was
+/// received (at any time after this call).
+fn stop_signal() -> impl Fn() -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>> {
+    let (stop_tx, stop_rx) = watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = stop_tx.send(true);
+    });
+    move || {
+        let mut rx = stop_rx.clone();
+        Box::pin(async move {
+            let _ = rx.wait_for(|s| *s).await;
         })
     }
 }
@@ -357,14 +431,19 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    let cli = Cli::parse();
+    // `bench` prints its own progress; keep its stderr readable.
+    let default_filter = match (&cli.cmd, cli.output.json) {
+        (Cmd::Bench(_), false) => "warn",
+        _ => "warn,golem_p2p=info",
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn,golem_p2p=info".into()),
+                .unwrap_or_else(|_| default_filter.into()),
         )
         .with_writer(std::io::stderr)
         .init();
-    let cli = Cli::parse();
     let out = Out::new(cli.output.json, cli.output.run_id, cli.output.node_name);
     match run(cli.cmd, &out).await {
         Ok(code) => code,
@@ -417,6 +496,14 @@ async fn run(cmd: Cmd, out: &Out) -> anyhow::Result<ExitCode> {
             duration,
             limits,
         } => {
+            if node.key.is_none() {
+                Cli::command()
+                    .error(
+                        clap::error::ErrorKind::MissingRequiredArgument,
+                        "listen needs --key <KEY> (create one with `golem-p2p keygen --out FILE`)",
+                    )
+                    .exit();
+            }
             let limits = limits.limits();
             let node = Node::start(&node, out, None, None).await?;
             let ep = &node.ep;
@@ -462,9 +549,9 @@ async fn run(cmd: Cmd, out: &Out) -> anyhow::Result<ExitCode> {
             count,
             message,
         } => {
-            let first_direct = Arc::new(FirstDirect::new(to));
-            let node = Node::start(&node, out, None, Some(first_direct.clone())).await?;
-            let mut pinger = Pinger::new(&node.ep, to, out, first_direct);
+            let path_log = Arc::new(PathLog::new(to));
+            let node = Node::start(&node, out, None, Some(path_log.clone())).await?;
+            let mut pinger = Pinger::new(&node.ep, to, out, path_log);
             let mut failure = None;
             for _ in 0..count {
                 let r = pinger
@@ -494,6 +581,7 @@ async fn run(cmd: Cmd, out: &Out) -> anyhow::Result<ExitCode> {
             }
         }
         Cmd::Probe(args) => return run_probe(args, out).await,
+        Cmd::Bench(args) => return bench::run(args, out).await,
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -506,77 +594,38 @@ async fn run_probe(args: ProbeArgs, out: &Out) -> anyhow::Result<ExitCode> {
         .ok()
         .filter(|s| *s <= listen::MAX_REQUEST)
         .with_context(|| format!("--payload-size must be at most {}", listen::MAX_REQUEST))?;
-    let first_direct = Arc::new(FirstDirect::new(args.to));
-    let node = Node::start(
-        &args.node,
-        out,
-        Some(args.timeout),
-        Some(first_direct.clone()),
-    )
-    .await?;
+    let path_log = Arc::new(PathLog::new(args.to));
+    let node = Node::start(&args.node, out, Some(args.timeout), Some(path_log.clone())).await?;
     let ep = &node.ep;
 
     // SIGINT/SIGTERM end the probe early, with a summary.
-    let (stop_tx, stop_rx) = watch::channel(false);
-    tokio::spawn(async move {
-        shutdown_signal().await;
-        let _ = stop_tx.send(true);
-    });
-    let stopped = || {
-        let mut rx = stop_rx.clone();
-        async move {
-            let _ = rx.wait_for(|s| *s).await;
-        }
-    };
+    let stopped = stop_signal();
 
-    let mut pinger = Pinger::new(ep, args.to, out, first_direct);
-    let end = tokio::time::Instant::now() + args.duration;
-    // A request in flight at the end may take up to one more timeout.
-    let hard_end = end + args.timeout;
-    let mut tick = tokio::time::interval(args.interval);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut interrupted = false;
-    loop {
-        tokio::select! {
-            _ = tick.tick() => {}
-            _ = stopped() => {
-                interrupted = true;
-                break;
-            }
-        }
-        if tokio::time::Instant::now() >= end {
-            break;
-        }
-        let payload = probe::payload(pinger.sent() + 1, payload_size);
-        let cancel = async {
-            tokio::select! {
-                _ = tokio::time::sleep_until(hard_end) => {
-                    anyhow::Error::from(golem_p2p::Error::Timeout)
-                        .context("probe ended before the reply")
+    let mut pinger = Pinger::new(ep, args.to, out, path_log);
+    let human = !out.json();
+    let interrupted = probe::ping_series(
+        &mut pinger,
+        args.duration,
+        args.interval,
+        payload_size,
+        args.timeout,
+        &stopped,
+        |r, payload| {
+            if human {
+                match &r.result {
+                    Ok(_) => println!(
+                        "seq={} bytes={} rtt_ms={} path={}",
+                        r.seq,
+                        payload.len(),
+                        ms(r.rtt),
+                        path_name(r.path)
+                    ),
+                    Err(e) => println!("seq={} failed after {} ms: {e:#}", r.seq, ms(r.rtt)),
                 }
-                _ = stopped() => anyhow!("interrupted"),
             }
-        };
-        let r = pinger
-            .ping(&payload, cancel, |reply| reply.ends_with(&payload), false)
-            .await;
-        if !out.json() {
-            match &r.result {
-                Ok(_) => println!(
-                    "seq={} bytes={} rtt_ms={} path={}",
-                    r.seq,
-                    payload.len(),
-                    ms(r.rtt),
-                    path_name(r.path)
-                ),
-                Err(e) => println!("seq={} failed after {} ms: {e:#}", r.seq, ms(r.rtt)),
-            }
-        }
-        if *stop_rx.borrow() {
-            interrupted = true;
-            break;
-        }
-    }
+        },
+    )
+    .await;
 
     let bulk = match args.bulk {
         Some(bytes) if !interrupted && pinger.ok() > 0 => {

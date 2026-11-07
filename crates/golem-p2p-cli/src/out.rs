@@ -94,6 +94,32 @@ impl Ev<'_> {
         self
     }
 
+    /// Adds a field serialized with serde; struct fields keep their order.
+    pub fn field_ser(mut self, key: &str, value: &impl serde::Serialize) -> Self {
+        if let Some(buf) = &mut self.buf {
+            buf.push(',');
+            push_json(buf, &Value::from(key));
+            buf.push(':');
+            buf.push_str(&serde_json::to_string(value).unwrap_or_else(|_| "null".into()));
+        }
+        self
+    }
+
+    /// Adds every field of a struct (anything that serializes to a JSON
+    /// object), in order.
+    pub fn fields_ser(mut self, value: &impl serde::Serialize) -> Self {
+        if let Some(buf) = &mut self.buf {
+            let obj = serde_json::to_string(value).unwrap_or_default();
+            if let Some(inner) = obj.strip_prefix('{').and_then(|s| s.strip_suffix('}'))
+                && !inner.is_empty()
+            {
+                buf.push(',');
+                buf.push_str(inner);
+            }
+        }
+        self
+    }
+
     /// Prints the event (JSON mode only).
     pub fn emit(self) {
         self.finish(false);
@@ -215,6 +241,30 @@ mod tests {
         assert_eq!(at(1_700_000_000, 123), "2023-11-14T22:13:20.123Z");
         assert_eq!(at(4_107_542_400, 0), "2100-03-01T00:00:00.000Z");
         assert_eq!(at(1_798_761_599, 500), "2026-12-31T23:59:59.500Z");
+    }
+
+    #[test]
+    fn serde_fields() {
+        #[derive(serde::Serialize)]
+        struct S {
+            b: u32,
+            a: Option<&'static str>,
+        }
+        #[derive(serde::Serialize)]
+        struct Empty {}
+        let out = Out::new(true, None, None);
+        let ev = out
+            .event("x")
+            .field_ser("s", &S { b: 1, a: None })
+            .fields_ser(&S { b: 2, a: Some("y") })
+            .fields_ser(&Empty {});
+        let buf = ev.buf.clone().unwrap() + "}";
+        assert!(
+            buf.ends_with(r#","s":{"b":1,"a":null},"b":2,"a":"y"}"#),
+            "{buf}"
+        );
+        serde_json::from_str::<Value>(&buf).unwrap();
+        drop(ev);
     }
 
     #[test]

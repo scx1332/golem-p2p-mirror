@@ -78,34 +78,82 @@ pub fn path_to(ep: &Endpoint, to: NodeId) -> PathKind {
         .unwrap_or(PathKind::Unknown)
 }
 
-/// Remembers when a direct path to one peer was first seen.
-pub struct FirstDirect {
+/// The history of the selected path towards one peer: when a direct path
+/// was first seen, and every change of the selected path (kind or remote
+/// address) of the connections to it.
+pub struct PathLog {
     target: NodeId,
-    at: OnceLock<Instant>,
+    first_direct: OnceLock<Instant>,
+    timeline: Mutex<Timeline>,
 }
 
-impl FirstDirect {
+#[derive(Default)]
+struct Timeline {
+    entries: Vec<PathEntry>,
+    changes: u64,
+}
+
+/// One entry of a [`PathLog`]: from `at` on, `path` was selected.
+#[derive(Debug, Clone)]
+pub struct PathEntry {
+    pub at: Instant,
+    pub path: SelectedPath,
+}
+
+/// At most this many entries are kept; later changes are only counted.
+const MAX_TIMELINE: usize = 64;
+
+impl PathLog {
     pub fn new(target: NodeId) -> Self {
         Self {
             target,
-            at: OnceLock::new(),
+            first_direct: OnceLock::new(),
+            timeline: Mutex::new(Timeline::default()),
         }
     }
 
-    /// Records `now` if this is the first direct path to the target.
-    pub fn observe(&self, peer: &Connection, kind: PathKind) {
-        if kind == PathKind::Direct && peer.peer().contains(&self.target) {
-            let _ = self.at.set(Instant::now());
+    /// Records the selected path of `peer` if it is a connection to the
+    /// target: when it opens and on every change.
+    pub fn observe(&self, peer: &Connection, path: &SelectedPath) {
+        if !peer.peer().contains(&self.target) {
+            return;
+        }
+        if path.kind == PathKind::Direct {
+            let _ = self.first_direct.set(Instant::now());
+        }
+        let mut t = self.timeline.lock().expect("poisoned");
+        if t.entries.last().is_some_and(|e| e.path == *path) {
+            return;
+        }
+        if !t.entries.is_empty() {
+            t.changes += 1;
+        }
+        if t.entries.len() < MAX_TIMELINE {
+            t.entries.push(PathEntry {
+                at: Instant::now(),
+                path: path.clone(),
+            });
         }
     }
 
     /// Records `now` if no direct path to the target was seen before.
-    pub fn mark(&self) {
-        let _ = self.at.set(Instant::now());
+    pub fn mark_direct(&self) {
+        let _ = self.first_direct.set(Instant::now());
     }
 
-    pub fn get(&self) -> Option<Instant> {
-        self.at.get().copied()
+    /// When a direct path to the target was first seen.
+    pub fn first_direct(&self) -> Option<Instant> {
+        self.first_direct.get().copied()
+    }
+
+    /// The selected paths seen so far, oldest first (at most 64).
+    pub fn timeline(&self) -> Vec<PathEntry> {
+        self.timeline.lock().expect("poisoned").entries.clone()
+    }
+
+    /// How often the selected path changed after the first one was seen.
+    pub fn changes(&self) -> u64 {
+        self.timeline.lock().expect("poisoned").changes
     }
 }
 
@@ -121,10 +169,10 @@ impl Observer {
         ep: &Endpoint,
         events: broadcast::Receiver<Event>,
         out: &Out,
-        first_direct: Option<Arc<FirstDirect>>,
+        path_log: Option<Arc<PathLog>>,
     ) -> Self {
         let mut tasks = JoinSet::new();
-        tasks.spawn(watch_events(ep.clone(), events, out.clone(), first_direct));
+        tasks.spawn(watch_events(ep.clone(), events, out.clone(), path_log));
         tasks.spawn(watch_home_relay(ep.clone(), out.clone()));
         Self { _tasks: tasks }
     }
@@ -134,7 +182,7 @@ async fn watch_events(
     ep: Endpoint,
     mut events: broadcast::Receiver<Event>,
     out: Out,
-    first_direct: Option<Arc<FirstDirect>>,
+    path_log: Option<Arc<PathLog>>,
 ) {
     let watched = Arc::new(Mutex::new(HashSet::new()));
     let mut conns = JoinSet::new();
@@ -191,7 +239,7 @@ async fn watch_events(
                 conns.spawn(watch_path(
                     c,
                     out.clone(),
-                    first_direct.clone(),
+                    path_log.clone(),
                     watched.clone(),
                 ));
             }
@@ -204,7 +252,7 @@ async fn watch_events(
 async fn watch_path(
     conn: Connection,
     out: Out,
-    first_direct: Option<Arc<FirstDirect>>,
+    path_log: Option<Arc<PathLog>>,
     watched: Arc<Mutex<HashSet<usize>>>,
 ) {
     // Subscribe before reading the snapshot, so no change is missed.
@@ -228,8 +276,8 @@ async fn watch_path(
     } else {
         debug!(peer = %peer_id, direction, path = path_name(last.kind), "connected");
     }
-    if let Some(f) = &first_direct {
-        f.observe(&conn, last.kind);
+    if let Some(log) = &path_log {
+        log.observe(&conn, &last);
     }
     loop {
         tokio::select! {
@@ -258,8 +306,8 @@ async fn watch_path(
                 "path changed"
             );
         }
-        if let Some(f) = &first_direct {
-            f.observe(&conn, now.kind);
+        if let Some(log) = &path_log {
+            log.observe(&conn, &now);
         }
         last = now;
     }
