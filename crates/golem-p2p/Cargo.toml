@@ -16,8 +16,19 @@ postcard.workspace = true
 serde.workspace = true
 rand.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 hex.workspace = true
 url.workspace = true
+n0-future = "0.3"
+reqwest = { workspace = true, optional = true, features = ["rustls-no-provider"] }
+axum = { workspace = true, optional = true, features = ["tokio", "http1"] }
+
+[features]
+default = ["http-directory"]
+## HTTP client for the record directory.
+http-directory = ["dep:reqwest"]
+## HTTP record directory server.
+directory-server = ["dep:axum", "tokio/net"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread"] }
