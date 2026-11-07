@@ -461,3 +461,39 @@ async fn address_change_during_bind_is_published() {
     })
     .await;
 }
+
+/// `max_response_size` bounds what `request` accepts; a larger response fails
+/// with `TooLarge` and leaves the connection usable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn max_response_size_is_configurable() {
+    with_timeout(60, async {
+        let net = TestNet::new(0).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let a = Endpoint::builder(signer.clone(), Identities::new(a_id))
+            .discovery(net.discovery.clone())
+            .transport_mode(TransportMode::DirectOnly)
+            .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .max_response_size(1000)
+            .bind()
+            .await
+            .unwrap();
+        let b = net
+            .node(&signer, Identities::new(b_id), NodeOpts::default())
+            .await;
+        spawn_echo(&b);
+
+        // The echo adds about 150 bytes to the request.
+        assert!(echo(&a, b_id, &"x".repeat(500)).await.is_ok());
+        assert!(matches!(
+            echo(&a, b_id, &"x".repeat(2000)).await,
+            Err(golem_p2p::Error::TooLarge)
+        ));
+        assert_eq!(a.connections().len(), 1);
+        assert!(echo(&a, b_id, "small").await.is_ok());
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}

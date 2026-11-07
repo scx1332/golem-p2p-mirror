@@ -307,6 +307,15 @@ impl Builder {
         self
     }
 
+    /// Largest response [`Endpoint::request`] accepts; a larger one fails with
+    /// [`Error::TooLarge`] (the connection stays open). Default 16 MiB. The
+    /// whole response is held in memory; for larger transfers use a stream
+    /// ([`Endpoint::open_bi`]).
+    pub fn max_response_size(mut self, bytes: usize) -> Self {
+        self.config.max_response_size = bytes;
+        self
+    }
+
     /// Leaves the addresses of more network interfaces out of the published
     /// record.
     ///

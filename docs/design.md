@@ -578,7 +578,7 @@ every answer afterwards comes from the new process.
 | queued incoming streams | 256, then new streams are reset with `BUSY` |
 | control frames | 16 KiB, record updates paced at 100 ms |
 | events | broadcast channel of 256, slow subscribers lag |
-| responses (`request`) | 16 MiB |
+| responses (`request`) | 16 MiB, `Builder::max_response_size` |
 | HTTP directory responses (client) | 4 KiB |
 
 ## 13. How yagna would use it

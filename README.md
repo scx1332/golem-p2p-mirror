@@ -64,7 +64,7 @@ What the tests cover:
 
 | test file | scenarios |
 |---|---|
-| `connectivity.rs` | direct connection; relay-only connection (no UDP, path checked); relay-assisted connection becoming direct; two relays with each node homed on a different one (via HTTP directory); a relay going down while another stays up; concurrent requests to a new peer share one lookup and one dial, and to a dead peer fail together after one connect timeout; the request timeout covers waiting for a stream when the peer keeps all its streams busy; an address change while `bind` publishes the first record is not lost |
+| `connectivity.rs` | direct connection; relay-only connection (no UDP, path checked); relay-assisted connection becoming direct; two relays with each node homed on a different one (via HTTP directory); a relay going down while another stays up; concurrent requests to a new peer share one lookup and one dial, and to a dead peer fail together after one connect timeout; the request timeout covers waiting for a stream when the peer keeps all its streams busy; an address change while `bind` publishes the first record is not lost; `max_response_size` |
 | `identity_changes.rs` | default switch with and without restart; A to B to A with and without restart; alias added and removed at runtime; locked key blocks updates; restart with a persisted endpoint key; a failed re-sign (locked key) and a failed publish (directory down) are retried |
 | `security.rs` | forged record from a directory; stale record replay; record listing an identity that did not sign it; valid record presented over another endpoint's connection (both directions); spoofed stream sender and receiver; new instance superseding a live old connection; duplicate record updates paced |
 | `encryption.rs` | peers offering another ALPN refused in the TLS handshake; a relay (plain HTTP behind a recording TLS-terminating proxy) sees endpoint IDs but neither a plaintext marker nor the Ethereum identities; non-https relay URLs rejected by the builder; a signed record with an `http://` relay refused and never dialed |
@@ -287,7 +287,8 @@ let mut events = ep.subscribe();
 
 Main API: `Endpoint::builder(signer, identities)` with `relay`,
 `relay_config`, `relay_tls`, `discovery`, `transport_mode`, `bind_addr`,
-`exclude_interface` (`bind` fails for a relay URL that is not `https`); then `connect`,
+`exclude_interface`, `connect_timeout`, `request_timeout`,
+`max_response_size` (`bind` fails for a relay URL that is not `https`); then `connect`,
 `open_bi`/`open_bi_from`, `request`/`request_from`, `accept`,
 `set_identities`/`set_default_identity`/`add_alias`/`remove_alias`,
 `subscribe`, `connections`, `close`. Implement `golem_p2p::Signer` to sign
