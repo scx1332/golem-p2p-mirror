@@ -216,6 +216,15 @@ Variant B, public node on the ufw-allowed UDP port 8000:
 
 ## Open issues found
 
+Status after later commits (the results above are unchanged): 1 is fixed,
+container and VM bridge addresses are left out and addresses are ranked
+before the cap (`8dbf3b7`, design.md section 5); 2 is fixed, the QAD port is
+set with `--relay URL,quic=PORT` or `--relay-quic-port` (`524b3cd`); 3 is
+still open (it is iroh's probe timeout; measured locally: `bind` takes
+0.3 s with QAD answering or off, 3.07 s with QAD unanswered); 4 is
+unchanged. Experiment 2, variant A has not been re-run with the QAD port
+set.
+
 1. **Address truncation can drop the public address.** `direct_addrs` takes
    the first 16 of iroh's sorted addresses, so a Docker host with many bridges
    can lose its public or QAD-discovered address from the record. Filtering
