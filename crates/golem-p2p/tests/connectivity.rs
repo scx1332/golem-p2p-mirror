@@ -338,3 +338,68 @@ async fn concurrent_requests_to_dead_peer_fail_together() {
     })
     .await;
 }
+
+/// The request timeout also bounds waiting for a stream: a peer that keeps
+/// all the streams it allows busy makes `request` time out, not hang, and
+/// the connection stays usable.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_timeout_covers_waiting_for_a_stream() {
+    with_timeout(60, async {
+        let net = TestNet::new(0).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let timeout = Duration::from_secs(1);
+        let a = Endpoint::builder(signer.clone(), Identities::new(a_id))
+            .discovery(net.discovery.clone())
+            .transport_mode(TransportMode::DirectOnly)
+            .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .request_timeout(timeout)
+            .bind()
+            .await
+            .unwrap();
+        let b = net
+            .node(&signer, Identities::new(b_id), NodeOpts::default())
+            .await;
+        // B takes the first 255 streams and holds them without answering.
+        let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+        {
+            let (b, held) = (b.clone(), held.clone());
+            tokio::spawn(async move {
+                for _ in 0..255 {
+                    let Some(inc) = b.accept().await else { break };
+                    held.lock().unwrap().push(inc);
+                }
+            });
+        }
+
+        // The dialer's control stream plus 255 application streams use up
+        // the 256 concurrent streams B allows on the connection.
+        let mut mine = Vec::new();
+        for _ in 0..255 {
+            mine.push(a.open_bi(b_id).await.unwrap());
+        }
+        wait_for(10, "B to hold 255 streams", || {
+            held.lock().unwrap().len() == 255
+        })
+        .await;
+
+        let start = tokio::time::Instant::now();
+        let r = tokio::time::timeout(timeout * 5, a.request(b_id, b"x"))
+            .await
+            .expect("request() did not time out while waiting for a stream");
+        assert!(matches!(r, Err(golem_p2p::Error::Timeout)), "{r:?}");
+        assert!(start.elapsed() >= timeout);
+        assert_eq!(a.connections().len(), 1, "connection was closed");
+
+        // Once B lets the streams go, the same connection serves requests.
+        held.lock().unwrap().clear();
+        drop(mine);
+        spawn_echo(&b);
+        let e = echo_eventually(&a, b_id, "after", 10).await;
+        assert_eq!(e.data, "after");
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}

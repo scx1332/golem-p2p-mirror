@@ -387,6 +387,10 @@ finishes, and reads the response. It is not retried once the request may have
 reached the peer (requests are not assumed idempotent). On a connection error
 or timeout the connection is closed, so the next call dials fresh with a newly
 looked-up record. That is how a peer recovers after the other side crashed.
+The request timeout starts when the connection is ready and also covers
+waiting for a stream when the peer has reached its limit of 256 concurrent
+streams; that wait timing out leaves the connection open (the peer is busy,
+not gone).
 
 ## 8. Discovery
 

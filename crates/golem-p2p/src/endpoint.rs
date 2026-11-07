@@ -289,13 +289,16 @@ impl Builder {
         self
     }
 
-    /// Timeout for [`Endpoint::request`].
+    /// Timeout for [`Endpoint::request`] once the connection is ready:
+    /// waiting for a stream, sending the request and receiving the response.
+    /// Default 30 s.
     pub fn request_timeout(mut self, t: Duration) -> Self {
         self.config.request_timeout = t;
         self
     }
 
-    /// Timeout for establishing a connection.
+    /// Timeout for establishing the QUIC connection (the golem-p2p handshake
+    /// that follows has its own limit of 10 s). Default 15 s.
     pub fn connect_timeout(mut self, t: Duration) -> Self {
         self.config.connect_timeout = t;
         self
@@ -997,23 +1000,40 @@ impl Inner {
     /// Opens an application stream to `to` and tries once more with a freshly
     /// resolved connection if the cached connection turns out to be unusable
     /// before anything was sent.
+    ///
+    /// With `timeout`, waiting for the stream (the peer may have reached its
+    /// limit of concurrent streams) ends after `timeout` from when the
+    /// connection was ready; the returned instant is that deadline.
     async fn open_bi(
         self: &Arc<Self>,
         from: NodeId,
         to: NodeId,
-    ) -> Result<(Connection, SendStream, RecvStream)> {
+        timeout: Option<Duration>,
+    ) -> Result<(
+        Connection,
+        SendStream,
+        RecvStream,
+        Option<tokio::time::Instant>,
+    )> {
         if !self.local_record().contains(&from) {
             return Err(Error::NotLocalIdentity(from));
         }
         let conn = self.connect(to).await?;
-        match conn.open_bi(from, to).await {
-            Ok((s, r)) => Ok((conn, s, r)),
+        let deadline = timeout.map(|t| tokio::time::Instant::now() + t);
+        let open = async |conn: &Connection| match deadline {
+            Some(d) => tokio::time::timeout_at(d, conn.open_bi(from, to))
+                .await
+                .unwrap_or(Err(Error::Timeout)),
+            None => conn.open_bi(from, to).await,
+        };
+        match open(&conn).await {
+            Ok((s, r)) => Ok((conn, s, r, deadline)),
             Err(Error::Connection(e)) => {
                 debug!("stream open failed on cached connection, redialing: {e}");
                 conn.close();
                 let conn = self.connect(to).await?;
-                let (s, r) = conn.open_bi(from, to).await?;
-                Ok((conn, s, r))
+                let (s, r) = open(&conn).await?;
+                Ok((conn, s, r, deadline))
             }
             Err(e) => Err(e),
         }
@@ -1391,8 +1411,11 @@ impl Endpoint {
     }
 
     /// Opens a bidirectional stream from one of our identities to `to`.
+    ///
+    /// If the peer has reached its limit of concurrent streams on the
+    /// connection (256), this waits until one of them ends.
     pub async fn open_bi_from(&self, from: NodeId, to: NodeId) -> Result<(SendStream, RecvStream)> {
-        let (_, s, r) = self.inner.open_bi(from, to).await?;
+        let (_, s, r, _) = self.inner.open_bi(from, to, None).await?;
         Ok((s, r))
     }
 
@@ -1405,11 +1428,21 @@ impl Endpoint {
     /// Sends `data` from `from` (one of our identities) to `to` and returns the
     /// response.
     ///
+    /// Once the connection is ready (see [`Builder::connect_timeout`]), the
+    /// request timeout ([`Builder::request_timeout`]) bounds the rest:
+    /// waiting for a stream if the peer has reached its limit of concurrent
+    /// streams, sending the request and receiving the response.
+    ///
     /// Not retried once the request may have been delivered. If the request
-    /// fails on a connection-level error or timeout, that connection is closed
-    /// so the next call dials a fresh one with a freshly looked-up record.
+    /// fails on a connection-level error, or times out after it was sent, that
+    /// connection is closed so the next call dials a fresh one with a freshly
+    /// looked-up record. (A timeout while waiting for a stream leaves the
+    /// connection open: the peer is busy, not gone.)
     pub async fn request_from(&self, from: NodeId, to: NodeId, data: &[u8]) -> Result<Vec<u8>> {
-        let (conn, mut send, mut recv) = self.inner.open_bi(from, to).await?;
+        let timeout = self.inner.config.request_timeout;
+        let (conn, mut send, mut recv, deadline) =
+            self.inner.open_bi(from, to, Some(timeout)).await?;
+        let deadline = deadline.unwrap_or_else(|| tokio::time::Instant::now() + timeout);
         let max = self.inner.config.max_response_size;
         let exchange = async {
             send.write_all(data).await.map_err(map_write_err)?;
@@ -1417,7 +1450,7 @@ impl Endpoint {
                 .map_err(|e| Error::Connection(e.to_string()))?;
             recv.read_to_end(max).await.map_err(map_read_err)
         };
-        match tokio::time::timeout(self.inner.config.request_timeout, exchange).await {
+        match tokio::time::timeout_at(deadline, exchange).await {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(e)) => {
                 if matches!(e, Error::Connection(_)) {
