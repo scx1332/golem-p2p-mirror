@@ -30,8 +30,8 @@ use golem_p2p::{
 use serde::Serialize;
 
 use self::report::{
-    Concurrency, Connect, ConnectionLost, Idle, Latency, PathPoint, PathReport, Peer, QuicStats,
-    RelayCompare, Report, Settings, Status, TransferReport,
+    Concurrency, Connect, ConnectionLost, Idle, Latency, LatencyLoss, PathPoint, PathReport, Peer,
+    QuicStats, RelayCompare, Report, Settings, Status, TransferReport,
 };
 use crate::{
     Node, NodeArgs, listen,
@@ -50,6 +50,19 @@ const RELAY_LATENCY_MAX: Duration = Duration::from_secs(5);
 /// Requests after the idle time before giving up.
 const IDLE_ATTEMPTS: u64 = 3;
 
+/// The latency phase counts packet loss only once the selected path has been
+/// unchanged this long, and at least [`SETTLE_RTTS`] times the shortest round
+/// trip seen (the shortest: a request slowed down by loss must not restart
+/// the count): setting up a path loses packets by design. iroh's hole punching sends probes that
+/// the peer's NAT drops until the hole is open, and they take their packet
+/// numbers from the relayed path, so QUIC also declares relayed packets lost
+/// that a probe's acknowledgement overtook (campaign 2, debug/latency-loss:
+/// 1-6 of ~120 packets on clean links, all within 75 ms of the switch).
+const PATH_SETTLE: Duration = Duration::from_secs(1);
+
+/// See [`PATH_SETTLE`].
+const SETTLE_RTTS: u32 = 3;
+
 #[derive(Args)]
 pub struct BenchArgs {
     #[command(flatten)]
@@ -65,7 +78,9 @@ pub struct BenchArgs {
     #[arg(long, default_value = "10s", value_parser = parse::duration)]
     timeout: Duration,
     /// How long to measure latency, with one request per `--interval`.
-    #[arg(long, default_value = "10s", value_parser = parse::duration)]
+    /// Packet loss on the path is counted meanwhile (once the path has
+    /// settled after hole punching).
+    #[arg(long, default_value = "12s", value_parser = parse::duration)]
     latency_duration: Duration,
     /// Time between the starts of two latency requests.
     #[arg(long, default_value = "200ms", value_parser = parse::duration)]
@@ -455,6 +470,7 @@ impl PeerBench<'_> {
             ));
             let t = Instant::now();
             let before = QuicSnapshot::to(ep, to);
+            let mut loss = LossCount::new(ep, to, t);
             let mut pinger = Pinger::new(ep, to, out, log.clone()).with_phase("latency");
             let interrupted = probe::ping_series(
                 &mut pinger,
@@ -463,11 +479,12 @@ impl PeerBench<'_> {
                 self.payload_size,
                 args.timeout,
                 stop,
-                |_, _| {},
+                |reply, _| loss.on_reply(ep, to, log, reply),
             )
             .await;
             let mut l = latency(&pinger, self.payload_size);
             l.quic = phase_quic(ep, to, before.as_ref());
+            l.loss = loss.finish(ep, to, log);
             phase_event(out, "latency", l.failed == 0, t.elapsed(), &l);
             peer.latency = Some(l);
             if interrupted {
@@ -722,7 +739,9 @@ impl PeerBench<'_> {
         if let Some(conn) = conn {
             let base = QuicSnapshot::of(&conn);
             let log = Arc::new(PathLog::new(self.to));
-            let mut pinger = Pinger::new(ep, self.to, self.out, log).with_phase("relay_latency");
+            let mut loss = LossCount::new(ep, self.to, Instant::now());
+            let mut pinger =
+                Pinger::new(ep, self.to, self.out, log.clone()).with_phase("relay_latency");
             probe::ping_series(
                 &mut pinger,
                 args.latency_duration.min(RELAY_LATENCY_MAX),
@@ -730,11 +749,12 @@ impl PeerBench<'_> {
                 self.payload_size,
                 args.timeout,
                 stop,
-                |_, _| {},
+                |reply, _| loss.on_reply(ep, self.to, &log, reply),
             )
             .await;
             let mut l = latency(&pinger, self.payload_size);
             l.quic = phase_quic(ep, self.to, Some(&base));
+            l.loss = loss.finish(ep, self.to, &log);
             let size = args.transfer_size.min(args.relay_transfer_size);
             let capped = size < args.transfer_size;
             let up = if args.runs(Phase::Upload) {
@@ -847,6 +867,90 @@ impl PeerBench<'_> {
     }
 }
 
+/// Where the latency phase's loss count stands, see [`PATH_SETTLE`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LossWindow {
+    /// The selected path has not changed since `settle` before the count
+    /// started: count on.
+    Counting,
+    /// The path changed less than `settle` before the count started, or
+    /// after that, and has been unchanged for `settle` now: start again.
+    Restart,
+    /// The path changed less than `settle` ago.
+    Unsettled,
+}
+
+impl LossWindow {
+    /// The state of a count started at `from`, given the last change of the
+    /// selected path.
+    fn at(from: Instant, last_change: Option<Instant>, settle: Duration, now: Instant) -> Self {
+        match last_change {
+            Some(c) if c + settle > from && now >= c + settle => Self::Restart,
+            Some(c) if c + settle > from => Self::Unsettled,
+            _ => Self::Counting,
+        }
+    }
+}
+
+/// Counts the latency phase's packet loss from when the selected path has
+/// settled (see [`PATH_SETTLE`]).
+struct LossCount {
+    /// The start of the phase.
+    start: Instant,
+    /// The start of the count, and the counters then.
+    from: Instant,
+    base: Option<QuicSnapshot>,
+    /// The shortest round trip so far.
+    min_rtt: Option<Duration>,
+}
+
+impl LossCount {
+    fn new(ep: &Endpoint, to: NodeId, start: Instant) -> Self {
+        Self {
+            start,
+            from: start,
+            base: QuicSnapshot::to(ep, to),
+            min_rtt: None,
+        }
+    }
+
+    /// How long the path must be unchanged, see [`PATH_SETTLE`].
+    fn settle(&self) -> Duration {
+        let rtts = self.min_rtt.map_or(Duration::ZERO, |r| r * SETTLE_RTTS);
+        PATH_SETTLE.max(rtts.min(PATH_SETTLE * 10))
+    }
+
+    /// After every request: starts the count again once a path change has
+    /// settled.
+    fn on_reply(&mut self, ep: &Endpoint, to: NodeId, log: &PathLog, reply: &probe::Reply) {
+        if reply.result.is_ok() {
+            self.min_rtt = Some(self.min_rtt.map_or(reply.rtt, |m| m.min(reply.rtt)));
+        }
+        let now = Instant::now();
+        if LossWindow::at(self.from, log.last_change(), self.settle(), now) == LossWindow::Restart {
+            self.from = now;
+            self.base = QuicSnapshot::to(ep, to);
+        }
+    }
+
+    /// The loss since the count started; `None` if the path had not settled
+    /// by the end of the phase, or the connection changed.
+    fn finish(self, ep: &Endpoint, to: NodeId, log: &PathLog) -> Option<LatencyLoss> {
+        let now = Instant::now();
+        if LossWindow::at(self.from, log.last_change(), self.settle(), now) != LossWindow::Counting
+        {
+            return None;
+        }
+        let q = phase_quic(ep, to, self.base.as_ref())?;
+        Some(LatencyLoss {
+            from_ms: ms(self.from.saturating_duration_since(self.start)),
+            sent_packets: q.sent_packets,
+            lost_packets: q.lost_packets,
+            lost_pct: q.lost_pct,
+        })
+    }
+}
+
 /// The outcome of the concurrency phase's requests.
 #[derive(Default)]
 struct Requests {
@@ -917,6 +1021,7 @@ fn latency(pinger: &Pinger, payload_size: usize) -> Latency {
         direct_fraction: s.direct_fraction,
         final_path: path_name(s.final_path),
         quic: None,
+        loss: None,
     }
 }
 
@@ -1045,4 +1150,59 @@ async fn wait_flag(flag: &AtomicBool) {
 /// `10 s`, `200 ms`.
 fn fmt_dur(d: Duration) -> String {
     report::fmt_ms(ms(d))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loss_count_waits_for_the_path_to_settle() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let settle = PATH_SETTLE;
+        let state = |from, change: Option<u64>, now| {
+            LossWindow::at(at(from), change.map(at), settle, at(now))
+        };
+        // No path change: count from the start of the phase.
+        assert_eq!(state(0, None, 5000), LossWindow::Counting);
+        // A change long before the phase does not matter.
+        let t1 = at(5000);
+        assert_eq!(
+            LossWindow::at(t1, Some(t0), settle, t1 + Duration::from_secs(5)),
+            LossWindow::Counting
+        );
+        // Hole punching finished 90 ms into the phase (campaign 2): wait a
+        // second, then count from there.
+        assert_eq!(state(0, Some(90), 600), LossWindow::Unsettled);
+        assert_eq!(state(0, Some(90), 1090), LossWindow::Restart);
+        assert_eq!(state(1100, Some(90), 9000), LossWindow::Counting);
+        // A change just before the phase started is waited out too.
+        let t1 = at(300);
+        assert_eq!(
+            LossWindow::at(t1, Some(at(200)), settle, at(700)),
+            LossWindow::Unsettled
+        );
+        // Another change after counting started: start again once settled.
+        assert_eq!(state(1100, Some(4000), 4500), LossWindow::Unsettled);
+        assert_eq!(state(1100, Some(4000), 5000), LossWindow::Restart);
+        // A change in the last second of the phase: never settled.
+        assert_eq!(state(1100, Some(9500), 10_000), LossWindow::Unsettled);
+
+        // The path must be unchanged for 1 s, or 3 of the shortest round
+        // trips on long paths.
+        let mut c = LossCount {
+            start: t0,
+            from: t0,
+            base: None,
+            min_rtt: None,
+        };
+        assert_eq!(c.settle(), PATH_SETTLE);
+        c.min_rtt = Some(Duration::from_millis(80));
+        assert_eq!(c.settle(), PATH_SETTLE);
+        c.min_rtt = Some(Duration::from_millis(600));
+        assert_eq!(c.settle(), Duration::from_millis(1800));
+        c.min_rtt = Some(Duration::from_secs(30));
+        assert_eq!(c.settle(), Duration::from_secs(10));
+    }
 }

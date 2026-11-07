@@ -19,7 +19,8 @@ use super::report::{
 const LOSS_HINT_PCT: f64 = 0.5;
 
 /// Fewer packets sent in the latency phase say too little about loss. With
-/// the defaults (10 s, one request per 200 ms) the phase sends about 110.
+/// the defaults (12 s, one request per 200 ms) the phase sends about 140,
+/// and one lost packet is enough for the hint up to 200.
 const LOSS_MIN_PACKETS: u64 = 50;
 
 /// Fills `status`, `exit_code`, `verdict`, `issues`, `hints` and `unknowns`.
@@ -477,26 +478,61 @@ impl<'a> Facts<'a> {
         // Only the latency phase counts: its few small packets cannot
         // congest any link, so what is lost there is lost by the path. In the
         // transfers, congestion control loses packets by design while it
-        // probes for the link's capacity.
-        if let Some(q) = p.latency.as_ref().and_then(|l| l.quic.as_ref())
-            && let Some(pct) = q.lost_pct
-            && q.lost_packets > 0
-            && q.sent_packets >= LOSS_MIN_PACKETS
-            && pct >= LOSS_HINT_PCT
-        {
-            hints.push(finding(
-                "packet_loss",
-                format!(
-                    "{} of {} packets this node sent while measuring latency {} lost \
-                     ({pct:.1}%). The connection was nearly idle then, so this is loss on the \
-                     network path (for example Wi-Fi, a mobile or an overloaded link), not \
-                     congestion caused by the test. Random loss slows every transfer down: \
-                     about 1% can cut the throughput of a connection by ten times or more.",
-                    q.lost_packets,
-                    q.sent_packets,
-                    if q.lost_packets == 1 { "was" } else { "were" }
-                ),
-            ));
+        // probes for the link's capacity. And only once the path had
+        // settled: hole punching loses packets by design too.
+        if let Some(l) = &p.latency {
+            match &l.loss {
+                Some(q)
+                    if q.sent_packets >= LOSS_MIN_PACKETS
+                        && q.lost_packets > 0
+                        && q.lost_pct.is_some_and(|pct| pct >= LOSS_HINT_PCT) =>
+                {
+                    hints.push(finding(
+                        "packet_loss",
+                        format!(
+                            "{} of {} packets this node sent while measuring latency{} {} lost \
+                             ({:.1}%). The connection was nearly idle then, so this is loss on \
+                             the network path (for example Wi-Fi, a mobile or an overloaded \
+                             link), not congestion caused by the test. Random loss slows every \
+                             transfer down: about 1% can cut the throughput of a connection by \
+                             ten times or more.",
+                            q.lost_packets,
+                            q.sent_packets,
+                            if q.from_ms > 0.0 {
+                                " (after the path had settled)"
+                            } else {
+                                ""
+                            },
+                            if q.lost_packets == 1 { "was" } else { "were" },
+                            q.lost_pct.unwrap_or_default(),
+                        ),
+                    ));
+                }
+                Some(q) if q.sent_packets < LOSS_MIN_PACKETS => unknowns.push(unknown(
+                    "packet_loss",
+                    format!(
+                        "packet loss on the path: only {} packets were sent while measuring \
+                         latency{}, too few to tell (at least {LOSS_MIN_PACKETS} are needed; \
+                         use a longer --latency-duration)",
+                        q.sent_packets,
+                        if q.from_ms > 0.0 {
+                            " after the path had settled"
+                        } else {
+                            ""
+                        },
+                    ),
+                )),
+                Some(_) => {}
+                None if l.quic.is_some() => unknowns.push(unknown(
+                    "packet_loss",
+                    "packet loss on the path: the selected path changed until the end of the \
+                     latency phase, and setting up a path loses packets by design",
+                )),
+                None => unknowns.push(unknown(
+                    "packet_loss",
+                    "packet loss on the path: the connection changed during the latency phase",
+                )),
+            }
         }
         if let Some(l) = &p.latency
             && let (Some(j), Some(m)) = (l.jitter_ms, l.rtt_ms.p50)
@@ -844,8 +880,8 @@ mod tests {
     use super::*;
     use crate::{
         bench::report::{
-            Concurrency, Connect, ConnectionLost, DirectoryCheck, HomeRelay, Local, PathPoint,
-            PathReport, QuicStats, RelayCompare, Settings,
+            Concurrency, Connect, ConnectionLost, DirectoryCheck, HomeRelay, LatencyLoss, Local,
+            PathPoint, PathReport, QuicStats, RelayCompare, Settings,
         },
         probe::Stats,
     };
@@ -853,7 +889,7 @@ mod tests {
     fn settings() -> Settings {
         Settings {
             timeout_ms: 10_000.0,
-            latency_duration_ms: 10_000.0,
+            latency_duration_ms: 12_000.0,
             interval_ms: 200.0,
             payload_bytes: 64,
             transfer_bytes: 10_000_000,
@@ -1352,23 +1388,46 @@ mod tests {
         }
     }
 
+    /// The latency phase's loss count from `from_ms` on.
+    fn loss(from_ms: f64, sent: u64, lost: u64) -> LatencyLoss {
+        LatencyLoss {
+            from_ms,
+            sent_packets: sent,
+            lost_packets: lost,
+            lost_pct: Some(lost as f64 * 100.0 / sent as f64),
+        }
+    }
+
+    /// A direct peer whose latency phase has these counters (whole phase)
+    /// and this loss count.
+    fn peer_with_loss(quic_all: QuicStats, loss: Option<LatencyLoss>) -> Peer {
+        let mut p = peer(true);
+        let l = p.latency.as_mut().unwrap();
+        l.quic = Some(quic_all);
+        l.loss = loss;
+        p
+    }
+
+    fn unknown_items(r: &Report) -> Vec<&'static str> {
+        r.unknowns.iter().map(|u| u.item).collect()
+    }
+
     #[test]
     fn packet_loss_only_from_the_latency_phase() {
         // Congestion losses of the transfers on a fast, clean path (campaign
         // 1: 2.3-6.8% at 135-149 Mbps) are not a problem of the path.
-        let mut p = peer(true);
-        p.latency.as_mut().unwrap().quic = Some(quic(112, 0));
+        let mut p = peer_with_loss(quic(140, 0), Some(loss(0.0, 140, 0)));
         p.upload.as_mut().unwrap().quic = Some(quic(8000, 400));
         p.quic = Some(quic(9000, 400));
         let mut r = report(Some(local()), Some(p));
         analyze(&mut r);
         assert_eq!(r.status, Status::Healthy, "{r:#?}");
         assert!(r.hints.is_empty(), "{:?}", r.hints);
+        assert!(!unknown_items(&r).contains(&"packet_loss"), "{r:#?}");
 
         // About 1% lost while the connection was nearly idle (the lab's
         // lossy link: 1% each way) is flagged, whatever the transfers lost.
-        let mut p = peer(true);
-        p.latency.as_mut().unwrap().quic = Some(quic(112, 1));
+        let mut p = peer_with_loss(quic(112, 1), Some(loss(0.0, 112, 1)));
         p.upload.as_mut().unwrap().quic = Some(quic(8000, 80));
         let mut r = report(Some(local()), Some(p));
         analyze(&mut r);
@@ -1383,21 +1442,90 @@ mod tests {
             r.hints[0].message
         );
 
-        // Below the threshold (0.4%), or too few packets to say: no hint.
-        for q in [quic(250, 1), quic(30, 1)] {
-            let mut p = peer(true);
-            p.latency.as_mut().unwrap().quic = Some(q);
-            let mut r = report(Some(local()), Some(p));
-            analyze(&mut r);
-            assert!(r.hints.is_empty(), "{:?}", r.hints);
-        }
-        // Without counters for the latency phase the whole connection's loss
-        // is not used either.
+        // Below the threshold (0.4%): no hint.
+        let mut r = report(
+            Some(local()),
+            Some(peer_with_loss(quic(250, 1), Some(loss(0.0, 250, 1)))),
+        );
+        analyze(&mut r);
+        assert!(r.hints.is_empty(), "{:?}", r.hints);
+        // Without a loss count for the latency phase the whole connection's
+        // loss is not used either.
         let mut p = peer(true);
         p.quic = Some(quic(9000, 900));
         let mut r = report(Some(local()), Some(p));
         analyze(&mut r);
         assert!(r.hints.is_empty(), "{:?}", r.hints);
+    }
+
+    #[test]
+    fn packet_loss_while_the_path_settles_does_not_count() {
+        // Campaign 2: relay first, direct ~90 ms into the latency phase; hole
+        // punching "lost" 1-6 of ~120 packets on clean links. Counted from
+        // when the path had settled, nothing was lost: no hint.
+        let mut r = report(
+            Some(local()),
+            Some(peer_with_loss(quic(121, 4), Some(loss(1090.0, 108, 0)))),
+        );
+        analyze(&mut r);
+        assert_eq!(r.status, Status::Healthy, "{r:#?}");
+        assert!(r.hints.is_empty(), "{:?}", r.hints);
+
+        // Real loss after the path settled is flagged, and the message says
+        // when counting started.
+        let mut r = report(
+            Some(local()),
+            Some(peer_with_loss(quic(127, 3), Some(loss(1213.0, 115, 2)))),
+        );
+        analyze(&mut r);
+        assert_eq!(codes(&r.hints), ["packet_loss"]);
+        let m = &r.hints[0].message;
+        assert!(
+            m.starts_with(
+                "2 of 115 packets this node sent while measuring latency (after the path \
+                 had settled) were lost (1.7%)."
+            ),
+            "{m}"
+        );
+    }
+
+    #[test]
+    fn packet_loss_unknown_without_a_settled_count() {
+        // The path changed until the end of the phase: loss not measured.
+        let mut r = report(Some(local()), Some(peer_with_loss(quic(121, 4), None)));
+        analyze(&mut r);
+        assert!(r.hints.is_empty(), "{:?}", r.hints);
+        let u = r.unknowns.iter().find(|u| u.item == "packet_loss").unwrap();
+        assert!(u.reason.contains("path changed until the end"), "{u:?}");
+
+        // Too few packets after the path settled (or a short phase).
+        let mut r = report(
+            Some(local()),
+            Some(peer_with_loss(quic(60, 1), Some(loss(1000.0, 30, 1)))),
+        );
+        analyze(&mut r);
+        assert!(r.hints.is_empty(), "{:?}", r.hints);
+        let u = r.unknowns.iter().find(|u| u.item == "packet_loss").unwrap();
+        assert!(
+            u.reason
+                .contains("only 30 packets were sent while measuring latency after"),
+            "{u:?}"
+        );
+
+        // The connection changed during the phase.
+        let mut p = peer(true);
+        p.latency.as_mut().unwrap().quic = None;
+        let mut r = report(Some(local()), Some(p));
+        analyze(&mut r);
+        let u = r.unknowns.iter().find(|u| u.item == "packet_loss").unwrap();
+        assert!(u.reason.contains("connection changed"), "{u:?}");
+
+        // No latency phase: nothing to say about it.
+        let mut p = peer(true);
+        p.latency = None;
+        let mut r = report(Some(local()), Some(p));
+        analyze(&mut r);
+        assert!(!unknown_items(&r).contains(&"packet_loss"), "{r:#?}");
     }
 
     #[test]

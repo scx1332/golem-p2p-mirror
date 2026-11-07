@@ -91,6 +91,8 @@ pub struct PathLog {
 struct Timeline {
     entries: Vec<PathEntry>,
     changes: u64,
+    /// When the selected path last changed (also beyond the kept entries).
+    last_change: Option<Instant>,
 }
 
 /// One entry of a [`PathLog`]: from `at` on, `path` was selected.
@@ -125,12 +127,14 @@ impl PathLog {
         if t.entries.last().is_some_and(|e| e.path == *path) {
             return;
         }
+        let now = Instant::now();
         if !t.entries.is_empty() {
             t.changes += 1;
+            t.last_change = Some(now);
         }
         if t.entries.len() < MAX_TIMELINE {
             t.entries.push(PathEntry {
-                at: Instant::now(),
+                at: now,
                 path: path.clone(),
             });
         }
@@ -154,6 +158,12 @@ impl PathLog {
     /// How often the selected path changed after the first one was seen.
     pub fn changes(&self) -> u64 {
         self.timeline.lock().expect("poisoned").changes
+    }
+
+    /// When the selected path last changed; `None` if it never changed
+    /// after the first one was seen.
+    pub fn last_change(&self) -> Option<Instant> {
+        self.timeline.lock().expect("poisoned").last_change
     }
 }
 

@@ -101,6 +101,26 @@ fn check_latency(l: &Value, path: &str) {
     assert!(l["jitter_ms"].as_f64().unwrap() >= 0.0);
     assert_eq!(l["final_path"], path);
     check_quic(&l["quic"]);
+    // The loss count: from the start (the path did not change on loopback),
+    // within the phase's counters.
+    let loss = &l["loss"];
+    assert_eq!(loss["from_ms"], 0.0, "{l:#}");
+    let sent = loss["sent_packets"].as_u64().unwrap();
+    assert!(
+        sent > 0 && sent <= l["quic"]["sent_packets"].as_u64().unwrap(),
+        "{l:#}"
+    );
+    assert!(loss["lost_packets"].as_u64().unwrap() <= sent, "{l:#}");
+}
+
+/// The `item`s of the report's unknowns.
+fn unknown_items(r: &Value) -> Vec<&str> {
+    r["unknowns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["item"].as_str().unwrap())
+        .collect()
 }
 
 /// Both sides relay-only: the report says "relay only" (exit code 4), all
@@ -163,14 +183,11 @@ async fn bench_relay_only() {
     // Without UDP, UDP and NAT are not tested; the relay's HTTPS latency is.
     assert!(l["net_report"].is_null(), "{l:#}");
     assert!(num(rc, "https_latency_ms") > 0.0, "{rc:#}");
-    let unknowns: Vec<_> = r["unknowns"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|u| u["item"].as_str().unwrap())
-        .collect();
+    let unknowns = unknown_items(&r);
     assert!(unknowns.contains(&"port_mapping"), "{r:#}");
     assert!(unknowns.contains(&"udp"), "{r:#}");
+    // 1.5 s of latency requests are too few packets to judge loss.
+    assert!(unknowns.contains(&"packet_loss"), "{r:#}");
 
     let p = &r["peer"];
     let c = &p["connect"];

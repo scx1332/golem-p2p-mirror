@@ -261,7 +261,7 @@ Hint codes: `qad_failed`, `hard_nat`, `hard_nat_likely`, `no_relays`,
 `idle_reconnect`, `idle_path_lost`, `packet_loss`, `jitter`,
 `latency_under_load`, `relay_fallback`. Unknown
 items: `local_network`, `port_mapping`, `udp`, `nat_mapping`, `peer_network`,
-`download_loss`. `port_mapping` is always listed with the local check:
+`packet_loss`, `download_loss`. `port_mapping` is always listed with the local check:
 golem-p2p deliberately does not use port mapping (UPnP, PCP, NAT-PMP), so
 there is nothing to measure.
 
@@ -312,7 +312,7 @@ discovery (QAD) over UDP, and with HTTPS):
 | field | type | meaning |
 |---|---|---|
 | `connect` | object | `ok`, `lookup_ms` (directory lookup), `connect_ms` (lookup and both handshakes), `handshake_ms` (`connect_ms - lookup_ms`), `path` and `remote_addr` right after connecting, `peer_endpoint`, `error_kind`, `error` |
-| `latency` | object or null | `duration_ms`, `sent`, `ok`, `failed`, `failed_pct`, `rtt_ms` {`min`, `p50`, `p95`, `max`, `mean`}, `rtt_samples`, `jitter_ms`, `direct_fraction`, `final_path` (as in `summary`), `quic` (below, during this phase) |
+| `latency` | object or null | `duration_ms`, `sent`, `ok`, `failed`, `failed_pct`, `rtt_ms` {`min`, `p50`, `p95`, `max`, `mean`}, `rtt_samples`, `jitter_ms`, `direct_fraction`, `final_path` (as in `summary`), `quic` (below, during this phase), `loss` (packet loss once the path had settled: `from_ms` (when counting started, from the start of the phase), `sent_packets`, `lost_packets`, `lost_pct`, counted like `quic`; null if the selected path changed until the end of the phase, or the connection changed; see **Packet loss**) |
 | `upload`, `download` | object or null | `ok`, `requested_bytes` (after the relay cap), `relay_capped`, `bytes`, `duration_ms`, `throughput_mbps`, `path` (at the end), `limited_by` (`size` or `time`), `error_kind` (`refused` for a listener limit), `error`, `quic` (during this phase) |
 | `concurrency` | object or null | `ok`, `streams`, `request_bytes`, `requests` (correct replies), `failed`, `unfinished` (still running at `--transfer-time`, cut off; not failures), `limited_by` (`size` or `time`), `total_bytes` (payload, each way), `duration_ms`, `throughput_mbps` (payload, each way), `rtt_ms` (of these requests), `loaded_rtt_ms` and `loaded_samples` (small requests sent meanwhile), `error_kind`, `error`, `quic` (during this phase) |
 | `idle` | object or null | `idle_ms`, `ok` (a request succeeded afterwards), `survived` (the same connection was still open), `path_before`, `path_after`, `attempts` (at most 3), `recovery_ms` (first request to first reply), `rtt_ms`, `error` |
@@ -343,10 +343,21 @@ NATs. Without a NAT on this side (`behind_nat_v4` false) a relay-only verdict
 points at the peer's network or a firewall in front of this machine, not at
 "two NATs".
 
-**Packet loss.** The `packet_loss` hint looks at the latency phase only
-(`peer.latency.quic`): it is given when at least 0.5% of the packets this
-node sent then were lost, out of at least 50 (with the defaults the phase
-sends about 110, so one lost packet is enough). The phase sends a few small
+**Packet loss.** The `packet_loss` hint looks at the latency phase only,
+and only from when the selected path had settled (`peer.latency.loss`):
+from the start of the phase, or, if the path changed shortly before or
+during it, from 1 s (or three of the shortest round trips, if longer) after
+the last change (`from_ms`). Setting up a path loses packets by design: iroh's hole punching
+sends probes that the peer's NAT drops until the hole is open, and they take
+packet numbers from the relayed path, so QUIC also declares relayed packets
+lost when a probe's acknowledgement overtakes them (campaign 2 counted 1-6
+such losses of about 120 packets on clean lab links, all within 75 ms of the
+switch to the direct path). `peer.latency.quic` still counts the whole phase.
+The hint is given when at least 0.5% of the packets this node sent in that
+window were lost, out of at least 50 (with the defaults the window holds
+about 140, so one lost packet is enough). If the path did not settle before
+the end of the phase, or fewer than 50 packets were counted, packet loss is
+listed as unknown (`packet_loss`). The phase sends a few small
 requests per second, far below what any link carries, so its losses come
 from the network (Wi-Fi, mobile, overloaded links), not from the test. In
 the transfers (`upload`, `download`, `concurrency`) QUIC's loss-based
@@ -355,10 +366,13 @@ is expected and is reported for information only (it was 2-7% on a clean
 150 Mbps path). Random loss matters because congestion control takes every
 loss as congestion: throughput falls roughly with the square root of the
 loss rate (at 0.5% and 100 ms round trip a connection gets a few Mbps), and
-in the lab 1% loss each way cut 123 Mbps to 2-26 Mbps. With only about 110
-packets the measurement is coarse: 1% random loss is flagged in about two of
-three runs, 2% in nine of ten; a longer `--latency-duration` measures it more
-precisely. Loss of packets the peer sends is not measured (`download_loss`).
+in the lab 1% loss each way cut 123 Mbps to 2-26 Mbps. With about 140
+packets the measurement is coarse: 1% random loss is flagged in about three
+of four runs, 2% in nineteen of twenty. (The default `--latency-duration`
+is 12 s for that; with 10 s and the second after hole punching left out it
+would be two of three. Beyond 200 packets one lost packet is less than 0.5%,
+so a longer phase only helps much from about 400 packets, about 30 s, on.)
+Loss of packets the peer sends is not measured (`download_loss`).
 
 ### `keygen`, `directory`
 
@@ -471,7 +485,8 @@ brackets):
 2. `connect`: directory lookup, QUIC/TLS and golem-p2p handshakes
    (`--timeout`, 10 s).
 3. `latency`: echo requests of `--payload-size` (64 B) every `--interval`
-   (200 ms) for `--latency-duration` (10 s).
+   (200 ms) for `--latency-duration` (12 s). Packet loss is counted from
+   when the selected path has settled (see **Packet loss**).
 4. `upload`, `download`: `--transfer-size` (10 MB) each, stopped at
    `--transfer-time` (8 s, from opening the stream; `limited_by: "time"`). An
    upload stopped there drops what is not delivered yet (it resets the
@@ -497,11 +512,11 @@ up, 10 MB down, 8 MB of parallel requests each way) plus 8 MB with
 `--compare-relay`.
 
 How long a run takes, with the defaults: `local` up to about 6 s (usually
-under 1.5 s); `connect` up to 10 s (usually under 1 s); `latency` 10 s, plus
+under 1.5 s); `connect` up to 10 s (usually under 1 s); `latency` 12 s, plus
 at most one `--timeout` for a request still running at its end (usually one
 round trip); `upload` at most 8 s plus up to 3 s for the listener's count;
 `download` and `concurrency` at most 8 s each. On a fast link the transfers
-finish early and a run takes about 15 s; on a slow or lossy link each
+finish early and a run takes about 17 s; on a slow or lossy link each
 transfer phase uses its 8 s and a run takes about 40 s. `--compare-relay`
 adds a second endpoint and connection (about 1 to 2 s, at most 15 s), 5 s of
 latency, and a relayed upload and download bounded the same way: about 8 s on

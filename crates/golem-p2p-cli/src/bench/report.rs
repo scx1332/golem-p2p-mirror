@@ -263,6 +263,26 @@ pub struct Latency {
     /// QUIC counters of the connection during this phase; null if the
     /// connection changed meanwhile.
     pub quic: Option<QuicStats>,
+    /// Packet loss during this phase, counted once the selected path had
+    /// settled; null if it did not settle before the end of the phase, or
+    /// the connection changed.
+    pub loss: Option<LatencyLoss>,
+}
+
+/// The packets this node sent in the latency phase and how many of them
+/// were lost, from when the selected path had settled: setting up a path
+/// (hole punching) loses probes and reorders packets by design, which QUIC
+/// counts as loss.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct LatencyLoss {
+    /// When counting started, from the start of the phase: 0, or 1 s (or
+    /// three of the shortest round trips, if longer) after the last change of
+    /// the selected path.
+    pub from_ms: f64,
+    /// As in [`QuicStats`]: without path MTU probes.
+    pub sent_packets: u64,
+    pub lost_packets: u64,
+    pub lost_pct: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -834,17 +854,26 @@ fn transfer_quic(p: &Peer) -> Option<QuicStats> {
     sum
 }
 
-/// Packet loss of the latency phase, and of the transfers for information.
+/// Packet loss of the latency phase (once the path had settled), and of the
+/// transfers for information.
 fn loss_line(p: &Peer) -> Option<String> {
     let pct = |q: &QuicStats| q.lost_pct.map(|v| (v, q.sent_packets));
     let mut v = Vec::new();
-    if let Some((l, n)) = p
-        .latency
-        .as_ref()
-        .and_then(|l| l.quic.as_ref())
-        .and_then(pct)
+    if let Some(q) = p.latency.as_ref().and_then(|l| l.loss.as_ref())
+        && let Some(l) = q.lost_pct
     {
-        v.push(format!("{l:.2}% of {n} packets while measuring latency"));
+        let from = if q.from_ms > 0.0 {
+            format!(
+                " (from {} on, after the path had settled)",
+                fmt_ms(q.from_ms)
+            )
+        } else {
+            String::new()
+        };
+        v.push(format!(
+            "{l:.2}% of {} packets while measuring latency{from}",
+            q.sent_packets
+        ));
     }
     if let Some((l, n)) = transfer_quic(p).as_ref().and_then(pct) {
         v.push(format!(
