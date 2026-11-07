@@ -1,0 +1,23 @@
+{
+ "bench_args": "--relay https://198.18.0.1,quic=7842 --directory http://198.18.0.1:8080/ --relay-ca /run/gpl/relay/relay.crt --to 0x8d85b15fe0133ec802b61dd2dc53bf8c9ca1cc09 --idle 60s",
+ "bencher": "pr2",
+ "bencher_delay": "10ms",
+ "bencher_jitter": null,
+ "bencher_loss": null,
+ "bencher_profile": "port-restricted",
+ "bencher_rate": null,
+ "bencher_udp_timeout": 120,
+ "bencher_uplink": "lab",
+ "deployed": "711a316 2026-11-07T21:35:56Z",
+ "listen_args": "--relay https://198.18.0.1,quic=7842 --directory http://198.18.0.1:8080/ --relay-ca /run/gpl/relay/relay.crt ",
+ "listener": "pr1",
+ "listener_delay": "10ms",
+ "listener_jitter": null,
+ "listener_loss": null,
+ "listener_profile": "port-restricted",
+ "listener_rate": null,
+ "listener_udp_timeout": 120,
+ "listener_uplink": "lab",
+ "run": "lab-natflush-pr-r2",
+ "to": "0x8d85b15fe0133ec802b61dd2dc53bf8c9ca1cc09"
+}
