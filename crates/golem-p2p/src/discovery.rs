@@ -146,12 +146,26 @@ impl Discovery for MultiDiscovery {
         Box::pin(async move {
             let futs = self.services.iter().map(|s| s.publish(record));
             let results = n0_future::join_all(futs).await;
+            let total = results.len();
+            let ok = results.iter().any(|r| r.is_ok());
             let mut last_err = None;
-            let mut ok = false;
-            for r in results {
-                match r {
-                    Ok(()) => ok = true,
-                    Err(e) => last_err = Some(e),
+            for (i, r) in results.into_iter().enumerate() {
+                if let Err(e) = r {
+                    // The caller learns about at most one failure, and about
+                    // none if another service accepted the record.
+                    let n = i + 1;
+                    if ok {
+                        tracing::warn!(
+                            seq = record.seq(),
+                            "publishing to discovery service {n} of {total} failed: {e}"
+                        );
+                    } else {
+                        tracing::debug!(
+                            seq = record.seq(),
+                            "publishing to discovery service {n} of {total} failed: {e}"
+                        );
+                    }
+                    last_err = Some(e);
                 }
             }
             match (ok, last_err) {
@@ -165,10 +179,14 @@ impl Discovery for MultiDiscovery {
         Box::pin(async move {
             let futs = self.services.iter().map(|s| s.lookup(id));
             let results = n0_future::join_all(futs).await;
+            let total = results.len();
             let mut best: Option<VerifiedRecord> = None;
             let mut last_err = None;
             let mut any_ok = false;
-            for r in results {
+            for (i, r) in results.into_iter().enumerate() {
+                if let Err(e) = &r {
+                    tracing::debug!(%id, "lookup in discovery service {} of {total} failed: {e}", i + 1);
+                }
                 match r {
                     Ok(Some(rec)) if rec.contains(&id) => {
                         any_ok = true;
@@ -241,15 +259,16 @@ mod http {
                 .map_err(|e| DiscoveryError::Service(e.to_string()))
         }
 
-        async fn read_limited(mut resp: reqwest::Response) -> Result<Vec<u8>, DiscoveryError> {
+        /// A service error that names this directory.
+        fn error(&self, e: impl fmt::Display) -> DiscoveryError {
+            DiscoveryError::Service(format!("directory {}: {e}", self.base))
+        }
+
+        async fn read_limited(mut resp: reqwest::Response) -> Result<Vec<u8>, String> {
             let mut body = Vec::new();
-            while let Some(chunk) = resp
-                .chunk()
-                .await
-                .map_err(|e| DiscoveryError::Service(e.to_string()))?
-            {
+            while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
                 if body.len() + chunk.len() > MAX_RECORD_SIZE {
-                    return Err(DiscoveryError::Service("response too large".into()));
+                    return Err("response too large".into());
                 }
                 body.extend_from_slice(&chunk);
             }
@@ -270,13 +289,12 @@ mod http {
                     .body(record.to_bytes().to_vec())
                     .send()
                     .await
+                    // reqwest's error names the URL already.
                     .map_err(|e| DiscoveryError::Service(e.to_string()))?;
                 match resp.status().as_u16() {
                     200..=299 => Ok(()),
                     409 => Err(DiscoveryError::Stale),
-                    s => Err(DiscoveryError::Service(format!(
-                        "publish failed with HTTP {s}"
-                    ))),
+                    s => Err(self.error(format!("publish failed with HTTP {s}"))),
                 }
             })
         }
@@ -291,22 +309,19 @@ mod http {
                     .get(self.url(&format!("v1/records/{id}"))?)
                     .send()
                     .await
+                    // reqwest's error names the URL already.
                     .map_err(|e| DiscoveryError::Service(e.to_string()))?;
                 match resp.status().as_u16() {
                     404 => Ok(None),
                     200 => {
-                        let body = Self::read_limited(resp).await?;
+                        let body = Self::read_limited(resp).await.map_err(|e| self.error(e))?;
                         let rec = VerifiedRecord::verify(&body)?;
                         if !rec.contains(&id) {
-                            return Err(DiscoveryError::Service(
-                                "directory returned a record for another identity".into(),
-                            ));
+                            return Err(self.error("returned a record for another identity"));
                         }
                         Ok(Some(rec))
                     }
-                    s => Err(DiscoveryError::Service(format!(
-                        "lookup failed with HTTP {s}"
-                    ))),
+                    s => Err(self.error(format!("lookup failed with HTTP {s}"))),
                 }
             })
         }
