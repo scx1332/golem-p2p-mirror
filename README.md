@@ -64,7 +64,7 @@ What the tests cover:
 
 | test file | scenarios |
 |---|---|
-| `connectivity.rs` | direct connection; relay-only connection (no UDP, path checked); relay-assisted connection becoming direct; two relays with each node homed on a different one (via HTTP directory); a relay going down while another stays up; concurrent requests to a new peer share one lookup and one dial, and to a dead peer fail together after one connect timeout; the request timeout covers waiting for a stream when the peer keeps all its streams busy; an address change while `bind` publishes the first record is not lost; `max_response_size`; a request the handler drops unanswered fails with `NOT_ANSWERED` |
+| `connectivity.rs` | direct connection; relay-only connection (no UDP, path checked); relay-assisted connection becoming direct; two relays with each node homed on a different one (via HTTP directory); a relay going down while another stays up; concurrent requests to a new peer share one lookup and one dial, and to a dead peer fail together after one connect timeout; the request timeout covers waiting for a stream when the peer keeps all its streams busy; a request whose handler is too slow times out alone (its stream is reset with `TIMED_OUT`, concurrent requests succeed, the connection stays open); a peer that hangs is noticed within one request timeout (connection closed, redialed once it recovers); a request cancelled while it is being sent reaches the handler as a reset (`CANCELLED`), never truncated; an address change while `bind` publishes the first record is not lost; `max_response_size`; a request the handler drops unanswered fails with `NOT_ANSWERED` |
 | `identity_changes.rs` | default switch with and without restart; A to B to A with and without restart; alias added and removed at runtime; locked key blocks updates; restart with a persisted endpoint key; a failed re-sign (locked key) and a failed publish (directory down) are retried |
 | `security.rs` | forged record from a directory; stale record replay; record listing an identity that did not sign it; valid record presented over another endpoint's connection (both directions); spoofed stream sender and receiver; new instance superseding a live old connection; duplicate record updates paced |
 | `encryption.rs` | peers offering another ALPN refused in the TLS handshake; a relay (plain HTTP behind a recording TLS-terminating proxy) sees endpoint IDs but neither a plaintext marker nor the Ethereum identities; non-https relay URLs rejected by the builder; a signed record with an `http://` relay refused and never dialed |
@@ -72,7 +72,7 @@ What the tests cover:
 | `relay_url.rs` (CLI) | `http://` and other non-https relay URLs rejected on the command line |
 | `probe.rs` (CLI) | `--json` output of `listen`, `probe` and `send` as child processes: relay-only probe with bulk transfer (every line parses, common fields, summary consistent with the replies, listener saw every request and the bulk bytes over the relay); probe that ends on a direct path with `time_to_direct_ms`; unknown node fails with exit code 1; SIGTERM ends a probe with a summary; a bulk upload above the listener's `--max-transfer-size` is refused (exit code 3, cause `refused`), one within it works; an echo request that is never finished is refused after 10 s; `keygen`/`directory` with `--json`, error event and exit code |
 | `relay_quic.rs` (CLI) | the relay's QUIC address discovery port (`--relay-quic-port`, per relay `,quic=PORT`, `off`) reaches iroh: a local relay with QAD on a random port sees QAD connections; invalid ports rejected |
-| `bench.rs` (CLI) | `bench --json` against a local listener: relay-only (exit code 4, every phase over the relay, transfers capped for the relay, the listener saw the upload and download) and normal (exit code 0, QAD answers, direct path, `--compare-relay` over the relay, `--idle`); the listener's limits (too large and busy refused cleanly with exit code 5, exactly the limit works); local check only, healthy and with an untrusted relay certificate; unknown node (exit code 3); SIGTERM ends a bench with a report; invalid arguments |
+| `bench.rs` (CLI) | `bench --json` against a local listener: relay-only (exit code 4, every phase over the relay, transfers capped for the relay, the listener saw the upload and download) and normal (exit code 0, QAD answers, direct path, `--compare-relay` over the relay, `--idle`); the listener's limits (too large and busy refused cleanly with exit code 5, exactly the limit works); uploads, downloads and parallel requests end at `--transfer-time` (a stopped upload is still counted by the listener, cut-off requests are not failures); local check only, healthy and with an untrusted relay certificate; unknown node (exit code 3); SIGTERM ends a bench with a report; invalid arguments |
 | unit tests | yagna/ethsign compatibility vectors, record verification (including https-only relay URLs, and records of older nodes that list Docker addresses), record store rules and bounds, published addresses (container and VM bridges left out, LAN and VPN kept, ranking before the cap, IPv6); CLI: argument parsers, timestamps, percentiles, jitter, refusals, the bench verdict rules |
 
 ## Trying it between two machines
@@ -202,10 +202,16 @@ download (10 MB each or 8 s); concurrency (8 streams of 256 KiB requests, 8 MB,
 plus the round trip of small requests meanwhile); with `--compare-relay` the
 same over a relay-only connection, i.e. what you get if hole punching fails;
 with `--idle 60s` whether the connection survives a minute without traffic.
-QUIC packet loss of the connection is reported too. Transfers through a relay
+QUIC packet loss is reported per phase; only loss while measuring latency
+(when the connection is nearly idle) counts as a problem of the network, as
+the transfers lose packets by design while congestion control probes for the
+link's capacity. Transfers through a relay
 are capped at `--relay-transfer-size` (4 MB) to spare shared relays. With the
 defaults a run moves at most about 36 MB (44 MB with `--compare-relay`) and
-takes about 30 to 60 s. See `golem-p2p bench --help` for all options.
+takes about 15 s on a fast link and about 40 s on a slow one, where every
+transfer phase stops at its time limit (`--compare-relay` adds about 8 to 30
+s; details in [docs/cli-events.md](docs/cli-events.md)). See
+`golem-p2p bench --help` for all options.
 
 The report ends with a verdict, for example:
 
@@ -213,11 +219,22 @@ The report ends with a verdict, for example:
 Verdict: RELAY ONLY (exit code 4)
   Connected to 0x1234...abcd, but only through a relay
     (https://relay.example:3341/): 75 ms round trip, 22.0 Mbps up, 20.1 Mbps
-    down. UDP seems to be blocked on your network (no relay answered over UDP),
-    so all traffic goes through a relay. Ask your network admin to allow
-    outgoing UDP.
+    down. No relay answered QUIC address discovery (UDP port 3342, as
+    configured), although they answer over HTTPS, and no direct path to the
+    peer was found: outgoing UDP is probably blocked on your network, so all
+    traffic goes through a relay; ask your network admin to allow outgoing
+    UDP. (Or the relay does not serve address discovery on port 3342: check
+    ,quic=PORT.)
   Not measured: the peer's NAT and firewall cannot be seen from this side
 ```
+
+When no relay answers QUIC address discovery on iroh's default port 7842
+(no `,quic=PORT` given), the verdict names both possibilities: blocked UDP,
+or a relay that serves address discovery on another port. A direct path to
+the peer proves that UDP works (hint `qad_failed`). With one relay the bench
+cannot measure whether the NAT changes the port per destination, but when
+the connection stays relayed and the NAT did not keep the local port, the
+verdict names a likely symmetric (hard) NAT on this side.
 
 Every statement in the verdict is based on something measured in this run;
 `Problem:` lines are what made the result not healthy, `Hint:` lines are

@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
-    listen::{REFUSED, SINK_MAGIC, SOURCE_MAGIC},
+    listen::{REFUSED, SINK_MAGIC, SOURCE_MAGIC, UPLOAD_STOPPED},
     observe::{PathLog, connection_to, path_to},
     out::{Out, anyhow_kind, ms, path_name, round3},
 };
@@ -460,14 +460,20 @@ pub struct Transfer {
     pub by_time: bool,
 }
 
+/// After an upload was stopped at its time limit, how long to wait for the
+/// listener's count of what arrived.
+pub const COUNT_WAIT: Duration = Duration::from_secs(3);
+
 /// Megabits (10^6 bits) per second.
 pub fn mbps(bytes: u64, elapsed: Duration) -> f64 {
     bytes as f64 * 8.0 / elapsed.as_secs_f64().max(1e-9) / 1e6
 }
 
 /// Uploads up to `max_bytes` to the listener's sink in one stream and waits
-/// for its count. With `max_time`, stops writing after that long (the
-/// listener still counts what arrived).
+/// for its count. With `max_time`, the upload ends then: whatever is not yet
+/// delivered is dropped (the stream is reset with [`UPLOAD_STOPPED`]), and
+/// the listener reports what arrived until then (waiting at most
+/// [`COUNT_WAIT`] more for that).
 pub async fn upload(
     ep: &Endpoint,
     to: NodeId,
@@ -475,33 +481,62 @@ pub async fn upload(
     max_time: Option<Duration>,
 ) -> anyhow::Result<Transfer> {
     let start = Instant::now();
-    let deadline = max_time.map(|t| start + t);
+    let deadline = max_time.map(|t| tokio::time::Instant::from_std(start + t));
     let (mut send, mut recv) = ep.open_bi(to).await?;
     let mut sent = 0u64;
-    let mut by_time = false;
     let write = async {
         send.write_all(SINK_MAGIC).await?;
         let chunk = vec![0u8; 64 * 1024];
         while sent < max_bytes {
-            if deadline.is_some_and(|d| Instant::now() >= d) {
-                by_time = true;
-                break;
-            }
             let n = (max_bytes - sent).min(chunk.len() as u64) as usize;
-            send.write_all(&chunk[..n]).await?;
-            sent += n as u64;
+            // `write`, not `write_all`: cut off by the time limit, `sent`
+            // must still be exactly what the stream took.
+            sent += send.write(&chunk[..n]).await? as u64;
         }
         send.finish()?;
         Ok::<_, anyhow::Error>(())
-    }
-    .await;
-    // Read the reply also if writing failed: a refusal says why.
-    let reply = match write {
-        Ok(()) => recv.read_to_end(4096).await?,
-        Err(e) => {
+    };
+    // `None`: the time limit ended the upload.
+    let written = match deadline {
+        Some(d) => tokio::time::timeout_at(d, write).await.ok(),
+        None => Some(write.await),
+    };
+    let reply = match written {
+        // Everything written: the listener's count, unless the time limit
+        // comes first.
+        Some(Ok(())) => {
+            let count = match deadline {
+                Some(d) => tokio::time::timeout_at(d, recv.read_to_end(4096))
+                    .await
+                    .ok(),
+                None => Some(recv.read_to_end(4096).await),
+            };
+            match count {
+                Some(r) => Some(r?),
+                None => None,
+            }
+        }
+        // Read the reply also if writing failed: a refusal says why.
+        Some(Err(e)) => {
             match tokio::time::timeout(Duration::from_secs(5), recv.read_to_end(4096)).await {
-                Ok(Ok(r)) if r.starts_with(b"refused") => r,
+                Ok(Ok(r)) if r.starts_with(b"refused") => Some(r),
                 _ => return Err(e),
+            }
+        }
+        None => None,
+    };
+    let by_time = reply.is_none();
+    let reply = match reply {
+        Some(r) => r,
+        None => {
+            let _ = send.reset(UPLOAD_STOPPED);
+            match tokio::time::timeout(COUNT_WAIT, recv.read_to_end(4096)).await {
+                Ok(r) => r?,
+                Err(_) => bail!(
+                    "stopped the upload at the time limit, but the listener did not report what \
+                     it received within {} s",
+                    COUNT_WAIT.as_secs()
+                ),
             }
         }
     };
@@ -513,23 +548,32 @@ pub async fn upload(
     let got: u64 = reply
         .split_whitespace()
         .find_map(|kv| kv.strip_prefix("sink_bytes="))
-        .context("listener does not support bulk transfers")?
+        .with_context(|| {
+            if by_time {
+                "the listener did not report what it received after the upload was stopped at \
+                 the time limit (an older golem-p2p listener?)"
+            } else {
+                "listener does not support bulk transfers"
+            }
+        })?
         .parse()
         .context("invalid sink reply")?;
-    if got != sent {
+    // Stopped early, the listener got what arrived before the reset.
+    if got > sent || (!by_time && got != sent) {
         bail!("listener received {got} of {sent} bytes");
     }
     Ok(Transfer {
-        bytes: sent,
+        bytes: got,
         elapsed,
-        mbps: mbps(sent, elapsed),
+        mbps: mbps(got, elapsed),
         path: path_to(ep, to),
         by_time,
     })
 }
 
 /// Downloads up to `max_bytes` from the listener's source in one stream.
-/// With `max_time`, stops reading after that long.
+/// With `max_time`, stops reading after that long (also if the download has
+/// not started by then: an error).
 pub async fn download(
     ep: &Endpoint,
     to: NodeId,
@@ -543,7 +587,15 @@ pub async fn download(
     req.extend_from_slice(format!("{max_bytes}\n").as_bytes());
     send.write_all(&req).await?;
     send.finish()?;
-    let (status, rest) = read_status_line(&mut recv).await?;
+    let (status, rest) = match deadline {
+        Some(d) => tokio::time::timeout_at(d, read_status_line(&mut recv))
+            .await
+            .map_err(|_| {
+                anyhow::Error::from(golem_p2p::Error::Timeout)
+                    .context("the download did not start within the time limit")
+            })??,
+        None => read_status_line(&mut recv).await?,
+    };
     if let Some(r) = Refused::parse(&status) {
         return Err(r.into());
     }

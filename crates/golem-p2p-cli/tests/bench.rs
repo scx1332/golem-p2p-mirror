@@ -79,6 +79,15 @@ fn check_transfer(t: &Value, bytes: u64, path: &str) {
     assert_eq!(t["limited_by"], "size", "{t:#}");
     assert!(num(t, "throughput_mbps") > 0.0 && num(t, "duration_ms") > 0.0);
     assert!(t["error"].is_null());
+    check_quic(&t["quic"]);
+}
+
+/// Checks the QUIC counters of a phase: present, and loss consistent.
+fn check_quic(q: &Value) {
+    let sent = q["sent_packets"].as_u64().unwrap();
+    let lost = q["lost_packets"].as_u64().unwrap();
+    assert!(sent > 0 && lost <= sent, "{q:#}");
+    assert!(num(q, "lost_pct") >= 0.0, "{q:#}");
 }
 
 /// Checks the latency section: every request answered, sane statistics.
@@ -91,6 +100,7 @@ fn check_latency(l: &Value, path: &str) {
     assert!(0.0 < min && min <= p50 && p50 <= p95 && p95 <= max, "{r}");
     assert!(l["jitter_ms"].as_f64().unwrap() >= 0.0);
     assert_eq!(l["final_path"], path);
+    check_quic(&l["quic"]);
 }
 
 /// Both sides relay-only: the report says "relay only" (exit code 4), all
@@ -141,6 +151,7 @@ async fn bench_relay_only() {
     assert_eq!(rc["ok"], true, "{rc:#}");
     assert_eq!(rc["http_status"], 200);
     assert_eq!(rc["quic_port"].as_u64(), Some(infra.quic_port as u64));
+    assert_eq!(rc["quic_port_explicit"], true, "{rc:#}");
     assert!(num(rc, "tcp_ms") > 0.0 && num(rc, "tls_ms") > 0.0 && num(rc, "http_ms") > 0.0);
     assert!(rc["dns_ms"].is_null(), "an IP address needs no DNS: {rc:#}");
     assert_eq!(l["directories"][0]["own_record"], "published");
@@ -309,6 +320,7 @@ async fn bench_direct_with_relay_compare_and_idle() {
     let p = &r["peer"];
     check_latency(&p["latency"], "direct");
     assert_eq!(p["path"]["final_path"], "direct");
+    assert!(p["connection_lost"].is_null(), "{p:#}");
     assert!(num(&p["path"], "time_to_direct_ms") >= 0.0);
     for dir in ["upload", "download"] {
         check_transfer(&p[dir], 3_000_000, "direct");
@@ -369,6 +381,66 @@ async fn bench_direct_with_relay_compare_and_idle() {
         reply_phases.into_iter().collect::<Vec<_>>(),
         ["idle", "latency", "relay_latency"]
     );
+}
+
+/// Uploads, downloads and the concurrency phase end at `--transfer-time`. An
+/// upload stopped there reports what the listener received (the listener
+/// answers a stopped upload with its count), a download what arrived; the
+/// concurrency phase cuts off the requests still running, which are not
+/// failures.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phases_end_at_the_time_limit() {
+    let infra = Infra::start("bench-time-limit").await;
+    let (mut lis, lis_id) = listener(&infra, "lis", &[]).await;
+    let a = strs([
+        "--to",
+        &lis_id,
+        "--skip",
+        "local,latency",
+        "--transfer-size",
+        "90M",
+        "--transfer-time",
+        "200ms",
+        "--streams",
+        "16",
+        "--concurrency-size",
+        "1G",
+    ]);
+    let (code, r, evs) = bench(&bench_args(&infra, &a)).await;
+    assert_eq!(code, Some(0), "{r:#}");
+    let p = &r["peer"];
+    for dir in ["upload", "download"] {
+        let t = &p[dir];
+        assert_eq!(
+            (&t["ok"], &t["limited_by"]),
+            (&true.into(), &"time".into()),
+            "{t:#}"
+        );
+        let bytes = t["bytes"].as_u64().unwrap();
+        assert!(bytes > 0 && bytes < 90_000_000, "{t:#}");
+        assert!(num(t, "throughput_mbps") > 0.0, "{t:#}");
+    }
+    let v = lis
+        .wait_for(30, "the stopped upload", |v| {
+            v["event"] == "request" && v["kind"] == "sink"
+        })
+        .await;
+    assert!(v["refused"].is_null(), "{v}");
+    assert_eq!(v["bytes"], p["upload"]["bytes"], "{v}");
+
+    let c = &p["concurrency"];
+    assert_eq!((&c["ok"], &c["failed"]), (&true.into(), &0.into()), "{c:#}");
+    assert_eq!(c["limited_by"], "time", "{c:#}");
+    assert!(c["unfinished"].as_u64().unwrap() <= 16, "{c:#}");
+    assert!(r["issues"].as_array().unwrap().is_empty(), "{r:#}");
+
+    // Each phase took about the time limit, not the time limit plus a
+    // request timeout (10 s).
+    for e in events(&evs, "bench_phase") {
+        if ["upload", "download", "concurrency"].contains(&e["phase"].as_str().unwrap()) {
+            assert!(num(e, "duration_ms") < 3000.0, "{e}");
+        }
+    }
 }
 
 /// The listener's limits: uploads and downloads beyond `--max-transfer-size`

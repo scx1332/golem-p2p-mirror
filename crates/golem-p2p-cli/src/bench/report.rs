@@ -160,6 +160,9 @@ pub struct RelayCheck {
     pub url: String,
     /// QUIC address discovery port; null if off.
     pub quic_port: Option<u16>,
+    /// The QAD setting was given (`,quic=` or `--relay-quic-port`); false
+    /// for iroh's default port.
+    pub quic_port_explicit: bool,
     /// DNS, TCP, TLS (certificate verified) and `GET /ping` all succeeded.
     pub ok: bool,
     /// The address connected to.
@@ -203,6 +206,27 @@ pub struct Peer {
     pub idle: Option<Idle>,
     pub path: PathReport,
     pub quic: Option<QuicStats>,
+    /// The connection made in the connect phase closed before the end of
+    /// the run; null if it stayed open.
+    pub connection_lost: Option<ConnectionLost>,
+}
+
+/// When and why the bench's connection to the peer closed during the run.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ConnectionLost {
+    /// Since the start of connecting.
+    pub t_ms: f64,
+    /// The phase that was running: `latency`, `upload`, `download`,
+    /// `concurrency`, `relay_compare` or `idle`.
+    pub phase: &'static str,
+    /// `closed_here` (this node closed it, usually because a request got no
+    /// answer and nothing at all arrived from the peer during the request
+    /// timeout), `idle_timeout` (nothing arrived from the peer for QUIC's
+    /// idle timeout), `closed_by_peer`, `reset` (the peer no longer knew the
+    /// connection, e.g. it restarted) or `error`.
+    pub cause: &'static str,
+    /// QUIC's close reason.
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -236,6 +260,9 @@ pub struct Latency {
     /// Fraction of correct replies that came over a direct path.
     pub direct_fraction: Option<f64>,
     pub final_path: &'static str,
+    /// QUIC counters of the connection during this phase; null if the
+    /// connection changed meanwhile.
+    pub quic: Option<QuicStats>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -253,6 +280,8 @@ pub struct TransferReport {
     pub limited_by: Option<&'static str>,
     pub error_kind: Option<&'static str>,
     pub error: Option<String>,
+    /// QUIC counters of the connection during this phase.
+    pub quic: Option<QuicStats>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -262,6 +291,11 @@ pub struct Concurrency {
     pub request_bytes: usize,
     pub requests: u64,
     pub failed: u64,
+    /// Requests still running at the time limit, cut off (not failures).
+    pub unfinished: u64,
+    /// `size` (`--concurrency-size` sent) or `time` (`--transfer-time`
+    /// reached first).
+    pub limited_by: &'static str,
     /// Payload bytes of the correct replies; each went both ways.
     pub total_bytes: u64,
     pub duration_ms: f64,
@@ -273,6 +307,8 @@ pub struct Concurrency {
     pub loaded_samples: usize,
     pub error_kind: Option<&'static str>,
     pub error: Option<String>,
+    /// QUIC counters of the connection during this phase.
+    pub quic: Option<QuicStats>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -309,11 +345,15 @@ pub struct PathPoint {
     pub remote_addr: Option<String>,
 }
 
-/// QUIC counters of the connection (this side's view).
+/// QUIC counters of the connection (this side's view), for the whole run or
+/// one phase.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct QuicStats {
+    /// Packets this node sent, without path MTU probes.
     pub sent_packets: u64,
-    /// Packets this node sent that were declared lost (and resent).
+    /// Packets this node sent that were declared lost (and resent), without
+    /// path MTU probes: those are lost by design when they are larger than
+    /// the path allows.
     pub lost_packets: u64,
     pub lost_pct: Option<f64>,
     pub sent_bytes: u64,
@@ -574,6 +614,18 @@ impl Report {
                 ));
                 line(s, "path", v.join("; "));
             }
+            if let Some(c) = &p.connection_lost {
+                line(
+                    s,
+                    "connection",
+                    format!(
+                        "LOST after {} (during the {} phase): {}",
+                        fmt_ms(c.t_ms),
+                        c.phase.replace('_', " "),
+                        c.reason
+                    ),
+                );
+            }
             if let Some(t) = &p.upload {
                 line(s, "upload", transfer_line(t));
             }
@@ -583,6 +635,14 @@ impl Report {
             if let Some(c) = &p.concurrency {
                 let v = if c.requests == 0 && !c.ok {
                     format!("FAILED: {}", c.error.as_deref().unwrap_or("?"))
+                } else if c.requests == 0 {
+                    format!(
+                        "{} streams: none of the requests of {} finished within {} (the time \
+                         limit)",
+                        c.streams,
+                        fmt_bytes(c.request_bytes as u64),
+                        fmt_ms(c.duration_ms)
+                    )
                 } else {
                     let mut v = format!(
                         "{} streams: {} requests of {} ({} each way) in {}: {}",
@@ -596,6 +656,9 @@ impl Report {
                     if c.failed > 0 {
                         let _ = write!(v, ", {} FAILED", c.failed);
                     }
+                    if c.unfinished > 0 {
+                        let _ = write!(v, ", {} cut off at the time limit", c.unfinished);
+                    }
                     if let Some(m) = c.loaded_rtt_ms.p50 {
                         let _ = write!(v, "; small requests meanwhile: median {}", fmt_ms(m));
                     }
@@ -603,17 +666,8 @@ impl Report {
                 };
                 line(s, "parallel", v);
             }
-            if let Some(q) = &p.quic
-                && let Some(pct) = q.lost_pct
-            {
-                line(
-                    s,
-                    "packet loss",
-                    format!(
-                        "{pct:.2}% of {} packets this node sent (QUIC resent them)",
-                        q.sent_packets
-                    ),
-                );
+            if let Some(v) = loss_line(p) {
+                line(s, "packet loss", v);
             }
             if let Some(i) = &p.idle {
                 let v = if i.ok {
@@ -755,6 +809,53 @@ fn write_latency(s: &mut String, l: &Latency, line: &impl Fn(&mut String, &str, 
         v += &format!("; jitter {}", fmt_ms(j));
     }
     line(s, "latency", v);
+}
+
+/// The QUIC counters of the upload, download and concurrency phases added
+/// up; `None` if none of them has counters.
+fn transfer_quic(p: &Peer) -> Option<QuicStats> {
+    let phases = [
+        p.upload.as_ref().and_then(|t| t.quic.as_ref()),
+        p.download.as_ref().and_then(|t| t.quic.as_ref()),
+        p.concurrency.as_ref().and_then(|c| c.quic.as_ref()),
+    ];
+    let mut sum: Option<QuicStats> = None;
+    for q in phases.into_iter().flatten() {
+        let s = sum.get_or_insert_with(QuicStats::default);
+        s.sent_packets += q.sent_packets;
+        s.lost_packets += q.lost_packets;
+        s.sent_bytes += q.sent_bytes;
+        s.received_bytes += q.received_bytes;
+    }
+    if let Some(s) = &mut sum {
+        s.lost_pct = (s.sent_packets > 0)
+            .then(|| crate::out::round3(s.lost_packets as f64 * 100.0 / s.sent_packets as f64));
+    }
+    sum
+}
+
+/// Packet loss of the latency phase, and of the transfers for information.
+fn loss_line(p: &Peer) -> Option<String> {
+    let pct = |q: &QuicStats| q.lost_pct.map(|v| (v, q.sent_packets));
+    let mut v = Vec::new();
+    if let Some((l, n)) = p
+        .latency
+        .as_ref()
+        .and_then(|l| l.quic.as_ref())
+        .and_then(pct)
+    {
+        v.push(format!("{l:.2}% of {n} packets while measuring latency"));
+    }
+    if let Some((l, n)) = transfer_quic(p).as_ref().and_then(pct) {
+        v.push(format!(
+            "{l:.2}% of {n} in the transfers (congestion control loses some there by design)"
+        ));
+    }
+    if v.is_empty() {
+        let (l, n) = p.quic.as_ref().and_then(pct)?;
+        v.push(format!("{l:.2}% of {n} packets"));
+    }
+    Some(format!("{}; this node's packets only", v.join("; ")))
 }
 
 fn transfer_line(t: &TransferReport) -> String {

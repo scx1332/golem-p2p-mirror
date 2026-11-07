@@ -15,7 +15,7 @@ use std::{
     collections::HashMap,
     process::ExitCode,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -30,8 +30,8 @@ use golem_p2p::{
 use serde::Serialize;
 
 use self::report::{
-    Concurrency, Connect, Idle, Latency, PathPoint, PathReport, Peer, QuicStats, RelayCompare,
-    Report, Settings, Status, TransferReport,
+    Concurrency, Connect, ConnectionLost, Idle, Latency, PathPoint, PathReport, Peer, QuicStats,
+    RelayCompare, Report, Settings, Status, TransferReport,
 };
 use crate::{
     Node, NodeArgs, listen,
@@ -328,6 +328,7 @@ pub async fn run(args: BenchArgs, out: &Out) -> anyhow::Result<ExitCode> {
             out,
             progress: &progress,
             payload_size,
+            phase: Arc::new(Mutex::new("connect")),
         };
         let (peer, relay_compare, interrupted) = bench.run(log, &discovery, &stop).await;
         report.peer = Some(peer);
@@ -354,9 +355,15 @@ struct PeerBench<'a> {
     out: &'a Out,
     progress: &'a Progress,
     payload_size: usize,
+    /// The phase that is running, to tell when a connection was lost.
+    phase: Arc<Mutex<&'static str>>,
 }
 
 impl PeerBench<'_> {
+    fn enter(&self, phase: &'static str) {
+        *self.phase.lock().expect("poisoned") = phase;
+    }
+
     /// Runs the phases of part B. Returns the peer section, the relay-only
     /// comparison, and whether a signal ended the run early.
     async fn run<F: Future<Output = ()>>(
@@ -382,6 +389,7 @@ impl PeerBench<'_> {
             idle: None,
             path: PathReport::default(),
             quic: None,
+            connection_lost: None,
         };
         let Some((connect, conn)) = connect else {
             peer.connect = Connect {
@@ -397,18 +405,31 @@ impl PeerBench<'_> {
         let mut relay_compare = None;
         let mut interrupted = false;
         if let Some(conn) = conn {
-            let base = conn.iroh_connection().stats();
-            interrupted = self.phases(&mut peer, &mut relay_compare, log, stop).await;
-            // QUIC counters of the connection: since connecting if it is
-            // still the same one, else of the current one.
-            peer.quic = connection_to(ep, to).map(|c| {
-                let now = c.iroh_connection().stats();
-                if c.stable_id() == conn.stable_id() {
-                    quic_stats(&now, Some(&base))
-                } else {
-                    quic_stats(&now, None)
+            let base = QuicSnapshot::of(&conn);
+            let lost = Arc::new(OnceLock::new());
+            let watch = tokio::spawn({
+                let (conn, phase, lost) = (conn.clone(), self.phase.clone(), lost.clone());
+                async move {
+                    conn.closed().await;
+                    let phase = *phase.lock().expect("poisoned");
+                    let _ = lost.set((Instant::now(), phase));
                 }
             });
+            interrupted = self.phases(&mut peer, &mut relay_compare, log, stop).await;
+            watch.abort();
+            // QUIC counters of the connection: since connecting if it is
+            // still the same one, else of the current one.
+            peer.quic = QuicSnapshot::to(ep, to)
+                .map(|now| now.since((now.conn == base.conn).then_some(&base)));
+            if let Some(reason) = conn.iroh_connection().close_reason() {
+                let (at, phase) = lost.get().copied().unwrap_or((Instant::now(), "unknown"));
+                peer.connection_lost = Some(ConnectionLost {
+                    t_ms: ms(at.saturating_duration_since(t0)),
+                    phase,
+                    cause: close_cause(&reason),
+                    reason: reason.to_string(),
+                });
+            }
         }
         peer.path = path_report(ep, to, log, t0);
         (peer, relay_compare, interrupted)
@@ -426,12 +447,14 @@ impl PeerBench<'_> {
         let (ep, to, out) = (self.ep, self.to, self.out);
 
         if args.runs(Phase::Latency) {
+            self.enter("latency");
             self.progress.say(format!(
                 "Measuring latency for {} (one request every {})...",
                 fmt_dur(args.latency_duration),
                 fmt_dur(args.interval)
             ));
             let t = Instant::now();
+            let before = QuicSnapshot::to(ep, to);
             let mut pinger = Pinger::new(ep, to, out, log.clone()).with_phase("latency");
             let interrupted = probe::ping_series(
                 &mut pinger,
@@ -443,7 +466,8 @@ impl PeerBench<'_> {
                 |_, _| {},
             )
             .await;
-            let l = latency(&pinger, self.payload_size);
+            let mut l = latency(&pinger, self.payload_size);
+            l.quic = phase_quic(ep, to, before.as_ref());
             phase_event(out, "latency", l.failed == 0, t.elapsed(), &l);
             peer.latency = Some(l);
             if interrupted {
@@ -455,6 +479,7 @@ impl PeerBench<'_> {
             if !args.runs(phase) {
                 continue;
             }
+            self.enter(phase.name());
             let t = Instant::now();
             let r = self.transfer(ep, is_upload, args.transfer_size);
             let Some(r) = unless_stopped(r, stop).await else {
@@ -469,6 +494,7 @@ impl PeerBench<'_> {
         }
 
         if args.runs(Phase::Concurrency) && args.streams > 0 && args.concurrency_size > 0 {
+            self.enter("concurrency");
             let t = Instant::now();
             let Some(c) = unless_stopped(self.concurrency(), stop).await else {
                 return true;
@@ -478,6 +504,7 @@ impl PeerBench<'_> {
         }
 
         if args.compare_relay {
+            self.enter("relay_compare");
             let t = Instant::now();
             let Some(rc) = unless_stopped(self.relay_compare(stop), stop).await else {
                 return true;
@@ -487,6 +514,7 @@ impl PeerBench<'_> {
         }
 
         if let Some(d) = args.idle {
+            self.enter("idle");
             let t = Instant::now();
             let Some(i) = unless_stopped(self.idle(d, log), stop).await else {
                 return true;
@@ -518,7 +546,10 @@ impl PeerBench<'_> {
             report::fmt_bytes(size),
             fmt_dur(args.transfer_time)
         ));
-        let limit = args.transfer_time + args.timeout;
+        // A safety net: the transfers end at the time limit themselves (an
+        // upload then waits a little for the listener's count).
+        let limit = args.transfer_time + probe::COUNT_WAIT + Duration::from_secs(1);
+        let before = QuicSnapshot::to(ep, self.to);
         let run = async {
             if is_upload {
                 probe::upload(ep, self.to, size, Some(args.transfer_time)).await
@@ -529,7 +560,9 @@ impl PeerBench<'_> {
         let result = tokio::time::timeout(limit, run)
             .await
             .unwrap_or_else(|_| Err(golem_p2p::Error::Timeout.into()));
-        transfer_report(size, capped, result)
+        let mut r = transfer_report(size, capped, result);
+        r.quic = phase_quic(ep, self.to, before.as_ref());
+        r
     }
 
     /// `--streams` parallel workers sending echo requests of 256 KiB until
@@ -551,15 +584,18 @@ impl PeerBench<'_> {
             args.streams,
             fmt_dur(args.transfer_time)
         ));
+        let before = QuicSnapshot::to(ep, to);
         let start = Instant::now();
-        let deadline = start + args.transfer_time;
+        let deadline = tokio::time::Instant::from_std(start + args.transfer_time);
         let reserved = AtomicU64::new(0);
         let seq = AtomicU64::new(0);
         let done = AtomicBool::new(false);
-        let results = Mutex::new((Vec::new(), 0u64, None::<anyhow::Error>));
+        let by_time = AtomicBool::new(false);
+        let results = Mutex::new(Requests::default());
         let worker = || async {
             loop {
-                if Instant::now() >= deadline {
+                if tokio::time::Instant::now() >= deadline {
+                    by_time.store(true, Ordering::Relaxed);
                     break;
                 }
                 if reserved.fetch_add(size as u64, Ordering::Relaxed) + size as u64 > budget {
@@ -567,18 +603,25 @@ impl PeerBench<'_> {
                 }
                 let payload = probe::payload(seq.fetch_add(1, Ordering::Relaxed) + 1, size);
                 let t = Instant::now();
-                let r = ep.request(to, &payload).await;
+                // A request still running at the time limit is cut off: the
+                // phase ends there, and that is not a failure.
+                let r = tokio::time::timeout_at(deadline, ep.request(to, &payload)).await;
                 let mut res = results.lock().expect("poisoned");
                 match r {
-                    Ok(reply) if reply.ends_with(&payload) => res.0.push(t.elapsed()),
-                    Ok(_) => {
-                        res.1 += 1;
-                        res.2
+                    Err(_) => {
+                        res.unfinished += 1;
+                        by_time.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                    Ok(Ok(reply)) if reply.ends_with(&payload) => res.rtts.push(t.elapsed()),
+                    Ok(Ok(_)) => {
+                        res.failed += 1;
+                        res.error
                             .get_or_insert_with(|| anyhow::anyhow!("unexpected reply"));
                     }
-                    Err(e) => {
-                        res.1 += 1;
-                        res.2.get_or_insert(e.into());
+                    Ok(Err(e)) => {
+                        res.failed += 1;
+                        res.error.get_or_insert(e.into());
                     }
                 }
             }
@@ -613,14 +656,21 @@ impl PeerBench<'_> {
         };
         let ((), small) = tokio::join!(workers, small);
         let elapsed = start.elapsed();
-        let (rtts, failed, error) = results.into_inner().expect("poisoned");
+        let Requests {
+            rtts,
+            failed,
+            unfinished,
+            error,
+        } = results.into_inner().expect("poisoned");
         let total = rtts.len() as u64 * size as u64;
         Concurrency {
-            ok: failed == 0 && !rtts.is_empty(),
+            ok: failed == 0,
             streams: args.streams,
             request_bytes: size,
             requests: rtts.len() as u64,
             failed,
+            unfinished,
+            limited_by: if by_time.into_inner() { "time" } else { "size" },
             total_bytes: total,
             duration_ms: ms(elapsed),
             throughput_mbps: (!rtts.is_empty()).then(|| round3(probe::mbps(total, elapsed))),
@@ -629,6 +679,7 @@ impl PeerBench<'_> {
             loaded_samples: small.len(),
             error_kind: error.as_ref().map(|e| anyhow_kind(e, "request")),
             error: error.map(|e| format!("{e:#}")),
+            quic: phase_quic(ep, to, before.as_ref()),
         }
     }
 
@@ -669,7 +720,7 @@ impl PeerBench<'_> {
         let connected = c.ok;
         rc.connect = Some(c);
         if let Some(conn) = conn {
-            let base = conn.iroh_connection().stats();
+            let base = QuicSnapshot::of(&conn);
             let log = Arc::new(PathLog::new(self.to));
             let mut pinger = Pinger::new(ep, self.to, self.out, log).with_phase("relay_latency");
             probe::ping_series(
@@ -682,7 +733,8 @@ impl PeerBench<'_> {
                 |_, _| {},
             )
             .await;
-            let l = latency(&pinger, self.payload_size);
+            let mut l = latency(&pinger, self.payload_size);
+            l.quic = phase_quic(ep, self.to, Some(&base));
             let size = args.transfer_size.min(args.relay_transfer_size);
             let capped = size < args.transfer_size;
             let up = if args.runs(Phase::Upload) {
@@ -703,10 +755,8 @@ impl PeerBench<'_> {
             rc.latency = Some(l);
             rc.upload = up;
             rc.download = down;
-            rc.quic = connection_to(ep, self.to).map(|c| {
-                let now = c.iroh_connection().stats();
-                quic_stats(&now, (c.stable_id() == conn.stable_id()).then_some(&base))
-            });
+            rc.quic = QuicSnapshot::to(ep, self.to)
+                .map(|now| now.since((now.conn == base.conn).then_some(&base)));
             if rc.relay.is_none() {
                 rc.relay = connection_to(ep, self.to)
                     .and_then(|c| SelectedPath::of(&c).remote)
@@ -797,6 +847,18 @@ impl PeerBench<'_> {
     }
 }
 
+/// The outcome of the concurrency phase's requests.
+#[derive(Default)]
+struct Requests {
+    /// Round-trip times of the correct replies.
+    rtts: Vec<Duration>,
+    failed: u64,
+    /// Cut off by the time limit.
+    unfinished: u64,
+    /// The first error.
+    error: Option<anyhow::Error>,
+}
+
 /// Connects (lookup, QUIC and golem-p2p handshake), timing the lookup
 /// separately.
 async fn connect(
@@ -854,6 +916,7 @@ fn latency(pinger: &Pinger, payload_size: usize) -> Latency {
         jitter_ms: s.jitter_ms,
         direct_fraction: s.direct_fraction,
         final_path: path_name(s.final_path),
+        quic: None,
     }
 }
 
@@ -874,6 +937,7 @@ fn transfer_report(
             limited_by: Some(if t.by_time { "time" } else { "size" }),
             error_kind: None,
             error: None,
+            quic: None,
         },
         Err(e) => TransferReport {
             ok: false,
@@ -886,21 +950,68 @@ fn transfer_report(
     }
 }
 
-fn quic_stats(
-    now: &golem_p2p::iroh::endpoint::ConnectionStats,
-    base: Option<&golem_p2p::iroh::endpoint::ConnectionStats>,
-) -> QuicStats {
-    let d = |f: fn(&golem_p2p::iroh::endpoint::ConnectionStats) -> u64| {
-        f(now).saturating_sub(base.map_or(0, f))
-    };
-    let sent = d(|s| s.sent_packets);
-    let lost = d(|s| s.lost_packets);
-    QuicStats {
-        sent_packets: sent,
-        lost_packets: lost,
-        lost_pct: (sent > 0).then(|| round3(lost as f64 * 100.0 / sent as f64)),
-        sent_bytes: d(|s| s.udp_tx.bytes),
-        received_bytes: d(|s| s.udp_rx.bytes),
+/// The QUIC counters of a connection at one moment, to measure a phase or a
+/// whole run.
+struct QuicSnapshot {
+    /// [`Connection::stable_id`].
+    conn: usize,
+    stats: golem_p2p::iroh::endpoint::ConnectionStats,
+    /// Path MTU probes sent and lost, summed over the open paths.
+    mtu_probes: (u64, u64),
+}
+
+impl QuicSnapshot {
+    fn of(c: &Connection) -> Self {
+        let ic = c.iroh_connection();
+        let mtu_probes = ic.paths().iter().fold((0, 0), |(sent, lost), p| {
+            let s = p.stats();
+            (sent + s.sent_plpmtud_probes, lost + s.lost_plpmtud_probes)
+        });
+        Self {
+            conn: c.stable_id(),
+            stats: ic.stats(),
+            mtu_probes,
+        }
+    }
+
+    /// The connection that currently serves `to`, if any.
+    fn to(ep: &Endpoint, to: NodeId) -> Option<Self> {
+        connection_to(ep, to).map(|c| Self::of(&c))
+    }
+
+    /// The counters since `base` (an earlier snapshot of the same
+    /// connection), or since the connection started.
+    fn since(&self, base: Option<&Self>) -> QuicStats {
+        let d = |f: fn(&Self) -> u64| f(self).saturating_sub(base.map_or(0, f));
+        let sent = d(|s| s.stats.sent_packets).saturating_sub(d(|s| s.mtu_probes.0));
+        let lost = d(|s| s.stats.lost_packets).saturating_sub(d(|s| s.mtu_probes.1));
+        QuicStats {
+            sent_packets: sent,
+            lost_packets: lost,
+            lost_pct: (sent > 0).then(|| round3(lost as f64 * 100.0 / sent as f64)),
+            sent_bytes: d(|s| s.stats.udp_tx.bytes),
+            received_bytes: d(|s| s.stats.udp_rx.bytes),
+        }
+    }
+}
+
+/// The QUIC counters of a phase: of the connection to `to` since `before`,
+/// if it is still the same connection.
+fn phase_quic(ep: &Endpoint, to: NodeId, before: Option<&QuicSnapshot>) -> Option<QuicStats> {
+    let before = before?;
+    let now = QuicSnapshot::to(ep, to)?;
+    (now.conn == before.conn).then(|| now.since(Some(before)))
+}
+
+/// Why a connection closed, as `ConnectionLost::cause`.
+fn close_cause(e: &golem_p2p::iroh::endpoint::ConnectionError) -> &'static str {
+    use golem_p2p::iroh::endpoint::ConnectionError as E;
+    match e {
+        E::LocallyClosed => "closed_here",
+        E::TimedOut => "idle_timeout",
+        E::ApplicationClosed(_) | E::ConnectionClosed(_) => "closed_by_peer",
+        E::Reset => "reset",
+        _ => "error",
     }
 }
 
