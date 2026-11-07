@@ -340,8 +340,9 @@ impl Builder {
         self
     }
 
-    /// How long [`Builder::bind`] waits for a relay connection before
-    /// publishing the first record anyway.
+    /// How long [`Builder::bind`] waits at most for a relay connection and
+    /// for direct addresses before signing the first record anyway. Default
+    /// 5 s. (Publishing the record afterwards takes at most another 10 s.)
     pub fn online_timeout(mut self, t: Duration) -> Self {
         self.online_timeout = t;
         self
@@ -410,12 +411,14 @@ impl Builder {
 
         // Give the endpoint a moment to learn its addresses, so the first
         // record is useful. Later changes are republished automatically.
+        // Both waits together take at most `online_timeout`.
+        let online_deadline = tokio::time::Instant::now() + self.online_timeout;
         if use_relays {
-            let _ = tokio::time::timeout(self.online_timeout, iroh.online()).await;
+            let _ = tokio::time::timeout_at(online_deadline, iroh.online()).await;
         }
         if self.mode != TransportMode::RelayOnly {
             let mut w = iroh.watch_addr();
-            let _ = tokio::time::timeout(self.online_timeout, async {
+            let _ = tokio::time::timeout_at(online_deadline, async {
                 while w.get().ip_addrs().next().is_none() {
                     if w.updated().await.is_err() {
                         break;

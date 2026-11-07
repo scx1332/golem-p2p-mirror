@@ -57,7 +57,8 @@ connection).
 
 ### `ready`
 
-The node is bound, has published its record, and serves requests (`listen`)
+The node is bound, has published its record (or tried to: a failed publish
+is retried in the background), and serves requests (`listen`)
 or is about to send them (`send`, `probe`). `listen` prints it as soon as the
 endpoint is bound.
 
@@ -71,7 +72,7 @@ endpoint is bound.
 | `direct_addrs` | [string] | direct UDP addresses in the published record, best first (public before private; container and VM bridges and `--exclude-interface` interfaces left out) |
 | `relay_config` | [{`url`, `quic_port`}] | configured relays and their QUIC address discovery port (null: QAD off) |
 | `transport` | string | `direct_and_relay`, `relay_only` or `direct_only` |
-| `bind_ms` | number | time to bind, including waiting (at most 5 s) for the relay and for addresses |
+| `bind_ms` | number | time to bind, including waiting (at most 5 s together) for the relay and for addresses, and publishing the record (at most 10 s; a failed publish is retried in the background) |
 
 ### `home_relay`
 
