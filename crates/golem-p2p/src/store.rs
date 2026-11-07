@@ -14,7 +14,9 @@
 //!   default identity or removing an alias). Withdrawn identities do not
 //!   resolve, even though their older record is still signed and unexpired.
 //! * The number of stored entries is bounded. When full, expired entries are
-//!   dropped first, then the entries that expire soonest.
+//!   dropped first, then the entries that expire soonest (1 % of the capacity
+//!   at once, so that a full store does not scan all entries on every
+//!   insert).
 //!
 //! Nothing here is keyed by an identity in a way that pins it to an endpoint:
 //! a newer record for the same identity always replaces the older binding.
@@ -78,6 +80,10 @@ fn compare(existing: Option<&VerifiedRecord>, rec: &VerifiedRecord) -> Slot {
     }
 }
 
+/// Makes room for one more entry: drops expired entries, then the entries
+/// that expire soonest. When it has to evict, it evicts 1 % of the capacity
+/// more than needed, so that one pass over the map (O(n)) makes room for many
+/// inserts instead of one.
 fn make_room<K: Eq + Hash + Copy>(
     map: &mut HashMap<K, VerifiedRecord>,
     capacity: usize,
@@ -87,15 +93,15 @@ fn make_room<K: Eq + Hash + Copy>(
         return;
     }
     map.retain(|_, r| !r.is_expired_at(now));
-    while map.len() >= capacity {
-        let Some(victim) = map
-            .iter()
-            .min_by_key(|(_, r)| r.expires_at())
-            .map(|(k, _)| *k)
-        else {
-            break;
-        };
-        map.remove(&victim);
+    if map.len() < capacity {
+        return;
+    }
+    let mut by_expiry: Vec<(SystemTime, K)> =
+        map.iter().map(|(k, r)| (r.expires_at(), *k)).collect();
+    let evict = (map.len() - capacity + 1 + capacity / 100).min(by_expiry.len());
+    by_expiry.select_nth_unstable_by_key(evict - 1, |(t, _)| *t);
+    for (_, k) in &by_expiry[..evict] {
+        map.remove(k);
     }
 }
 
@@ -349,6 +355,33 @@ mod tests {
         }
         // Soonest-expiring entries were evicted; the latest ones remain.
         assert_eq!(store.len(), (8, 8));
+    }
+
+    #[tokio::test]
+    async fn eviction_in_batches_keeps_latest_expiring() {
+        let s = InMemorySigner::new();
+        let store = RecordStore::new(200);
+        let mut recs = Vec::new();
+        for i in 0..230u64 {
+            let id = s.generate();
+            let mut n = Node::new(&s);
+            recs.push((id, n.record(&[id], 600 + i).await));
+        }
+        for (_, r) in &recs {
+            store.insert(r);
+            let (ids, eps) = store.len();
+            assert!(ids <= 200 && eps <= 200);
+        }
+        // Each eviction makes room for 1 % of the capacity at once.
+        let (ids, _) = store.len();
+        assert!(ids >= 196, "{ids}");
+        // Only the soonest-expiring records were evicted.
+        let kept: Vec<bool> = recs
+            .iter()
+            .map(|(id, _)| store.resolve(id).is_some())
+            .collect();
+        let first_kept = kept.iter().position(|k| *k).unwrap();
+        assert!(kept[first_kept..].iter().all(|k| *k), "{kept:?}");
     }
 
     #[tokio::test]

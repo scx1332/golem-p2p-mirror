@@ -346,7 +346,9 @@ dial every address it lists.
   identity always replaces the previous binding, which is how restarts with a
   new endpoint key and default switches propagate.
 * Bounded: at most N identities and N endpoints (default 4096 in a node).
-  When full, expired entries go first, then those that expire soonest.
+  When full, expired entries go first, then those that expire soonest, 1 %
+  of the capacity at a time (a full directory store of 100 000 records does
+  not scan all of them on every insert).
 
 ## 7. Connections and wire protocol
 
