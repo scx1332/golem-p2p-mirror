@@ -1,0 +1,28 @@
+[package]
+name = "golem-p2p-cli"
+description = "Small CLI to try golem-p2p: run a directory, listen, send"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "golem-p2p"
+path = "src/main.rs"
+
+[dependencies]
+golem-p2p = { workspace = true, features = ["directory-server", "http-directory"] }
+anyhow.workspace = true
+clap.workspace = true
+hex.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+iroh-relay = { workspace = true, features = ["server"] }
+tokio = { workspace = true, features = ["process", "io-util"] }
+hex.workspace = true
+tracing-subscriber.workspace = true

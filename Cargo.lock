@@ -106,6 +106,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+
+[[package]]
 name = "arc-swap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1132,6 +1138,21 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
+name = "golem-p2p-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "golem-p2p",
+ "hex",
+ "iroh-relay",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "url",
