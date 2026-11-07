@@ -6,6 +6,9 @@
 //! that every identity and the endpoint key sign, so relays and directories
 //! never have to be trusted with identity information.
 //!
+//! All traffic is encrypted end to end with iroh's QUIC/TLS 1.3, always: there
+//! is no plaintext mode and no opt-out. Relay URLs must use `https`.
+//!
 //! See `docs/design.md` in the repository for the full design.
 //!
 //! ```no_run

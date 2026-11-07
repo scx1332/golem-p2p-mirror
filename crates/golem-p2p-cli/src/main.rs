@@ -7,6 +7,9 @@
 //! golem-p2p send   --key bob.key   --directory http://dir:8080/ --relay https://relay.example/ \
 //!                  --to 0x<alice node id> "hello"
 //! ```
+//!
+//! Relay URLs must use `https`. For a relay with a self-signed certificate,
+//! pass the certificate with `--relay-ca`.
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
 
@@ -14,8 +17,11 @@ use anyhow::{Context, bail};
 use clap::{Args, Parser, Subcommand};
 use golem_p2p::{
     Endpoint, HttpDirectory, Identities, InMemorySigner, MultiDiscovery, NodeId, PathKind,
-    RecordStore, TransportMode, iroh::RelayUrl,
+    RecordStore, TransportMode,
+    iroh::{RelayUrl, tls::CaTlsConfig},
+    record::RELAY_URL_SCHEME,
 };
+use rustls_pki_types::{CertificateDer, pem::PemObject};
 
 #[derive(Parser)]
 #[command(
@@ -66,9 +72,13 @@ struct NodeArgs {
     /// Additional identity key files (aliases).
     #[arg(long)]
     alias_key: Vec<PathBuf>,
-    /// Relay server URL. Repeat for several relays.
-    #[arg(long)]
+    /// Relay server URL (https only). Repeat for several relays.
+    #[arg(long, value_parser = parse_relay_url)]
     relay: Vec<RelayUrl>,
+    /// PEM file with certificates to trust for relay TLS, in addition to the
+    /// built-in web PKI roots. For relays with a self-signed certificate.
+    #[arg(long)]
+    relay_ca: Vec<PathBuf>,
     /// Directory URL. Repeat for several directories.
     #[arg(long, required = true)]
     directory: Vec<url::Url>,
@@ -81,6 +91,28 @@ struct NodeArgs {
     /// Disable UPnP/PCP/NAT-PMP port mapping.
     #[arg(long)]
     no_portmapper: bool,
+}
+
+/// Parses a relay URL and rejects every scheme except `https`.
+fn parse_relay_url(s: &str) -> Result<RelayUrl, String> {
+    let url: RelayUrl = s.parse().map_err(|e| format!("{e}"))?;
+    if url.scheme() != RELAY_URL_SCHEME {
+        return Err(format!(
+            "relay URLs must use https, got {}://",
+            url.scheme()
+        ));
+    }
+    Ok(url)
+}
+
+fn read_certs(path: &PathBuf) -> anyhow::Result<Vec<CertificateDer<'static>>> {
+    let certs = CertificateDer::pem_file_iter(path)
+        .and_then(|it| it.collect::<Result<Vec<_>, _>>())
+        .with_context(|| format!("reading certificates from {}", path.display()))?;
+    if certs.is_empty() {
+        bail!("no PEM certificate found in {}", path.display());
+    }
+    Ok(certs)
 }
 
 fn read_key(path: &PathBuf) -> anyhow::Result<[u8; 32]> {
@@ -116,6 +148,13 @@ async fn bind(args: &NodeArgs) -> anyhow::Result<Endpoint> {
         .portmapper(!args.no_portmapper);
     for r in &args.relay {
         b = b.relay(r.clone());
+    }
+    if !args.relay_ca.is_empty() {
+        let mut roots = Vec::new();
+        for path in &args.relay_ca {
+            roots.extend(read_certs(path)?);
+        }
+        b = b.relay_tls(CaTlsConfig::embedded().with_extra_roots(roots));
     }
     if let Some(addr) = args.bind {
         b = b.bind_addr(addr);

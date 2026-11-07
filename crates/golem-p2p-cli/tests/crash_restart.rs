@@ -13,8 +13,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use golem_p2p::{Endpoint, HttpDirectory, Identities, InMemorySigner, NodeId, RecordStore};
-use iroh_relay::server::{RelayConfig, Server, ServerConfig};
+use golem_p2p::{
+    Endpoint, HttpDirectory, Identities, InMemorySigner, NodeId, RecordStore,
+    iroh::tls::CaTlsConfig,
+};
+use iroh_relay::server::{CertConfig, RelayConfig, Server, ServerConfig, TlsConfig};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::{Child, Command},
@@ -25,7 +28,7 @@ struct Node {
     endpoint_id: String,
 }
 
-async fn start_node(key: &PathBuf, dir: &str, relay: &str) -> Node {
+async fn start_node(key: &PathBuf, dir: &str, relay: &str, relay_ca: &PathBuf) -> Node {
     let mut child = Command::new(env!("CARGO_BIN_EXE_golem-p2p"))
         .args(["listen", "--key"])
         .arg(key)
@@ -37,7 +40,9 @@ async fn start_node(key: &PathBuf, dir: &str, relay: &str) -> Node {
             "--bind",
             "127.0.0.1:0",
             "--no-portmapper",
+            "--relay-ca",
         ])
+        .arg(relay_ca)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
@@ -60,6 +65,12 @@ async fn start_node(key: &PathBuf, dir: &str, relay: &str) -> Node {
         .find_map(|kv| kv.strip_prefix("endpoint_id="))
         .unwrap()
         .to_string();
+    // The record lists the relay only once the node is connected to it, which
+    // requires the self-signed certificate given with `--relay-ca`.
+    assert!(
+        ready.contains(&format!("relays=[\"{relay}/\"]")),
+        "node is not homed on the https relay: {ready}"
+    );
     Node { child, endpoint_id }
 }
 
@@ -77,7 +88,8 @@ async fn crash_and_restart() {
         .with_test_writer()
         .try_init();
 
-    // Directory and a plain-HTTP dev relay, both on loopback.
+    // Directory and an https relay with a self-signed certificate, both on
+    // loopback.
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
@@ -86,10 +98,16 @@ async fn crash_and_restart() {
         listener,
         Arc::new(RecordStore::default()),
     ));
+    let (certs, server_config) = iroh_relay::server::testing::self_signed_tls_certs_and_config();
+    let mut relay_cfg = RelayConfig::new((Ipv4Addr::LOCALHOST, 0));
+    relay_cfg.tls = Some(TlsConfig::new(
+        (Ipv4Addr::LOCALHOST, 0),
+        CertConfig::Manual { server_config },
+    ));
     let mut cfg = ServerConfig::default();
-    cfg.relay = Some(RelayConfig::new((Ipv4Addr::LOCALHOST, 0)));
+    cfg.relay = Some(relay_cfg);
     let relay = Server::spawn(cfg).await.unwrap();
-    let relay_url = format!("http://{}", relay.http_addr().unwrap());
+    let relay_url = format!("https://{}", relay.https_addr().unwrap());
 
     // Identity key on disk, as an operator would have it.
     let signer = InMemorySigner::new();
@@ -102,12 +120,20 @@ async fn crash_and_restart() {
     std::fs::create_dir_all(&tmp).unwrap();
     let key_file = tmp.join("node.key");
     std::fs::write(&key_file, hex::encode(signer.secret(node_id).unwrap())).unwrap();
+    // The relay's certificate, for the CLI's `--relay-ca`.
+    let ca_file = tmp.join("relay.crt");
+    std::fs::write(
+        &ca_file,
+        pem::encode(&pem::Pem::new("CERTIFICATE", certs[0].to_vec())),
+    )
+    .unwrap();
 
     let peer_signer = InMemorySigner::new();
     let peer_id = peer_signer.generate();
     let peer = Endpoint::builder(peer_signer, Identities::new(peer_id))
         .discovery(HttpDirectory::new(dir_url.parse().unwrap()).unwrap())
         .relay(relay_url.parse().unwrap())
+        .relay_tls(CaTlsConfig::custom_roots(certs))
         .bind_addr("127.0.0.1:0".parse().unwrap())
         .portmapper(false)
         .request_timeout(Duration::from_secs(3))
@@ -116,7 +142,7 @@ async fn crash_and_restart() {
         .await
         .unwrap();
 
-    let mut first = start_node(&key_file, &dir_url, &relay_url).await;
+    let mut first = start_node(&key_file, &dir_url, &relay_url, &ca_file).await;
     let reply = String::from_utf8(peer.request(node_id, b"before").await.unwrap()).unwrap();
     assert_eq!(field(&reply, "endpoint"), first.endpoint_id);
     assert_eq!(field(&reply, "to"), node_id.to_string());
@@ -127,7 +153,7 @@ async fn crash_and_restart() {
     first.child.kill().await.unwrap();
     let crashed = Instant::now();
 
-    let mut second = start_node(&key_file, &dir_url, &relay_url).await;
+    let mut second = start_node(&key_file, &dir_url, &relay_url, &ca_file).await;
     assert_ne!(second.endpoint_id, first.endpoint_id);
 
     // The peer still holds the dead connection. Requests may fail until it is

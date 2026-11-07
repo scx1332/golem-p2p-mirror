@@ -13,6 +13,10 @@
 //!
 //! A peer accepts a record only if all signatures verify. Among valid records,
 //! a higher `seq` replaces a lower one; see [`crate::store`].
+//!
+//! Relay URLs in a record must use `https` ([`RELAY_URL_SCHEME`]). A record
+//! listing any other scheme, including plain `http`, does not verify, so a node
+//! can neither publish nor learn a plain-http relay.
 
 use std::{
     net::SocketAddr,
@@ -43,6 +47,8 @@ pub const MAX_RELAYS: usize = 8;
 pub const MAX_DIRECT_ADDRS: usize = 16;
 /// Maximum length of one relay URL.
 pub const MAX_URL_LEN: usize = 256;
+/// The only scheme allowed for relay URLs. Relay connections always use TLS.
+pub const RELAY_URL_SCHEME: &str = "https";
 /// Maximum size of an encoded signed record.
 pub const MAX_RECORD_SIZE: usize = 4096;
 /// Maximum lifetime a record may claim.
@@ -68,7 +74,7 @@ pub struct NodeRecord {
     pub default_id: NodeId,
     /// All identities of the node, default first.
     pub identities: Vec<NodeId>,
-    /// Relay URLs where the endpoint can be reached.
+    /// Relay URLs where the endpoint can be reached. Must be `https` URLs.
     pub relay_urls: Vec<String>,
     /// Direct UDP addresses of the endpoint.
     pub direct_addrs: Vec<SocketAddr>,
@@ -152,8 +158,8 @@ impl NodeRecord {
             let parsed: url::Url = url
                 .parse()
                 .map_err(|_| RecordError::Malformed("relay url"))?;
-            if !matches!(parsed.scheme(), "https" | "http") {
-                return Err(RecordError::Malformed("relay url scheme"));
+            if parsed.scheme() != RELAY_URL_SCHEME {
+                return Err(RecordError::Malformed("relay url must use https"));
             }
         }
         if self.direct_addrs.len() > MAX_DIRECT_ADDRS {
@@ -550,12 +556,21 @@ mod tests {
             sign_record(&r, &key, &signer).await,
             Err(RecordError::Malformed(_))
         ));
-        let mut r = base(&key, &[a]);
-        r.relay_urls = vec!["file:///etc/passwd".into()];
-        assert!(matches!(
-            sign_record(&r, &key, &signer).await,
-            Err(RecordError::Malformed(_))
-        ));
+        // Relay URLs must be https: plain http, ws and other schemes fail.
+        for url in [
+            "file:///etc/passwd",
+            "http://relay.example.org./",
+            "HTTP://relay.example.org./",
+            "ws://relay.example.org./",
+        ] {
+            let mut r = base(&key, &[a]);
+            r.relay_urls = vec!["https://ok.example.org./".into(), url.into()];
+            assert_eq!(
+                sign_record(&r, &key, &signer).await,
+                Err(RecordError::Malformed("relay url must use https")),
+                "{url}"
+            );
+        }
         // Locked key: signing fails, nothing is produced.
         signer.lock(b);
         assert_eq!(
@@ -568,5 +583,29 @@ mod tests {
         bytes.push(0);
         assert!(VerifiedRecord::verify(&bytes).is_err());
         assert!(VerifiedRecord::verify(&vec![0u8; MAX_RECORD_SIZE + 1]).is_err());
+    }
+
+    /// A record listing a plain-http relay fails verification even when every
+    /// signature on it is valid, so peers never dial such a relay.
+    #[tokio::test]
+    async fn http_relay_fails_verification() {
+        let (signer, key, a, _) = setup().await;
+        let mut r = base(&key, &[a]);
+        r.relay_urls = vec!["http://relay.example.org./".into()];
+        let d = digest(&r);
+        let sa = signer.sign_blocking(a, &d).unwrap();
+        let bytes = encode_raw(&r, key.sign(&d).to_bytes(), vec![sa]);
+        assert_eq!(
+            VerifiedRecord::verify(&bytes),
+            Err(RecordError::Malformed("relay url must use https"))
+        );
+
+        // The same record with an https relay verifies.
+        r.relay_urls = vec!["https://relay.example.org./".into()];
+        let d = digest(&r);
+        let sa = signer.sign_blocking(a, &d).unwrap();
+        let bytes = encode_raw(&r, key.sign(&d).to_bytes(), vec![sa]);
+        let rec = VerifiedRecord::verify(&bytes).unwrap();
+        assert_eq!(rec.relay_urls().len(), 1);
     }
 }

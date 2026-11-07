@@ -6,6 +6,10 @@ relay-based networking in yagna (`ya-relay`).
 
 * **Transport:** iroh 1.4 (QUIC, TLS 1.3, hole punching, relays). Direct
   connections where possible, relayed otherwise, with any number of relays.
+* **Encryption:** always on, in one mode. Every connection is end-to-end
+  QUIC/TLS 1.3 between the two endpoints, also through relays, which see only
+  ciphertext and endpoint IDs. There is no plaintext mode, no opt-out and no
+  second layer. Relay URLs must be `https`.
 * **Identities:** the same as yagna. A node identity is a secp256k1 key and the
   node ID is its 20-byte Ethereum address. A node has a default identity and
   optional aliases, and can change them at runtime.
@@ -56,39 +60,61 @@ What the tests cover:
 | `connectivity.rs` | direct connection; relay-only connection (no UDP, path checked); relay-assisted connection becoming direct; two relays with each node homed on a different one (via HTTP directory); a relay going down while another stays up |
 | `identity_changes.rs` | default switch with and without restart; A to B to A with and without restart; alias added and removed at runtime; locked key blocks updates; restart with a persisted endpoint key |
 | `security.rs` | forged record from a directory; stale record replay; record listing an identity that did not sign it; valid record presented over another endpoint's connection (both directions); spoofed stream sender and receiver; new instance superseding a live old connection |
-| `crash_restart.rs` (CLI) | real process killed with SIGKILL and restarted with the same identity |
-| unit tests | yagna/ethsign compatibility vectors, record verification, record store rules and bounds |
+| `encryption.rs` | peers offering another ALPN refused in the TLS handshake; a relay (plain HTTP behind a recording TLS-terminating proxy) sees endpoint IDs but neither a plaintext marker nor the Ethereum identities; non-https relay URLs rejected by the builder; a signed record with an `http://` relay refused and never dialed |
+| `crash_restart.rs` (CLI) | real process killed with SIGKILL and restarted with the same identity, homed on an https relay with a self-signed certificate (`--relay-ca`) |
+| `relay_url.rs` (CLI) | `http://` and other non-https relay URLs rejected on the command line |
+| unit tests | yagna/ethsign compatibility vectors, record verification (including https-only relay URLs), record store rules and bounds |
 
 ## Trying it between two machines
 
-You need a relay and a directory both machines can reach.
+You need a relay and a directory both machines can reach. Relays must use
+`https`, so iroh-relay's plain-HTTP `--dev` mode does not work. Any iroh 1.4
+relay with a TLS certificate does. With a publicly trusted certificate (for
+example iroh-relay's `cert_mode = "LetsEncrypt"`), leave out `--relay-ca`.
+With a self-signed certificate for the relay's IP address:
 
 ```sh
 cargo build --release -p golem-p2p-cli
 alias golem-p2p=target/release/golem-p2p
 
-# A relay: any iroh 1.4 relay works. For development, plain HTTP on port 3340:
+# A relay with a self-signed certificate, https on port 3341:
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+    -days 30 -subj /CN=golem-p2p-relay -addext subjectAltName=IP:RELAY_IP \
+    -addext basicConstraints=critical,CA:FALSE -keyout relay.key -out relay.crt
+cat > relay.toml <<'END'
+http_bind_addr = "[::]:3340"
+enable_metrics = false
+[tls]
+https_bind_addr = "[::]:3341"
+cert_mode = "Manual"
+manual_cert_path = "relay.crt"
+manual_key_path = "relay.key"
+END
 cargo install iroh-relay --version 1.4.1 --features server
-iroh-relay --dev
+iroh-relay --config-path relay.toml
 
-# A directory (plain HTTP; put it behind TLS for anything serious):
+# A directory (plain HTTP for now; TLS comes before production):
 golem-p2p directory --listen 0.0.0.0:8080
 
-# Machine A
+# Machine A (both machines need a copy of relay.crt)
 golem-p2p keygen --out alice.key          # prints Alice's node ID
 golem-p2p listen --key alice.key \
-    --relay http://RELAY_HOST:3340 --directory http://DIR_HOST:8080/
+    --relay https://RELAY_IP:3341 --relay-ca relay.crt \
+    --directory http://DIR_HOST:8080/
 
 # Machine B
 golem-p2p keygen --out bob.key
 golem-p2p send --key bob.key \
-    --relay http://RELAY_HOST:3340 --directory http://DIR_HOST:8080/ \
+    --relay https://RELAY_IP:3341 --relay-ca relay.crt \
+    --directory http://DIR_HOST:8080/ \
     --to 0xALICE_NODE_ID --count 5 "hello"
 ```
 
 `send` prints each reply, the round-trip time and whether the path is
 `direct` or `relay`. Repeat `--relay` and `--directory` to use several.
 `--alias-key` adds secondary identities, `--relay-only` disables direct UDP.
+`listen` prints the relays it is homed on in its `READY` line. An empty list
+usually means the relay's certificate is not trusted.
 
 ## Library example
 
@@ -126,7 +152,8 @@ let mut events = ep.subscribe();
 ```
 
 Main API: `Endpoint::builder(signer, identities)` with `relay`,
-`relay_config`, `discovery`, `transport_mode`, `bind_addr`; then `connect`,
+`relay_config`, `relay_tls`, `discovery`, `transport_mode`, `bind_addr`
+(`bind` fails for a relay URL that is not `https`); then `connect`,
 `open_bi`/`open_bi_from`, `request`/`request_from`, `accept`,
 `set_identities`/`set_default_identity`/`add_alias`/`remove_alias`,
 `subscribe`, `connections`, `close`. Implement `golem_p2p::Signer` to sign

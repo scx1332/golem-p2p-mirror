@@ -20,9 +20,11 @@ tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
+rustls-pki-types = { version = "1", features = ["std"] }
 
 [dev-dependencies]
-iroh-relay = { workspace = true, features = ["server"] }
+iroh-relay = { workspace = true, features = ["server", "test-utils"] }
 tokio = { workspace = true, features = ["process", "io-util"] }
 hex.workspace = true
+pem = "3"
 tracing-subscriber.workspace = true

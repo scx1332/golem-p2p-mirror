@@ -1,8 +1,10 @@
 //! The golem-p2p wire protocol on top of iroh QUIC connections.
 //!
-//! Every connection uses ALPN [`ALPN`]. All traffic is inside iroh's QUIC/TLS
-//! session, which is authenticated by the iroh endpoint keys. There is no
-//! unencrypted mode.
+//! Every connection uses ALPN [`ALPN`]; an endpoint offers and accepts no
+//! other. All traffic is inside iroh's QUIC/TLS 1.3 session, which is
+//! authenticated by the iroh endpoint keys and encrypted end to end, also
+//! through relays. There is exactly one mode: no unencrypted mode and no option
+//! to turn encryption off (see the design document, section 4).
 //!
 //! **Control stream.** The dialer opens the first bidirectional stream, writes
 //! [`KIND_CONTROL`] and a [`Control::Hello`] frame with its signed record and

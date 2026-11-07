@@ -31,6 +31,10 @@ pub enum Error {
     /// The discovery service failed.
     #[error(transparent)]
     Discovery(#[from] DiscoveryError),
+    /// A configured relay URL does not use `https`. Relay connections always
+    /// use TLS; plain `http` relays are not supported.
+    #[error("relay URL {0} is not allowed: relay URLs must use https")]
+    InsecureRelayUrl(String),
     /// Binding the iroh endpoint failed.
     #[error("bind failed: {0}")]
     Bind(String),

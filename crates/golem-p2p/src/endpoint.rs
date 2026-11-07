@@ -26,7 +26,8 @@ use crate::{
     identity::NodeId,
     lookup::RecordLookup,
     record::{
-        MAX_DIRECT_ADDRS, MAX_RELAYS, NodeRecord, RECORD_VERSION, VerifiedRecord, sign_record,
+        MAX_DIRECT_ADDRS, MAX_RELAYS, NodeRecord, RECORD_VERSION, RELAY_URL_SCHEME, VerifiedRecord,
+        sign_record,
     },
     signer::Signer,
     store::{DEFAULT_CAPACITY, RecordStore},
@@ -212,6 +213,9 @@ impl Builder {
     }
 
     /// Adds a relay server by URL.
+    ///
+    /// The URL must use `https`; [`Builder::bind`] fails with
+    /// [`Error::InsecureRelayUrl`] otherwise.
     pub fn relay(mut self, url: iroh::RelayUrl) -> Self {
         self.relays.push(RelayConfig::from(url));
         self
@@ -219,13 +223,17 @@ impl Builder {
 
     /// Adds a relay server with full configuration (for example a QUIC port
     /// for address discovery, or an auth token).
+    ///
+    /// The URL must use `https`; [`Builder::bind`] fails with
+    /// [`Error::InsecureRelayUrl`] otherwise.
     pub fn relay_config(mut self, config: RelayConfig) -> Self {
         self.relays.push(config);
         self
     }
 
     /// Sets the TLS roots used to verify relay servers. Defaults to the
-    /// embedded web PKI roots.
+    /// embedded web PKI roots. Use this for relays with a self-signed or
+    /// private-CA certificate.
     pub fn relay_tls(mut self, tls: CaTlsConfig) -> Self {
         self.relay_tls = Some(tls);
         self
@@ -312,7 +320,19 @@ impl Builder {
     }
 
     /// Binds the endpoint, signs and publishes the first record.
+    ///
+    /// Fails with [`Error::InsecureRelayUrl`] if a relay URL does not use
+    /// `https`.
     pub async fn bind(self) -> Result<Endpoint> {
+        // Relays are https only, so a node never publishes or dials a
+        // plain-http relay. Records enforce the same rule on the receiving side.
+        if let Some(cfg) = self
+            .relays
+            .iter()
+            .find(|c| c.url.scheme() != RELAY_URL_SCHEME)
+        {
+            return Err(Error::InsecureRelayUrl(cfg.url.to_string()));
+        }
         let secret = self.secret_key.unwrap_or_else(SecretKey::generate);
         let store = Arc::new(RecordStore::new(self.store_capacity));
         let relay_map: RelayMap = self.relays.iter().cloned().collect();

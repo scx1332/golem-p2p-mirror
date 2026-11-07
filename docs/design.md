@@ -83,14 +83,61 @@ machines.
   previously published record stays in force. `bind` fails if the initial
   identities cannot sign.
 
-## 4. Encryption and identity binding (decision)
+## 4. Encryption and identity binding
 
-### The constraint
+### Policy
 
-iroh authenticates and encrypts every connection with QUIC/TLS 1.3 using the
-endpoint's own ed25519 key (TLS raw public keys). That key is the iroh
-`EndpointId`. It cannot be replaced by a secp256k1 key without forking iroh
-and its QUIC stack.
+All traffic between golem-p2p nodes is encrypted, always, in one way: iroh's
+QUIC with TLS 1.3. There is no option to turn it off, no plaintext mode, and
+no second encryption layer on top. This holds for direct and relayed
+connections alike.
+
+What this gives (iroh 1.4 with the `tls-ring` crypto provider):
+
+* **Key exchange.** Every connection runs a TLS 1.3 handshake with ephemeral
+  ECDHE (X25519). Traffic keys come from that exchange; the long-term endpoint
+  key only signs the handshake. Recorded traffic therefore stays confidential
+  if the endpoint key leaks later (forward secrecy). golem-p2p does not send
+  0-RTT data.
+* **Encryption.** QUIC packet protection with a TLS 1.3 AEAD cipher suite
+  (AES-GCM or ChaCha20-Poly1305), plus header protection.
+* **Authentication.** Both sides authenticate with their ed25519 endpoint key
+  as a TLS raw public key (RFC 7250). The public key is the `EndpointId`; no
+  certificates or CAs are involved. A dialer connects to a specific
+  `EndpointId`, and the handshake fails if the other side does not hold that
+  key.
+* **ALPN.** An endpoint offers and accepts only `golem-p2p/1`. A peer that
+  offers anything else fails the TLS handshake (`no_application_protocol`).
+* **What relays see.** Relays forward QUIC packets they cannot decrypt. They
+  see source and destination endpoint IDs, IP addresses, packet sizes and
+  timing; never payloads, records or Ethereum identities. The connection to a
+  relay is itself TLS (https only, section 9), so an observer on the network
+  path to a relay sees less than the relay does.
+
+`tests/encryption.rs` checks that other ALPNs are refused, and that a relay
+sees the endpoint IDs it routes by, but neither a plaintext marker sent between
+two nodes nor their Ethereum identities. The relay in that test runs plain
+HTTP behind a TLS-terminating proxy that records the decrypted relay traffic,
+i.e. exactly what the relay server handles.
+
+### Why one mode, and no opt-out
+
+* **One test matrix.** Every feature (handshake, identity changes, relays,
+  failover, restarts) is implemented and tested once. A second mode would
+  double the matrix or leave one variant untested.
+* **No downgrade.** There is nothing to negotiate, so neither an attacker nor
+  a configuration mistake can push a connection to a weaker mode.
+* **Adding is cheap, removing is not.** If an unencrypted transport is ever
+  needed, it can be added later as a separate ALPN without touching this one.
+  Removing a mode once something depends on it breaks those dependents.
+* **QUIC requires TLS.** QUIC (RFC 9001) has no unencrypted variant. A
+  plaintext mode would mean forking iroh and its QUIC stack (noq), not
+  changing a setting.
+* **Debugging does not need plaintext.** iroh can write the TLS session
+  secrets to the file named by the `SSLKEYLOGFILE` environment variable
+  (`iroh::endpoint::Builder::keylog`), and Wireshark can decrypt captured
+  traffic with that file. golem-p2p's `Builder` does not expose this switch
+  yet.
 
 ### What ya-relay does today
 
@@ -100,9 +147,11 @@ with a key derived from the session keys (AES-GCM-SIV). The Ethereum keys never
 encrypt traffic directly; they *authorize* a session key, and the session key
 does the cryptography.
 
-### What golem-p2p does
+### How Ethereum identities are bound
 
-The iroh endpoint key plays the role of the session key:
+iroh authenticates every connection with the endpoint's own ed25519 key. That
+key cannot be replaced by a secp256k1 key without forking iroh and its QUIC
+stack. So the iroh endpoint key plays the role of ya-relay's session key:
 
 * Transport encryption and authentication are iroh's QUIC/TLS. The remote
   `EndpointId` of a connection is authenticated by TLS.
@@ -111,11 +160,14 @@ The iroh endpoint key plays the role of the session key:
 * A peer's Ethereum identities are taken only from a verified record whose
   endpoint ID equals the TLS-authenticated remote endpoint ID.
 
+As in ya-relay, the Ethereum keys authorize the key that encrypts; they do not
+encrypt themselves. Only the holder of the listed Ethereum keys can make a node
+reachable under those identities, and all traffic is end-to-end encrypted.
+
 There is no second encryption layer. All payloads already travel inside an
-end-to-end QUIC/TLS session between the two endpoints, also when relayed:
-relays only see encrypted QUIC packets and endpoint IDs. A second layer would
-add code and failure modes without protecting against anything TLS does not
-already cover. There is no plaintext mode and no fallback to one.
+end-to-end QUIC/TLS session between the two endpoints, also when relayed. A
+second layer would add code and failure modes without protecting against
+anything TLS does not already cover.
 
 ### Alternatives considered
 
@@ -129,12 +181,8 @@ already cover. There is no plaintext mode and no fallback to one.
   secrets). Rejected.
 * **Replacing iroh's TLS with secp256k1.** Not possible without forking iroh
   and noq.
-
-**Owner decision needed:** the original request said "Ethereum based
-encryption". If that was meant literally (traffic encrypted with keys derived
-from the Ethereum keys), this design does not do that. It does give the
-property that matters: only the holder of the listed Ethereum keys can make a
-node reachable under those identities, and all traffic is end-to-end encrypted.
+* **An opt-out or plaintext mode.** Rejected for the reasons above. Key
+  logging covers debugging.
 
 ## 5. The node record
 
@@ -164,7 +212,7 @@ other 32-byte payload a yagna identity might sign.
 
 **Verification** (`VerifiedRecord::verify`): size limit; strict decoding (no
 trailing bytes); version; 1 to 16 unique identities with the default first;
-at most 8 relay URLs (http/https only, at most 256 bytes each) and 16 direct
+at most 8 relay URLs (https only, at most 256 bytes each) and 16 direct
 addresses; not expired and not valid for more than 24 h (with 5 min clock
 skew); `seq` not in the future; valid endpoint signature; exactly one signature
 per identity, each recovering to that identity. `VerifiedRecord` can only be
@@ -212,8 +260,9 @@ Why each piece is there:
 
 ## 7. Connections and wire protocol
 
-ALPN `golem-p2p/1`. All bidirectional streams start with a kind byte. Frames
-are a 4-byte big-endian length plus postcard.
+ALPN `golem-p2p/1`; an endpoint accepts no other ALPN (section 4). All
+bidirectional streams start with a kind byte. Frames are a 4-byte big-endian
+length plus postcard.
 
 **Handshake (control stream).** The dialer opens the first stream and sends
 `Hello { record, target }`. The acceptor verifies the record, checks
@@ -287,6 +336,15 @@ ones. Alternatives considered:
 * A DHT or gossip-based directory removes the central service but is far more
   complex; it can be added later behind the same trait.
 
+**Directory transport.** For now the directory server speaks plain HTTP, and
+the client accepts `http` and `https` URLs, which keeps local testing simple.
+A directory carries only public, signed records, never node-to-node traffic,
+so plain HTTP cannot forge or alter a record. It does let anyone on the path
+see which node IDs are published and looked up, and withhold records or serve
+old ones. Before production the directory gets TLS (in the server or a
+terminating proxy) and nodes use `https` directory URLs (section 14). This is
+separate from relays, which are https only already (section 9).
+
 **iroh integration.** `RecordLookup` implements iroh's `AddressLookup` from
 the endpoint's store of verified records, keyed by endpoint ID. Whenever iroh
 needs addresses for a peer (dialing, re-resolution), it gets exactly what the
@@ -307,10 +365,22 @@ peer signed.
   configuration unchanged, which makes iroh run a net report at once. The
   address change triggers a re-signed record, which is pushed to connected
   peers and published to discovery. Tested by shutting down one of two relays.
-* **Trust.** A relay sees endpoint IDs, IP addresses and traffic volume, never
-  payloads, and it is never asked about identities. Relay TLS uses the web PKI
-  by default; tests use custom roots for self-signed local relays. Plain
-  `http://` relays (iroh-relay `--dev`) work for development.
+* **https only.** Relay URLs must use `https`. `Builder::bind` fails with
+  `Error::InsecureRelayUrl` for any other scheme, `VerifiedRecord::verify`
+  rejects a record that lists one, and the CLI rejects one on the command
+  line. So a node neither publishes nor dials a plain-http relay, also not one
+  named in a peer's record. Payload confidentiality does not depend on relay
+  TLS (packets are end-to-end QUIC/TLS, section 4), but without it everyone on
+  the path to the relay would see the relay handshake, the endpoint IDs and who
+  talks to whom, and a node could not authenticate its relay. There is no
+  exception for loopback or development: iroh-relay's `--dev` mode (plain
+  HTTP) cannot be used. A relay server may run plain HTTP behind a
+  TLS-terminating proxy, as long as nodes use the https URL.
+* **Trust.** A relay sees endpoint IDs, IP addresses, packet sizes and timing,
+  never payloads, and it is never asked about identities. Relay certificates
+  are verified against the web PKI by default; `Builder::relay_tls` (CLI:
+  `--relay-ca`) trusts additional roots, for relays with a self-signed or
+  private-CA certificate. Tests run self-signed local relays.
 
 ## 10. Restarts and the iroh key
 
@@ -358,7 +428,8 @@ every answer afterwards comes from the new process.
 * **A restart is never confused with the previous process.** New endpoint key
   by default, `instance_id` always, monotonic `seq`.
 * **All per-peer state is bounded.** See section 12.
-* **Never fall back to plaintext.** There is no unencrypted mode.
+* **Never fall back to plaintext.** There is no unencrypted mode and no
+  option for one (section 4), and relays are https only (section 9).
 
 ## 12. Bounds
 
@@ -389,8 +460,8 @@ every answer afterwards comes from the new process.
   `request_from(from, to, msg)` (or open a stream per call), and serve
   `Endpoint::accept()` by dispatching to local GSB services, with
   `IncomingStream::from()` as the authenticated caller.
-* **Configuration.** A list of relay URLs and directory URLs instead of the
-  single relay address.
+* **Configuration.** A list of relay URLs (https) and directory URLs instead
+  of the single relay address.
 * **Coexistence.** A node could run both stacks during migration and prefer
   golem-p2p when the peer has a record.
 
@@ -399,6 +470,9 @@ GSB integration itself is out of scope for this seed.
 ## 14. Not implemented or not tested yet
 
 * Real NAT traversal across different networks (tests use loopback only).
+* TLS for the HTTP directory. The server speaks plain HTTP and the client
+  accepts `http` URLs, for easier testing. Before production: serve the
+  directory over TLS and use `https` directory URLs only (section 8).
 * Directory rate limiting per client, and authentication for publishing.
 * Relay authentication tokens: can be passed with
   `Builder::relay_config(RelayConfig::new(..).with_auth_token(..))`, not tested.
@@ -411,17 +485,18 @@ GSB integration itself is out of scope for this seed.
 
 ## 15. Open questions for the owner
 
-1. Is the encryption decision in section 4 acceptable, or was "Ethereum based
-   encryption" meant literally?
-2. Who operates directories and relays, and how many? Should records also be
+Resolved: encryption (section 4). Traffic is always encrypted with iroh's
+QUIC/TLS 1.3, with no opt-out and no second layer; relays are https only.
+
+1. Who operates directories and relays, and how many? Should records also be
    published somewhere decentralized?
-3. Should a node only use relays from a configured allowlist? Today any
-   `http(s)` relay URL in a valid record is dialed, as in iroh.
-4. Should direct LAN addresses be published to a public directory, or only
+2. Should a node only use relays from a configured allowlist? Today any
+   `https` relay URL in a valid record is dialed, as in iroh.
+3. Should direct LAN addresses be published to a public directory, or only
    relay URLs plus public addresses (iroh's pkarr publishes relay only by
    default)?
-5. Is a network/chain identifier needed in the record (mainnet vs testnet
+4. Is a network/chain identifier needed in the record (mainnet vs testnet
    directories)?
-6. Default record TTL (1 h) and request timeout (30 s): fine for yagna?
-7. Should `request` offer an opt-in retry for idempotent calls?
-8. License for the repository.
+5. Default record TTL (1 h) and request timeout (30 s): fine for yagna?
+6. Should `request` offer an opt-in retry for idempotent calls?
+7. License for the repository.
