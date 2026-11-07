@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::{
     listen::{REFUSED, SINK_MAGIC, SOURCE_MAGIC, UPLOAD_STOPPED},
-    observe::{PathLog, connection_to, path_to},
+    observe::{PathLog, connection_to, path_rtt, path_to},
     out::{Out, anyhow_kind, ms, path_name, round3},
 };
 
@@ -436,11 +436,24 @@ fn describe_refusal(reason: &str, detail: &str) -> String {
     }
 }
 
+/// An upload was stopped at its time limit, and the listener's count of
+/// what arrived did not come back in time.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "stopped the upload at the time limit, but the listener did not report what it received \
+     within {} s",
+    .0.as_secs()
+)]
+pub struct NoCount(pub Duration);
+
 /// The error kind of a failed transfer: `refused` for a listener limit,
-/// else the library error kind, else `fallback`.
+/// `no_count` for an upload whose count did not come back, else the library
+/// error kind, else `fallback`.
 pub fn transfer_error_kind(e: &anyhow::Error, fallback: &'static str) -> &'static str {
     if e.chain().any(|c| c.is::<Refused>()) {
         "refused"
+    } else if e.chain().any(|c| c.is::<NoCount>()) {
+        "no_count"
     } else {
         anyhow_kind(e, fallback)
     }
@@ -460,9 +473,25 @@ pub struct Transfer {
     pub by_time: bool,
 }
 
-/// After an upload was stopped at its time limit, how long to wait for the
-/// listener's count of what arrived.
+/// After an upload was stopped at its time limit, how long to wait at least
+/// for the listener's count of what arrived (see [`count_wait`]).
 pub const COUNT_WAIT: Duration = Duration::from_secs(3);
+
+/// The longest wait for the listener's count of a stopped upload.
+pub const COUNT_WAIT_MAX: Duration = Duration::from_secs(30);
+
+/// How long to wait for the listener's count after stopping an upload that
+/// ran for `upload_time`, on a path with round-trip time `rtt` (QUIC's
+/// smoothed RTT, which includes queueing): at least [`COUNT_WAIT`], as long
+/// as the upload ran, or three round trips, whichever is longest (at most
+/// [`COUNT_WAIT_MAX`]). The stop (a stream reset) reaches the listener only
+/// after what is still queued on the path: on a slow path that can take
+/// seconds (campaign 2: a relayed upload over a lossy link, stopped at 8 s,
+/// was counted 4-5 s later).
+pub fn count_wait(upload_time: Duration, rtt: Option<Duration>) -> Duration {
+    let rtts = rtt.unwrap_or_default().saturating_mul(3);
+    COUNT_WAIT.max(upload_time).max(rtts).min(COUNT_WAIT_MAX)
+}
 
 /// Megabits (10^6 bits) per second.
 pub fn mbps(bytes: u64, elapsed: Duration) -> f64 {
@@ -473,7 +502,7 @@ pub fn mbps(bytes: u64, elapsed: Duration) -> f64 {
 /// for its count. With `max_time`, the upload ends then: whatever is not yet
 /// delivered is dropped (the stream is reset with [`UPLOAD_STOPPED`]), and
 /// the listener reports what arrived until then (waiting at most
-/// [`COUNT_WAIT`] more for that).
+/// [`count_wait`] more for that, else [`NoCount`]).
 pub async fn upload(
     ep: &Endpoint,
     to: NodeId,
@@ -530,13 +559,10 @@ pub async fn upload(
         Some(r) => r,
         None => {
             let _ = send.reset(UPLOAD_STOPPED);
-            match tokio::time::timeout(COUNT_WAIT, recv.read_to_end(4096)).await {
+            let wait = count_wait(start.elapsed(), path_rtt(ep, to));
+            match tokio::time::timeout(wait, recv.read_to_end(4096)).await {
                 Ok(r) => r?,
-                Err(_) => bail!(
-                    "stopped the upload at the time limit, but the listener did not report what \
-                     it received within {} s",
-                    COUNT_WAIT.as_secs()
-                ),
+                Err(_) => return Err(NoCount(wait).into()),
             }
         }
     };
@@ -777,6 +803,26 @@ mod tests {
         assert_eq!(transfer_error_kind(&e, "bulk"), "refused");
         let e = anyhow::Error::from(golem_p2p::Error::Timeout);
         assert_eq!(transfer_error_kind(&e, "bulk"), "timeout");
+        let e = anyhow::Error::from(NoCount(Duration::from_secs(8)));
+        assert_eq!(transfer_error_kind(&e, "transfer"), "no_count");
+        assert!(e.to_string().ends_with("within 8 s"), "{e}");
+    }
+
+    #[test]
+    fn count_waits() {
+        let s = Duration::from_secs;
+        let ms = Duration::from_millis;
+        // A short upload on a fast path: at least 3 s.
+        assert_eq!(count_wait(ms(200), Some(ms(1))), s(3));
+        assert_eq!(count_wait(ms(200), None), s(3));
+        // Stopped at 8 s (--transfer-time): as long again, also on a fast
+        // path whose RTT says nothing about what is queued.
+        assert_eq!(count_wait(s(8), Some(ms(160))), s(8));
+        // Seconds of queueing show in the RTT: three round trips.
+        assert_eq!(count_wait(s(8), Some(s(4))), s(12));
+        // Never more than 30 s.
+        assert_eq!(count_wait(s(8), Some(s(60))), COUNT_WAIT_MAX);
+        assert_eq!(count_wait(s(100), None), COUNT_WAIT_MAX);
     }
 
     #[test]

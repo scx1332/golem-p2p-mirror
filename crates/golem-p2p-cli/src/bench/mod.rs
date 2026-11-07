@@ -30,8 +30,8 @@ use golem_p2p::{
 use serde::Serialize;
 
 use self::report::{
-    Concurrency, Connect, ConnectionLost, Idle, Latency, PathPoint, PathReport, Peer, QuicStats,
-    RelayCompare, Report, Settings, Status, TransferReport,
+    Concurrency, Connect, ConnectionLost, Idle, Latency, LatencyLoss, PathPoint, PathReport, Peer,
+    QuicStats, RelayCompare, Report, Settings, Status, TransferReport,
 };
 use crate::{
     Node, NodeArgs, listen,
@@ -41,14 +41,35 @@ use crate::{
     probe::{self, Pinger, Stats},
 };
 
-/// Size of each request of the concurrency phase.
+/// Size of each request of the concurrency phase (smaller on slow links,
+/// see [`concurrency_request_size`]).
 const CONCURRENCY_REQUEST: usize = 256 * 1024;
+
+/// The smallest request of the concurrency phase on a slow link.
+const MIN_CONCURRENCY_REQUEST: usize = 4 * 1024;
+
+/// On a slow link the concurrency phase's requests are made smaller, so that
+/// every stream can finish about this many within `--transfer-time`.
+const REQUESTS_PER_STREAM: f64 = 4.0;
 
 /// The relay-only comparison measures latency for at most this long.
 const RELAY_LATENCY_MAX: Duration = Duration::from_secs(5);
 
 /// Requests after the idle time before giving up.
 const IDLE_ATTEMPTS: u64 = 3;
+
+/// The latency phase counts packet loss only once the selected path has been
+/// unchanged this long, and at least [`SETTLE_RTTS`] times the shortest round
+/// trip seen (the shortest: a request slowed down by loss must not restart
+/// the count): setting up a path loses packets by design. iroh's hole punching sends probes that
+/// the peer's NAT drops until the hole is open, and they take their packet
+/// numbers from the relayed path, so QUIC also declares relayed packets lost
+/// that a probe's acknowledgement overtook (campaign 2, debug/latency-loss:
+/// 1-6 of ~120 packets on clean links, all within 75 ms of the switch).
+const PATH_SETTLE: Duration = Duration::from_secs(1);
+
+/// See [`PATH_SETTLE`].
+const SETTLE_RTTS: u32 = 3;
 
 #[derive(Args)]
 pub struct BenchArgs {
@@ -65,7 +86,9 @@ pub struct BenchArgs {
     #[arg(long, default_value = "10s", value_parser = parse::duration)]
     timeout: Duration,
     /// How long to measure latency, with one request per `--interval`.
-    #[arg(long, default_value = "10s", value_parser = parse::duration)]
+    /// Packet loss on the path is counted meanwhile (once the path has
+    /// settled after hole punching).
+    #[arg(long, default_value = "12s", value_parser = parse::duration)]
     latency_duration: Duration,
     /// Time between the starts of two latency requests.
     #[arg(long, default_value = "200ms", value_parser = parse::duration)]
@@ -455,6 +478,7 @@ impl PeerBench<'_> {
             ));
             let t = Instant::now();
             let before = QuicSnapshot::to(ep, to);
+            let mut loss = LossCount::new(ep, to, t);
             let mut pinger = Pinger::new(ep, to, out, log.clone()).with_phase("latency");
             let interrupted = probe::ping_series(
                 &mut pinger,
@@ -463,11 +487,12 @@ impl PeerBench<'_> {
                 self.payload_size,
                 args.timeout,
                 stop,
-                |_, _| {},
+                |reply, _| loss.on_reply(ep, to, log, reply),
             )
             .await;
             let mut l = latency(&pinger, self.payload_size);
             l.quic = phase_quic(ep, to, before.as_ref());
+            l.loss = loss.finish(ep, to, log);
             phase_event(out, "latency", l.failed == 0, t.elapsed(), &l);
             peer.latency = Some(l);
             if interrupted {
@@ -496,7 +521,14 @@ impl PeerBench<'_> {
         if args.runs(Phase::Concurrency) && args.streams > 0 && args.concurrency_size > 0 {
             self.enter("concurrency");
             let t = Instant::now();
-            let Some(c) = unless_stopped(self.concurrency(), stop).await else {
+            // The slower direction of the transfers just measured.
+            let link_mbps = [&peer.upload, &peer.download]
+                .into_iter()
+                .flatten()
+                .filter(|t| t.ok)
+                .filter_map(|t| t.throughput_mbps)
+                .reduce(f64::min);
+            let Some(c) = unless_stopped(self.concurrency(link_mbps), stop).await else {
                 return true;
             };
             phase_event(out, "concurrency", c.ok, t.elapsed(), &c);
@@ -547,8 +579,8 @@ impl PeerBench<'_> {
             fmt_dur(args.transfer_time)
         ));
         // A safety net: the transfers end at the time limit themselves (an
-        // upload then waits a little for the listener's count).
-        let limit = args.transfer_time + probe::COUNT_WAIT + Duration::from_secs(1);
+        // upload then waits for the listener's count, see `count_wait`).
+        let limit = args.transfer_time + probe::COUNT_WAIT_MAX + Duration::from_secs(1);
         let before = QuicSnapshot::to(ep, self.to);
         let run = async {
             if is_upload {
@@ -565,10 +597,12 @@ impl PeerBench<'_> {
         r
     }
 
-    /// `--streams` parallel workers sending echo requests of 256 KiB until
-    /// `--concurrency-size` bytes or `--transfer-time`, while small requests
-    /// measure the round-trip time under load.
-    async fn concurrency(&self) -> Concurrency {
+    /// `--streams` parallel workers sending echo requests of 256 KiB (less
+    /// on a link measured at under `link_mbps`, see
+    /// [`concurrency_request_size`]) until `--concurrency-size` bytes or
+    /// `--transfer-time`, while small requests measure the round-trip time
+    /// under load.
+    async fn concurrency(&self, link_mbps: Option<f64>) -> Concurrency {
         let args = self.args;
         let (ep, to) = (self.ep, self.to);
         let relayed = path_to(ep, to) == PathKind::Relay;
@@ -577,7 +611,12 @@ impl PeerBench<'_> {
         } else {
             args.concurrency_size
         };
-        let size = args.request_size();
+        let size = concurrency_request_size(
+            args.request_size(),
+            link_mbps,
+            args.streams,
+            args.transfer_time,
+        );
         self.progress.say(format!(
             "Sending {} in parallel over {} streams (at most {})...",
             report::fmt_bytes(budget),
@@ -667,6 +706,7 @@ impl PeerBench<'_> {
             ok: failed == 0,
             streams: args.streams,
             request_bytes: size,
+            sized_for_mbps: link_mbps.filter(|_| size < args.request_size()),
             requests: rtts.len() as u64,
             failed,
             unfinished,
@@ -722,7 +762,9 @@ impl PeerBench<'_> {
         if let Some(conn) = conn {
             let base = QuicSnapshot::of(&conn);
             let log = Arc::new(PathLog::new(self.to));
-            let mut pinger = Pinger::new(ep, self.to, self.out, log).with_phase("relay_latency");
+            let mut loss = LossCount::new(ep, self.to, Instant::now());
+            let mut pinger =
+                Pinger::new(ep, self.to, self.out, log.clone()).with_phase("relay_latency");
             probe::ping_series(
                 &mut pinger,
                 args.latency_duration.min(RELAY_LATENCY_MAX),
@@ -730,11 +772,12 @@ impl PeerBench<'_> {
                 self.payload_size,
                 args.timeout,
                 stop,
-                |_, _| {},
+                |reply, _| loss.on_reply(ep, self.to, &log, reply),
             )
             .await;
             let mut l = latency(&pinger, self.payload_size);
             l.quic = phase_quic(ep, self.to, Some(&base));
+            l.loss = loss.finish(ep, self.to, &log);
             let size = args.transfer_size.min(args.relay_transfer_size);
             let capped = size < args.transfer_size;
             let up = if args.runs(Phase::Upload) {
@@ -747,7 +790,11 @@ impl PeerBench<'_> {
             } else {
                 None
             };
-            rc.ok = connected
+            // Reachable: something went through. Everything else that
+            // failed (slow transfers, some requests) makes it not `ok`.
+            rc.reachable =
+                connected && (l.ok > 0 || [&up, &down].into_iter().flatten().any(|t| t.ok));
+            rc.ok = rc.reachable
                 && l.failed == 0
                 && l.ok > 0
                 && up.as_ref().is_none_or(|t| t.ok)
@@ -847,6 +894,90 @@ impl PeerBench<'_> {
     }
 }
 
+/// Where the latency phase's loss count stands, see [`PATH_SETTLE`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LossWindow {
+    /// The selected path has not changed since `settle` before the count
+    /// started: count on.
+    Counting,
+    /// The path changed less than `settle` before the count started, or
+    /// after that, and has been unchanged for `settle` now: start again.
+    Restart,
+    /// The path changed less than `settle` ago.
+    Unsettled,
+}
+
+impl LossWindow {
+    /// The state of a count started at `from`, given the last change of the
+    /// selected path.
+    fn at(from: Instant, last_change: Option<Instant>, settle: Duration, now: Instant) -> Self {
+        match last_change {
+            Some(c) if c + settle > from && now >= c + settle => Self::Restart,
+            Some(c) if c + settle > from => Self::Unsettled,
+            _ => Self::Counting,
+        }
+    }
+}
+
+/// Counts the latency phase's packet loss from when the selected path has
+/// settled (see [`PATH_SETTLE`]).
+struct LossCount {
+    /// The start of the phase.
+    start: Instant,
+    /// The start of the count, and the counters then.
+    from: Instant,
+    base: Option<QuicSnapshot>,
+    /// The shortest round trip so far.
+    min_rtt: Option<Duration>,
+}
+
+impl LossCount {
+    fn new(ep: &Endpoint, to: NodeId, start: Instant) -> Self {
+        Self {
+            start,
+            from: start,
+            base: QuicSnapshot::to(ep, to),
+            min_rtt: None,
+        }
+    }
+
+    /// How long the path must be unchanged, see [`PATH_SETTLE`].
+    fn settle(&self) -> Duration {
+        let rtts = self.min_rtt.map_or(Duration::ZERO, |r| r * SETTLE_RTTS);
+        PATH_SETTLE.max(rtts.min(PATH_SETTLE * 10))
+    }
+
+    /// After every request: starts the count again once a path change has
+    /// settled.
+    fn on_reply(&mut self, ep: &Endpoint, to: NodeId, log: &PathLog, reply: &probe::Reply) {
+        if reply.result.is_ok() {
+            self.min_rtt = Some(self.min_rtt.map_or(reply.rtt, |m| m.min(reply.rtt)));
+        }
+        let now = Instant::now();
+        if LossWindow::at(self.from, log.last_change(), self.settle(), now) == LossWindow::Restart {
+            self.from = now;
+            self.base = QuicSnapshot::to(ep, to);
+        }
+    }
+
+    /// The loss since the count started; `None` if the path had not settled
+    /// by the end of the phase, or the connection changed.
+    fn finish(self, ep: &Endpoint, to: NodeId, log: &PathLog) -> Option<LatencyLoss> {
+        let now = Instant::now();
+        if LossWindow::at(self.from, log.last_change(), self.settle(), now) != LossWindow::Counting
+        {
+            return None;
+        }
+        let q = phase_quic(ep, to, self.base.as_ref())?;
+        Some(LatencyLoss {
+            from_ms: ms(self.from.saturating_duration_since(self.start)),
+            sent_packets: q.sent_packets,
+            lost_packets: q.lost_packets,
+            lost_pct: q.lost_pct,
+        })
+    }
+}
+
 /// The outcome of the concurrency phase's requests.
 #[derive(Default)]
 struct Requests {
@@ -857,6 +988,27 @@ struct Requests {
     unfinished: u64,
     /// The first error.
     error: Option<anyhow::Error>,
+}
+
+/// The size of the concurrency phase's requests: `max` (256 KiB, or
+/// `--concurrency-size` if smaller), or less on a link measured at
+/// `link_mbps`, so that each of the `streams` can finish about
+/// [`REQUESTS_PER_STREAM`] echo requests within `time` (in whole KiB, at
+/// least [`MIN_CONCURRENCY_REQUEST`]). Requests still running at the time
+/// limit are cut off and not counted, so on a slow link 256 KiB requests
+/// gave no throughput at all (campaign 2: 8 x 256 KiB at ~1-4 Mbps).
+fn concurrency_request_size(
+    max: usize,
+    link_mbps: Option<f64>,
+    streams: usize,
+    time: Duration,
+) -> usize {
+    let Some(mbps) = link_mbps.filter(|m| m.is_finite() && *m > 0.0) else {
+        return max;
+    };
+    let per_stream = mbps * 1e6 / 8.0 * time.as_secs_f64() / streams.max(1) as f64;
+    let fit = (per_stream / REQUESTS_PER_STREAM) as usize / 1024 * 1024;
+    fit.clamp(MIN_CONCURRENCY_REQUEST.min(max), max)
 }
 
 /// Connects (lookup, QUIC and golem-p2p handshake), timing the lookup
@@ -917,6 +1069,7 @@ fn latency(pinger: &Pinger, payload_size: usize) -> Latency {
         direct_fraction: s.direct_fraction,
         final_path: path_name(s.final_path),
         quic: None,
+        loss: None,
     }
 }
 
@@ -1045,4 +1198,83 @@ async fn wait_flag(flag: &AtomicBool) {
 /// `10 s`, `200 ms`.
 fn fmt_dur(d: Duration) -> String {
     report::fmt_ms(ms(d))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loss_count_waits_for_the_path_to_settle() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let settle = PATH_SETTLE;
+        let state = |from, change: Option<u64>, now| {
+            LossWindow::at(at(from), change.map(at), settle, at(now))
+        };
+        // No path change: count from the start of the phase.
+        assert_eq!(state(0, None, 5000), LossWindow::Counting);
+        // A change long before the phase does not matter.
+        let t1 = at(5000);
+        assert_eq!(
+            LossWindow::at(t1, Some(t0), settle, t1 + Duration::from_secs(5)),
+            LossWindow::Counting
+        );
+        // Hole punching finished 90 ms into the phase (campaign 2): wait a
+        // second, then count from there.
+        assert_eq!(state(0, Some(90), 600), LossWindow::Unsettled);
+        assert_eq!(state(0, Some(90), 1090), LossWindow::Restart);
+        assert_eq!(state(1100, Some(90), 9000), LossWindow::Counting);
+        // A change just before the phase started is waited out too.
+        let t1 = at(300);
+        assert_eq!(
+            LossWindow::at(t1, Some(at(200)), settle, at(700)),
+            LossWindow::Unsettled
+        );
+        // Another change after counting started: start again once settled.
+        assert_eq!(state(1100, Some(4000), 4500), LossWindow::Unsettled);
+        assert_eq!(state(1100, Some(4000), 5000), LossWindow::Restart);
+        // A change in the last second of the phase: never settled.
+        assert_eq!(state(1100, Some(9500), 10_000), LossWindow::Unsettled);
+
+        // The path must be unchanged for 1 s, or 3 of the shortest round
+        // trips on long paths.
+        let mut c = LossCount {
+            start: t0,
+            from: t0,
+            base: None,
+            min_rtt: None,
+        };
+        assert_eq!(c.settle(), PATH_SETTLE);
+        c.min_rtt = Some(Duration::from_millis(80));
+        assert_eq!(c.settle(), PATH_SETTLE);
+        c.min_rtt = Some(Duration::from_millis(600));
+        assert_eq!(c.settle(), Duration::from_millis(1800));
+        c.min_rtt = Some(Duration::from_secs(30));
+        assert_eq!(c.settle(), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn concurrency_requests_fit_the_link() {
+        let size = |mbps: Option<f64>| {
+            concurrency_request_size(CONCURRENCY_REQUEST, mbps, 8, Duration::from_secs(8))
+        };
+        // Fast links, or nothing measured: 256 KiB.
+        assert_eq!(size(None), CONCURRENCY_REQUEST);
+        assert_eq!(size(Some(123.0)), CONCURRENCY_REQUEST);
+        assert_eq!(size(Some(f64::NAN)), CONCURRENCY_REQUEST);
+        // From about 8.4 Mbps down, 4 requests per stream fit in 8 s.
+        assert_eq!(size(Some(8.4)), CONCURRENCY_REQUEST);
+        assert_eq!(size(Some(8.0)), 244 * 1024);
+        // Campaign 2's lossy link: 3.7 and 1.1 Mbps (the slower direction).
+        assert_eq!(size(Some(3.658)), 111 * 1024);
+        assert_eq!(size(Some(1.1)), 33 * 1024);
+        // Very slow: at least 4 KiB.
+        assert_eq!(size(Some(0.05)), MIN_CONCURRENCY_REQUEST);
+        // Never more than --concurrency-size.
+        assert_eq!(
+            concurrency_request_size(1000, Some(0.05), 8, Duration::from_secs(8)),
+            1000
+        );
+    }
 }

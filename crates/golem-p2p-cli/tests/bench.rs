@@ -101,6 +101,26 @@ fn check_latency(l: &Value, path: &str) {
     assert!(l["jitter_ms"].as_f64().unwrap() >= 0.0);
     assert_eq!(l["final_path"], path);
     check_quic(&l["quic"]);
+    // The loss count: from the start (the path did not change on loopback),
+    // within the phase's counters.
+    let loss = &l["loss"];
+    assert_eq!(loss["from_ms"], 0.0, "{l:#}");
+    let sent = loss["sent_packets"].as_u64().unwrap();
+    assert!(
+        sent > 0 && sent <= l["quic"]["sent_packets"].as_u64().unwrap(),
+        "{l:#}"
+    );
+    assert!(loss["lost_packets"].as_u64().unwrap() <= sent, "{l:#}");
+}
+
+/// The `item`s of the report's unknowns.
+fn unknown_items(r: &Value) -> Vec<&str> {
+    r["unknowns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["item"].as_str().unwrap())
+        .collect()
 }
 
 /// Both sides relay-only: the report says "relay only" (exit code 4), all
@@ -163,14 +183,11 @@ async fn bench_relay_only() {
     // Without UDP, UDP and NAT are not tested; the relay's HTTPS latency is.
     assert!(l["net_report"].is_null(), "{l:#}");
     assert!(num(rc, "https_latency_ms") > 0.0, "{rc:#}");
-    let unknowns: Vec<_> = r["unknowns"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|u| u["item"].as_str().unwrap())
-        .collect();
+    let unknowns = unknown_items(&r);
     assert!(unknowns.contains(&"port_mapping"), "{r:#}");
     assert!(unknowns.contains(&"udp"), "{r:#}");
+    // 1.5 s of latency requests are too few packets to judge loss.
+    assert!(unknowns.contains(&"packet_loss"), "{r:#}");
 
     let p = &r["peer"];
     let c = &p["connect"];
@@ -193,7 +210,9 @@ async fn bench_relay_only() {
     let cc = &p["concurrency"];
     assert_eq!(cc["ok"], true, "{cc:#}");
     assert_eq!(cc["streams"], 4);
+    // Fast enough for full-size requests.
     assert_eq!(cc["request_bytes"], 262_144);
+    assert!(cc["sized_for_mbps"].is_null(), "{cc:#}");
     // The relay cap (1M) limits the phase to 3 requests of 256 KiB.
     assert_eq!(cc["requests"], 3, "{cc:#}");
     assert_eq!(cc["total_bytes"], 3 * 262_144);
@@ -340,7 +359,11 @@ async fn bench_direct_with_relay_compare_and_idle() {
     let rc = &r["relay_compare"];
     let relay_url = format!("{}/", infra.relay_url);
     assert!(rc["skipped"].is_null(), "{rc:#}");
-    assert_eq!(rc["ok"], true, "{rc:#}");
+    assert_eq!(
+        (&rc["ok"], &rc["reachable"]),
+        (&true.into(), &true.into()),
+        "{rc:#}"
+    );
     assert_eq!(rc["relay"], relay_url.as_str());
     assert_eq!(rc["connect"]["path"], "relay");
     check_latency(&rc["latency"], "relay");
@@ -432,6 +455,17 @@ async fn phases_end_at_the_time_limit() {
     assert_eq!((&c["ok"], &c["failed"]), (&true.into(), &0.into()), "{c:#}");
     assert_eq!(c["limited_by"], "time", "{c:#}");
     assert!(c["unfinished"].as_u64().unwrap() <= 16, "{c:#}");
+    // Requests are 256 KiB, or smaller (at least 4 KiB) if the transfers
+    // were too slow for that within the time limit.
+    let size = c["request_bytes"].as_u64().unwrap();
+    if c["sized_for_mbps"].is_null() {
+        assert_eq!(size, 262_144, "{c:#}");
+    } else {
+        assert!((4096..262_144).contains(&size), "{c:#}");
+        let slower =
+            num(&p["upload"], "throughput_mbps").min(num(&p["download"], "throughput_mbps"));
+        assert_eq!(num(c, "sized_for_mbps"), slower, "{c:#}");
+    }
     assert!(r["issues"].as_array().unwrap().is_empty(), "{r:#}");
 
     // Each phase took about the time limit, not the time limit plus a
@@ -441,6 +475,42 @@ async fn phases_end_at_the_time_limit() {
             assert!(num(e, "duration_ms") < 3000.0, "{e}");
         }
     }
+}
+
+/// After transfers that measured a link too slow for 256 KiB requests within
+/// the time limit (here: 1 kB transfers, whose throughput is mostly round
+/// trips, and 64 streams in 1 s), the concurrency phase uses smaller
+/// requests, so that it still measures a throughput.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrency_requests_fit_a_slow_link() {
+    let infra = Infra::start("bench-sized").await;
+    let (_lis, lis_id) = listener(&infra, "lis", &[]).await;
+    let a = strs([
+        "--to",
+        &lis_id,
+        "--skip",
+        "local,latency",
+        "--transfer-size",
+        "1k",
+        "--transfer-time",
+        "1s",
+        "--streams",
+        "64",
+        "--concurrency-size",
+        "1M",
+    ]);
+    let (code, r, _) = bench(&bench_args(&infra, &a)).await;
+    assert_eq!(code, Some(0), "{r:#}");
+    let p = &r["peer"];
+    let slower = num(&p["upload"], "throughput_mbps").min(num(&p["download"], "throughput_mbps"));
+    let c = &p["concurrency"];
+    assert_eq!(num(c, "sized_for_mbps"), slower, "{c:#}");
+    let size = c["request_bytes"].as_u64().unwrap();
+    assert!((4096..262_144).contains(&size) && size % 1024 == 0, "{c:#}");
+    assert_eq!(r["settings"]["concurrency_request_bytes"], 262_144);
+    assert_eq!((&c["ok"], &c["failed"]), (&true.into(), &0.into()), "{c:#}");
+    assert!(c["requests"].as_u64().unwrap() > 0, "{c:#}");
+    assert!(num(c, "throughput_mbps") > 0.0, "{c:#}");
 }
 
 /// The listener's limits: uploads and downloads beyond `--max-transfer-size`

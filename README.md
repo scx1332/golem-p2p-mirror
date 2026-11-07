@@ -72,8 +72,8 @@ What the tests cover:
 | `relay_url.rs` (CLI) | `http://` and other non-https relay URLs rejected on the command line |
 | `probe.rs` (CLI) | `--json` output of `listen`, `probe` and `send` as child processes: relay-only probe with bulk transfer (every line parses, common fields, summary consistent with the replies, listener saw every request and the bulk bytes over the relay); probe that ends on a direct path with `time_to_direct_ms`; unknown node fails with exit code 1; SIGTERM ends a probe with a summary; a bulk upload above the listener's `--max-transfer-size` is refused (exit code 3, cause `refused`), one within it works; an echo request that is never finished is refused after 10 s; `keygen`/`directory` with `--json`, error event and exit code |
 | `relay_quic.rs` (CLI) | the relay's QUIC address discovery port (`--relay-quic-port`, per relay `,quic=PORT`, `off`) reaches iroh: a local relay with QAD on a random port sees QAD connections; invalid ports rejected |
-| `bench.rs` (CLI) | `bench --json` against a local listener: relay-only (exit code 4, every phase over the relay, transfers capped for the relay, the listener saw the upload and download) and normal (exit code 0, QAD answers, direct path, `--compare-relay` over the relay, `--idle`); the listener's limits (too large and busy refused cleanly with exit code 5, exactly the limit works); uploads, downloads and parallel requests end at `--transfer-time` (a stopped upload is still counted by the listener, cut-off requests are not failures); local check only, healthy and with an untrusted relay certificate; unknown node (exit code 3); SIGTERM ends a bench with a report; invalid arguments |
-| unit tests | yagna/ethsign compatibility vectors, record verification (including https-only relay URLs, and records of older nodes that list Docker addresses), record store rules and bounds, published addresses (container and VM bridges left out, LAN and VPN kept, ranking before the cap, IPv6); CLI: argument parsers, timestamps, percentiles, jitter, refusals, the bench verdict rules |
+| `bench.rs` (CLI) | `bench --json` against a local listener: relay-only (exit code 4, every phase over the relay, transfers capped for the relay, the listener saw the upload and download) and normal (exit code 0, QAD answers, direct path, `--compare-relay` over the relay, `--idle`); the listener's limits (too large and busy refused cleanly with exit code 5, exactly the limit works); uploads, downloads and parallel requests end at `--transfer-time` (a stopped upload is still counted by the listener, cut-off requests are not failures); smaller parallel requests after slow transfers, still with a throughput; local check only, healthy and with an untrusted relay certificate; unknown node (exit code 3); SIGTERM ends a bench with a report; invalid arguments |
+| unit tests | yagna/ethsign compatibility vectors, record verification (including https-only relay URLs, and records of older nodes that list Docker addresses), record store rules and bounds, published addresses (container and VM bridges left out, LAN and VPN kept, ranking before the cap, IPv6); CLI: argument parsers, timestamps, percentiles, jitter, refusals, the bench verdict rules, the latency phase's loss window, the wait for an upload's count, the size of parallel requests |
 
 ## Trying it between two machines
 
@@ -196,20 +196,24 @@ golem-p2p bench --relay https://RELAY_IP:3341 --relay-ca relay.crt \
 
 **Peer benchmark** (`--to NODE_ID`), each phase bounded by size and time:
 connect (directory lookup and handshake times, first path); latency (one
-request per 200 ms for 10 s: round-trip min/median/p95/max, jitter, failures,
+request per 200 ms for 12 s: round-trip min/median/p95/max, jitter, failures,
 path over time, time until direct, fraction direct, path changes); upload and
 download (10 MB each or 8 s); concurrency (8 streams of 256 KiB requests, 8 MB,
-plus the round trip of small requests meanwhile); with `--compare-relay` the
-same over a relay-only connection, i.e. what you get if hole punching fails;
+smaller requests on links slower than about 8 Mbps, plus the round trip of
+small requests meanwhile); with `--compare-relay` the
+same over a relay-only connection, i.e. what you get if hole punching fails
+(the peer counts as unreachable through the relay only if nothing gets
+through; a failed or very slow relayed transfer is a hint);
 with `--idle 60s` whether the connection survives a minute without traffic.
 QUIC packet loss is reported per phase; only loss while measuring latency
-(when the connection is nearly idle) counts as a problem of the network, as
-the transfers lose packets by design while congestion control probes for the
-link's capacity. Transfers through a relay
+(when the connection is nearly idle), counted once the path has settled after
+hole punching, counts as a problem of the network, as the transfers lose
+packets by design while congestion control probes for the link's capacity,
+and so does setting up a path. Transfers through a relay
 are capped at `--relay-transfer-size` (4 MB) to spare shared relays. With the
 defaults a run moves at most about 36 MB (44 MB with `--compare-relay`) and
-takes about 15 s on a fast link and about 40 s on a slow one, where every
-transfer phase stops at its time limit (`--compare-relay` adds about 8 to 30
+takes about 17 s on a fast link and about 45 s on a slow one, where every
+transfer phase stops at its time limit (`--compare-relay` adds about 8 to 35
 s; details in [docs/cli-events.md](docs/cli-events.md)). See
 `golem-p2p bench --help` for all options.
 

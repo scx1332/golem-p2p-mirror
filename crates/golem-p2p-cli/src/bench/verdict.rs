@@ -19,7 +19,8 @@ use super::report::{
 const LOSS_HINT_PCT: f64 = 0.5;
 
 /// Fewer packets sent in the latency phase say too little about loss. With
-/// the defaults (10 s, one request per 200 ms) the phase sends about 110.
+/// the defaults (12 s, one request per 200 ms) the phase sends about 140,
+/// and one lost packet is enough for the hint up to 200.
 const LOSS_MIN_PACKETS: u64 = 50;
 
 /// Fills `status`, `exit_code`, `verdict`, `issues`, `hints` and `unknowns`.
@@ -477,26 +478,61 @@ impl<'a> Facts<'a> {
         // Only the latency phase counts: its few small packets cannot
         // congest any link, so what is lost there is lost by the path. In the
         // transfers, congestion control loses packets by design while it
-        // probes for the link's capacity.
-        if let Some(q) = p.latency.as_ref().and_then(|l| l.quic.as_ref())
-            && let Some(pct) = q.lost_pct
-            && q.lost_packets > 0
-            && q.sent_packets >= LOSS_MIN_PACKETS
-            && pct >= LOSS_HINT_PCT
-        {
-            hints.push(finding(
-                "packet_loss",
-                format!(
-                    "{} of {} packets this node sent while measuring latency {} lost \
-                     ({pct:.1}%). The connection was nearly idle then, so this is loss on the \
-                     network path (for example Wi-Fi, a mobile or an overloaded link), not \
-                     congestion caused by the test. Random loss slows every transfer down: \
-                     about 1% can cut the throughput of a connection by ten times or more.",
-                    q.lost_packets,
-                    q.sent_packets,
-                    if q.lost_packets == 1 { "was" } else { "were" }
-                ),
-            ));
+        // probes for the link's capacity. And only once the path had
+        // settled: hole punching loses packets by design too.
+        if let Some(l) = &p.latency {
+            match &l.loss {
+                Some(q)
+                    if q.sent_packets >= LOSS_MIN_PACKETS
+                        && q.lost_packets > 0
+                        && q.lost_pct.is_some_and(|pct| pct >= LOSS_HINT_PCT) =>
+                {
+                    hints.push(finding(
+                        "packet_loss",
+                        format!(
+                            "{} of {} packets this node sent while measuring latency{} {} lost \
+                             ({:.1}%). The connection was nearly idle then, so this is loss on \
+                             the network path (for example Wi-Fi, a mobile or an overloaded \
+                             link), not congestion caused by the test. Random loss slows every \
+                             transfer down: about 1% can cut the throughput of a connection by \
+                             ten times or more.",
+                            q.lost_packets,
+                            q.sent_packets,
+                            if q.from_ms > 0.0 {
+                                " (after the path had settled)"
+                            } else {
+                                ""
+                            },
+                            if q.lost_packets == 1 { "was" } else { "were" },
+                            q.lost_pct.unwrap_or_default(),
+                        ),
+                    ));
+                }
+                Some(q) if q.sent_packets < LOSS_MIN_PACKETS => unknowns.push(unknown(
+                    "packet_loss",
+                    format!(
+                        "packet loss on the path: only {} packets were sent while measuring \
+                         latency{}, too few to tell (at least {LOSS_MIN_PACKETS} are needed; \
+                         use a longer --latency-duration)",
+                        q.sent_packets,
+                        if q.from_ms > 0.0 {
+                            " after the path had settled"
+                        } else {
+                            ""
+                        },
+                    ),
+                )),
+                Some(_) => {}
+                None if l.quic.is_some() => unknowns.push(unknown(
+                    "packet_loss",
+                    "packet loss on the path: the selected path changed until the end of the \
+                     latency phase, and setting up a path loses packets by design",
+                )),
+                None => unknowns.push(unknown(
+                    "packet_loss",
+                    "packet loss on the path: the connection changed during the latency phase",
+                )),
+            }
         }
         if let Some(l) = &p.latency
             && let (Some(j), Some(m)) = (l.jitter_ms, l.rtt_ms.p50)
@@ -529,10 +565,12 @@ impl<'a> Facts<'a> {
                 ),
             ));
         }
+        // Whether the peer is reachable through the relay is judged by what
+        // got through; a slow or failed transfer over it is a lesser matter.
         if let Some(rc) = &self.r.relay_compare
             && rc.skipped.is_none()
         {
-            if !rc.ok {
+            if !rc.reachable {
                 let err = rc
                     .connect
                     .as_ref()
@@ -543,12 +581,55 @@ impl<'a> Facts<'a> {
                             .flatten()
                             .find_map(|t| t.error.clone())
                     })
-                    .unwrap_or_else(|| "requests failed".into());
+                    .unwrap_or_else(|| "no request got an answer".into());
                 issues.push(finding(
                     "relay_fallback_failed",
                     format!(
                         "The relay-only connection to the peer did not work ({err}). If hole \
                          punching fails, this peer cannot be reached."
+                    ),
+                ));
+            } else if !rc.ok {
+                let mut failed = Vec::new();
+                if let Some(l) = &rc.latency
+                    && l.failed > 0
+                {
+                    failed.push(format!(
+                        "{} of {} requests got no correct reply",
+                        l.failed, l.sent
+                    ));
+                }
+                for (what, t) in [("upload", &rc.upload), ("download", &rc.download)] {
+                    if let Some(t) = t
+                        && !t.ok
+                    {
+                        failed.push(format!(
+                            "the {what} failed ({})",
+                            t.error.as_deref().unwrap_or("unknown error")
+                        ));
+                    }
+                }
+                let works = perf(
+                    rc.latency.as_ref(),
+                    rc.upload.as_ref(),
+                    rc.download.as_ref(),
+                );
+                hints.push(finding(
+                    "relay_fallback_degraded",
+                    format!(
+                        "The relay-only connection to the peer{} works{}, but {}. If hole \
+                         punching fails, this peer stays reachable through the relay, but \
+                         transfers may be slow or fail.",
+                        rc.relay
+                            .as_ref()
+                            .map(|r| format!(" (through {r})"))
+                            .unwrap_or_default(),
+                        if works.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({works})")
+                        },
+                        failed.join("; ")
                     ),
                 ));
             } else if self.direct_seen {
@@ -844,8 +925,8 @@ mod tests {
     use super::*;
     use crate::{
         bench::report::{
-            Concurrency, Connect, ConnectionLost, DirectoryCheck, HomeRelay, Local, PathPoint,
-            PathReport, QuicStats, RelayCompare, Settings,
+            Concurrency, Connect, ConnectionLost, DirectoryCheck, HomeRelay, LatencyLoss, Local,
+            PathPoint, PathReport, QuicStats, RelayCompare, Settings,
         },
         probe::Stats,
     };
@@ -853,7 +934,7 @@ mod tests {
     fn settings() -> Settings {
         Settings {
             timeout_ms: 10_000.0,
-            latency_duration_ms: 10_000.0,
+            latency_duration_ms: 12_000.0,
             interval_ms: 200.0,
             payload_bytes: 64,
             transfer_bytes: 10_000_000,
@@ -1352,23 +1433,46 @@ mod tests {
         }
     }
 
+    /// The latency phase's loss count from `from_ms` on.
+    fn loss(from_ms: f64, sent: u64, lost: u64) -> LatencyLoss {
+        LatencyLoss {
+            from_ms,
+            sent_packets: sent,
+            lost_packets: lost,
+            lost_pct: Some(lost as f64 * 100.0 / sent as f64),
+        }
+    }
+
+    /// A direct peer whose latency phase has these counters (whole phase)
+    /// and this loss count.
+    fn peer_with_loss(quic_all: QuicStats, loss: Option<LatencyLoss>) -> Peer {
+        let mut p = peer(true);
+        let l = p.latency.as_mut().unwrap();
+        l.quic = Some(quic_all);
+        l.loss = loss;
+        p
+    }
+
+    fn unknown_items(r: &Report) -> Vec<&'static str> {
+        r.unknowns.iter().map(|u| u.item).collect()
+    }
+
     #[test]
     fn packet_loss_only_from_the_latency_phase() {
         // Congestion losses of the transfers on a fast, clean path (campaign
         // 1: 2.3-6.8% at 135-149 Mbps) are not a problem of the path.
-        let mut p = peer(true);
-        p.latency.as_mut().unwrap().quic = Some(quic(112, 0));
+        let mut p = peer_with_loss(quic(140, 0), Some(loss(0.0, 140, 0)));
         p.upload.as_mut().unwrap().quic = Some(quic(8000, 400));
         p.quic = Some(quic(9000, 400));
         let mut r = report(Some(local()), Some(p));
         analyze(&mut r);
         assert_eq!(r.status, Status::Healthy, "{r:#?}");
         assert!(r.hints.is_empty(), "{:?}", r.hints);
+        assert!(!unknown_items(&r).contains(&"packet_loss"), "{r:#?}");
 
         // About 1% lost while the connection was nearly idle (the lab's
         // lossy link: 1% each way) is flagged, whatever the transfers lost.
-        let mut p = peer(true);
-        p.latency.as_mut().unwrap().quic = Some(quic(112, 1));
+        let mut p = peer_with_loss(quic(112, 1), Some(loss(0.0, 112, 1)));
         p.upload.as_mut().unwrap().quic = Some(quic(8000, 80));
         let mut r = report(Some(local()), Some(p));
         analyze(&mut r);
@@ -1383,16 +1487,15 @@ mod tests {
             r.hints[0].message
         );
 
-        // Below the threshold (0.4%), or too few packets to say: no hint.
-        for q in [quic(250, 1), quic(30, 1)] {
-            let mut p = peer(true);
-            p.latency.as_mut().unwrap().quic = Some(q);
-            let mut r = report(Some(local()), Some(p));
-            analyze(&mut r);
-            assert!(r.hints.is_empty(), "{:?}", r.hints);
-        }
-        // Without counters for the latency phase the whole connection's loss
-        // is not used either.
+        // Below the threshold (0.4%): no hint.
+        let mut r = report(
+            Some(local()),
+            Some(peer_with_loss(quic(250, 1), Some(loss(0.0, 250, 1)))),
+        );
+        analyze(&mut r);
+        assert!(r.hints.is_empty(), "{:?}", r.hints);
+        // Without a loss count for the latency phase the whole connection's
+        // loss is not used either.
         let mut p = peer(true);
         p.quic = Some(quic(9000, 900));
         let mut r = report(Some(local()), Some(p));
@@ -1401,10 +1504,81 @@ mod tests {
     }
 
     #[test]
+    fn packet_loss_while_the_path_settles_does_not_count() {
+        // Campaign 2: relay first, direct ~90 ms into the latency phase; hole
+        // punching "lost" 1-6 of ~120 packets on clean links. Counted from
+        // when the path had settled, nothing was lost: no hint.
+        let mut r = report(
+            Some(local()),
+            Some(peer_with_loss(quic(121, 4), Some(loss(1090.0, 108, 0)))),
+        );
+        analyze(&mut r);
+        assert_eq!(r.status, Status::Healthy, "{r:#?}");
+        assert!(r.hints.is_empty(), "{:?}", r.hints);
+
+        // Real loss after the path settled is flagged, and the message says
+        // when counting started.
+        let mut r = report(
+            Some(local()),
+            Some(peer_with_loss(quic(127, 3), Some(loss(1213.0, 115, 2)))),
+        );
+        analyze(&mut r);
+        assert_eq!(codes(&r.hints), ["packet_loss"]);
+        let m = &r.hints[0].message;
+        assert!(
+            m.starts_with(
+                "2 of 115 packets this node sent while measuring latency (after the path \
+                 had settled) were lost (1.7%)."
+            ),
+            "{m}"
+        );
+    }
+
+    #[test]
+    fn packet_loss_unknown_without_a_settled_count() {
+        // The path changed until the end of the phase: loss not measured.
+        let mut r = report(Some(local()), Some(peer_with_loss(quic(121, 4), None)));
+        analyze(&mut r);
+        assert!(r.hints.is_empty(), "{:?}", r.hints);
+        let u = r.unknowns.iter().find(|u| u.item == "packet_loss").unwrap();
+        assert!(u.reason.contains("path changed until the end"), "{u:?}");
+
+        // Too few packets after the path settled (or a short phase).
+        let mut r = report(
+            Some(local()),
+            Some(peer_with_loss(quic(60, 1), Some(loss(1000.0, 30, 1)))),
+        );
+        analyze(&mut r);
+        assert!(r.hints.is_empty(), "{:?}", r.hints);
+        let u = r.unknowns.iter().find(|u| u.item == "packet_loss").unwrap();
+        assert!(
+            u.reason
+                .contains("only 30 packets were sent while measuring latency after"),
+            "{u:?}"
+        );
+
+        // The connection changed during the phase.
+        let mut p = peer(true);
+        p.latency.as_mut().unwrap().quic = None;
+        let mut r = report(Some(local()), Some(p));
+        analyze(&mut r);
+        let u = r.unknowns.iter().find(|u| u.item == "packet_loss").unwrap();
+        assert!(u.reason.contains("connection changed"), "{u:?}");
+
+        // No latency phase: nothing to say about it.
+        let mut p = peer(true);
+        p.latency = None;
+        let mut r = report(Some(local()), Some(p));
+        analyze(&mut r);
+        assert!(!unknown_items(&r).contains(&"packet_loss"), "{r:#?}");
+    }
+
+    #[test]
     fn relay_fallback() {
         let mut r = report(Some(local()), Some(peer(true)));
         r.relay_compare = Some(RelayCompare {
             ok: true,
+            reachable: true,
             relay: Some("https://r1/".into()),
             latency: Some(latency(75.0)),
             upload: Some(transfer(22.0)),
@@ -1420,9 +1594,102 @@ mod tests {
             h.message
         );
         // A broken fallback is a problem.
-        r.relay_compare.as_mut().unwrap().ok = false;
+        r.relay_compare = Some(RelayCompare {
+            connect: Some(Connect {
+                error: Some("timed out".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
         analyze(&mut r);
         assert_eq!(r.status, Status::Degraded);
         assert_eq!(codes(&r.issues), ["relay_fallback_failed"]);
+        assert!(
+            r.issues[0]
+                .message
+                .starts_with("The relay-only connection to the peer did not work (timed out)."),
+            "{}",
+            r.issues[0].message
+        );
+        // Connected, but nothing got through: the same.
+        r.relay_compare = Some(RelayCompare {
+            connect: Some(Connect {
+                ok: true,
+                ..Default::default()
+            }),
+            latency: Some(Latency {
+                sent: 2,
+                failed: 2,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        analyze(&mut r);
+        assert_eq!(codes(&r.issues), ["relay_fallback_failed"]);
+        assert!(
+            r.issues[0].message.contains("(no request got an answer)"),
+            "{}",
+            r.issues[0].message
+        );
+    }
+
+    #[test]
+    fn slow_relay_fallback_is_not_called_unreachable() {
+        // Campaign 2, lossy link: the relay-only connection answered 25
+        // requests and downloaded at 0.6 Mbps, but the relayed upload's count
+        // did not come back in time.
+        let mut r = report(Some(local()), Some(peer(true)));
+        r.relay_compare = Some(RelayCompare {
+            ok: false,
+            reachable: true,
+            relay: Some("https://198.18.0.1/".into()),
+            connect: Some(Connect {
+                ok: true,
+                path: "relay",
+                ..Default::default()
+            }),
+            latency: Some(latency(160.4)),
+            upload: Some(TransferReport {
+                ok: false,
+                requested_bytes: 4_000_000,
+                relay_capped: true,
+                error_kind: Some("no_count"),
+                error: Some(
+                    "stopped the upload at the time limit, but the listener did not report \
+                     what it received within 8 s"
+                        .into(),
+                ),
+                ..Default::default()
+            }),
+            download: Some(transfer(0.559)),
+            ..Default::default()
+        });
+        analyze(&mut r);
+        assert_eq!(r.status, Status::Healthy, "{:?}", r.issues);
+        assert!(r.issues.is_empty(), "{:?}", r.issues);
+        assert_eq!(codes(&r.hints), ["relay_fallback_degraded"]);
+        assert_eq!(
+            r.hints[0].message,
+            "The relay-only connection to the peer (through https://198.18.0.1/) works (160 ms \
+             round trip, 559 kbps down), but the upload failed (stopped the upload at the time \
+             limit, but the listener did not report what it received within 8 s). If hole \
+             punching fails, this peer stays reachable through the relay, but transfers may be \
+             slow or fail."
+        );
+
+        // Some requests failed, the rest answered: also reachable.
+        let rc = r.relay_compare.as_mut().unwrap();
+        rc.upload = Some(transfer(1.2));
+        rc.latency.as_mut().unwrap().failed = 3;
+        rc.latency.as_mut().unwrap().sent = 25;
+        analyze(&mut r);
+        assert!(r.issues.is_empty(), "{:?}", r.issues);
+        assert!(
+            r.hints[0]
+                .message
+                .contains("but 3 of 25 requests got no correct reply."),
+            "{}",
+            r.hints[0].message
+        );
     }
 }
