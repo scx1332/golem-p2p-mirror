@@ -1,0 +1,303 @@
+# golem-p2p test harness
+
+Tools for testing golem-p2p across NATs. Layer 1, in `lab/`, is an emulated-NAT
+lab on one Linux VM. Nodes run in network namespaces behind emulated home
+routers, carrier NATs and firewalls, with a simulated internet that hosts its
+own iroh relay and golem-p2p directory. One switch per node sends its traffic
+out through the VM's real uplink instead.
+
+Results of the first experiments: [lab/RESULTS.md](lab/RESULTS.md).
+
+```
+lab/lab.sh            the lab: up/down/status/exec/spawn/listen/send/pair/matrix/selftest/netem
+lab/deploy.sh         build the CLI and copy the lab to the VM (run on the build machine)
+lab/realworld.sh      experiment 2: lab node via the real uplink <-> public node here
+lab/topologies/*.topo topologies (selftest, matrix, real)
+lab/tools/reflector.py   UDP/TCP address reflector (runs in the lab's "internet")
+lab/tools/natcheck.py    measures mapping and filtering behaviour from behind a NAT
+lab/tools/summarize.py   summarizes a send run (path, timings)
+lab/tools/aggregate.py   turns matrix/realworld results.txt into a Markdown table
+```
+
+## Requirements
+
+* A Linux VM (tested: Ubuntu 26.04, kernel 7.0, 8 vCPU) with passwordless sudo,
+  `iproute2`, `nftables`, `conntrack`, `python3`, `curl`, `openssl` and the
+  `sch_netem` module. `deploy.sh` installs `nftables conntrack tcpdump` if missing.
+* The lab owns the VM's network namespaces named `gpl-*`, the nft tables `gpl`
+  (inside namespaces) and `gpl_uplink` (root namespace), interfaces `gplu*`
+  and `/run/gpl`. The only other change is `net.ipv4.ip_forward` in the root
+  namespace while a node has `uplink=real` (restored by `down`). Kernel modules
+  the lab loads (`veth`, `nf_conntrack`, `nf_nat`, `nft_*`, `sch_netem`) stay
+  loaded after `down`; with no rules left in the root namespace they do
+  nothing.
+* Binaries: `golem-p2p` (built on the build machine, glibc ≥ 2.34) and
+  `iroh-relay` 1.4.1 (copied from the relay VM or given with `IROH_RELAY_BIN`).
+
+## Deploy
+
+On the build machine (here: the Hetzner server, with `~/.ssh/p2p/ssh_config`):
+
+```sh
+harness/lab/deploy.sh                 # cargo build --release -p golem-p2p-cli, then copy
+GPL_SKIP_BUILD=1 harness/lab/deploy.sh   # copy only
+```
+
+It copies `lab.sh`, `tools/`, `topologies/` to `~/golem-p2p-lab` on
+`p2p-natlab`, the CLI to `bin/golem-p2p`, `iroh-relay` from `p2p-relay1` to
+`bin/iroh-relay` (once), the real relay's certificate to
+`certs/real-relay.crt`, and writes the deployed commit to `DEPLOYED`.
+Don't deploy while a lab command runs: bash reads scripts while executing them.
+
+## Run
+
+On the VM (`lab.sh` re-executes itself with sudo; processes in nodes run as
+the invoking user):
+
+```sh
+cd ~/golem-p2p-lab
+./lab.sh up matrix            # build the topology in topologies/matrix.topo (or a path)
+./lab.sh status               # services, nodes, root-namespace changes
+./lab.sh selftest             # measure every node's NAT (table below)
+./lab.sh pair easy1 sym1 --duration 30      # listen in easy1, send from sym1 for 30 s
+./lab.sh matrix --repeat 3 --duration 30 pub1:easy1 easy1:sym1 ...
+./lab.sh exec easy1 sh -c 'golem-p2p listen --key k --relay $GPL_RELAY --relay-ca $GPL_RELAY_CA --directory $GPL_DIRECTORY'
+./lab.sh exec --root easy1-r1 conntrack -L  # look at a router's NAT table
+./lab.sh netem easy1 delay=50ms loss=2%     # change a link at runtime
+./lab.sh down                 # remove everything (also after a crash)
+```
+
+| command | what it does |
+|---|---|
+| `up <topology>` | tears down any previous lab, builds the topology, starts relay, directory and reflector, waits until they answer. Always rebuilds from scratch, so it is idempotent. |
+| `down` | kills every process in a `gpl-*` namespace (TERM, then KILL), deletes the namespaces, leftover `gplu*` links and the `gpl_uplink` table, restores `net.ipv4.ip_forward`, removes `/run/gpl`. Works from any state, including a half-built lab or after a crash. |
+| `status` | human-readable state. `nodes` prints a TSV table (name, profile, uplink, netns, node IP, public IP) for scripts. |
+| `env [<node>]` | the variables a node's commands get: `GPL_RELAY`, `GPL_RELAY_CA`, `GPL_DIRECTORY`, `GPL_REFLECTOR`, `GPL_NODE`, `GPL_STATE`, `GOLEM_P2P` (real relay for `uplink=real` nodes). |
+| `exec [--root] <target> <cmd...>` | runs a command in a namespace. Targets: a node name, `<node>-r1`, `<node>-r2` (routers, innermost first), `inet`, `svc`. In a node it runs as the invoking user with `bin/` on `PATH` and the `env` variables set; `--root` runs as root. |
+| `spawn [--root] <target> <tag> <cmd...>` / `stop <tag>` | the same in the background, log in `/run/gpl/logs/<tag>.log`, pid in `/run/gpl/pids/<tag>.pid`. |
+| `listen <node> [--tag T] [--relay U --relay-ca F --directory D] [-- args]` | background `golem-p2p listen` with the node's relay and directory; prints the `READY` line (with `node_id=`). Stop with `stop <tag>` (default tag `listen-<node>`). |
+| `send <node> --to <id> [--duration S] [--out DIR] [...] [-- args]` | `golem-p2p send --count <many>` for S seconds, every output line timestamped, then one summary line. |
+| `pair <listener> <sender> [--duration S] [--out DIR] [--listen-arg A] [--send-arg A] [...]` | `listen` + `send` + `stop`, summary includes which paths the listener saw. Raw logs in `~/gpl-runs/<time>-<listener>-<sender>/`. |
+| `matrix [--repeat N] [--duration S] [--out DIR] <l:s>...` | `pair` for every pair, N rounds, results in `DIR/results.txt`. |
+| `selftest [<topology>]` | runs `natcheck.py` in every lab node and compares with the profile's expected behaviour; prints a Markdown table, exits non-zero on a mismatch. |
+| `netem <node> [delay=] [jitter=] [loss=] [rate=] \| clear` | changes the node's access link (both directions) while the lab runs. |
+
+A summary line looks like
+
+```
+listener=sym1 sender=easy1 ok=1 replies=721 t_first=0.92 first_ms=298 first_path=relay
+  t_direct=0.98 last_path=direct switches=1 direct_pct=100 relay_ms=- direct_ms=40
+  listener_saw=direct:721,relay:1 error=-
+```
+
+`t_first`/`t_direct` count from the start of the `send` process (bind waits
+for the relay, up to 5 s), `first_ms` is the first request as printed by
+`send` (directory lookup, connect, handshake, one request). Field meanings are
+in `tools/summarize.py`.
+
+### Topology files
+
+```
+# comment
+set relay_delay=10ms          # optional: netem on the relay/services link, each direction
+# name    profile          options
+a         easy             delay=20ms jitter=5ms loss=0.5% rate=20mbit
+b         symmetric        udp_timeout=30
+c         easy             uplink=real
+```
+
+Node names: `[a-z][a-z0-9]{0,11}`. Options:
+
+* `delay`, `jitter`, `loss`, `rate`: `tc netem` on the node's access link (the
+  outermost router's WAN link), applied in both directions. `delay=10ms` adds
+  10 ms each way, so 20 ms to the node's round trip. Jitter reorders packets
+  (netem's default).
+* `udp_timeout=N`: NAT mapping lifetime in seconds on the node's routers (the
+  EIF/ADF set timeout and the conntrack UDP timeouts). Default 120 s, Linux's
+  `nf_conntrack_udp_timeout_stream`; unanswered flows expire after 30 s.
+* `uplink=lab|real`: where the outermost router's WAN goes (default `lab`).
+
+Built-in: `selftest` (one node per profile), `matrix` (experiment nodes, 10 ms
+links, 10 ms relay link), `real` (two `uplink=real` nodes and one lab node).
+
+## Topology
+
+```
+                                  VM root namespace (untouched unless a node has uplink=real)
+                                  enp5s0 10.167.138.10 ── i3D host masquerade (213.163.75.157) ── internet
+                                     │  table ip gpl_uplink: masquerade, forward only gplu* <-> enp5s0
+                                  gplu<i> 172.30.<i>.1
+                                     │                                 (uplink=real nodes only)
+ gpl-svc ─────────────────┐     gpl-inet ("the internet", plain router) ┐
+ │ 198.18.0.1  iroh-relay │ svc │ 198.18.0.254                         │
+ │   https :443           ├─────┤ n1 198.18.1.1    n2 198.18.2.1   ... │
+ │   QAD   :7842/udp      │     └──┬──────────────────┬────────────────┘
+ │   directory :8080      │        │ netem            │ netem   (delay/jitter/loss/rate)
+ │ 198.18.0.2-4 reflector │        │                  │
+ └────────────────────────┘     wan 198.18.1.2     wan 198.18.2.2
+                                gpl-a-r1           gpl-b-r2   outer NAT (double: easy, cgnat: CGN)
+                                (NAT profile)      lan 10.2.0.1 (double) / 100.64.2.1 (cgnat)
+                                lan 192.168.1.1        │
+                                   │               wan 10.2.0.2 / 100.64.2.2
+                                   │               gpl-b-r1   home NAT (easy)
+                                   │               lan 192.168.2.1
+                                eth0 192.168.1.2       │
+                                gpl-a (node)       eth0 192.168.2.2
+                                                   gpl-b (node)
+```
+
+Address plan (`<i>` = node index in the topology file, 1..250):
+
+| range | use |
+|---|---|
+| `198.18.0.0/24` | services: `.1` relay + directory, `.2`/`.3`/`.4` reflector, `.254` inet |
+| `198.18.<i>.0/24` | WAN link of node i: `.1` inet, `.2` outermost router (the node's public IP) |
+| `198.19.<i>.0/24` | LAN of a `public` node (routed, no NAT): `.1` router, `.2` node |
+| `192.168.<i>.0/24` | LAN of a NAT'd node: `.1` router, `.2` node |
+| `10.<i>.0.0/24` | between the two routers of `double` |
+| `100.64.<i>.0/24` | between home router and carrier NAT of `cgnat` (RFC 6598 shared space) |
+| `172.30.<i>.0/24` | `uplink=real`: root namespace `.1`, outermost router `.2` |
+
+198.18.0.0/15 (RFC 2544 benchmarking) plays the public internet: nothing on
+the real internet uses it, and iroh treats it as a normal global address.
+IPv6 is disabled in all lab namespaces, and there is no DNS (use IPs).
+
+## NAT profiles
+
+Mapping and filtering in RFC 4787 terms: EIM = endpoint-independent mapping
+(same external ip:port toward every destination), ADM/APDM = address
+(-and-port) dependent mapping; EIF/ADF/APDF = endpoint-independent /
+address-dependent / address-and-port-dependent filtering.
+
+| profile | routers (inner first) | intended behaviour | how |
+|---|---|---|---|
+| `public` | router, no NAT | public IP, no firewall | plain routing |
+| `easy` | home NAT | EIM + EIF ("full cone"), port-preserving | `masquerade` + dynamic set of mapped UDP ports; inbound UDP to a mapped port is DNATed to the node |
+| `restricted` | home NAT | EIM + ADF ("restricted cone") | `masquerade` + set of (remote IP, port); inbound from a remote IP the node sent to is DNATed |
+| `port-restricted` | home NAT | EIM + APDF ("port-restricted cone") | plain Linux `masquerade` (conntrack filtering) |
+| `symmetric` | home NAT | APDM + APDF | `masquerade fully-random`: a random external port per 5-tuple |
+| `udp-blocked` | home NAT | TCP only | `port-restricted` plus all UDP dropped in both directions |
+| `double` | easy behind easy | EIM + EIF through two NATs | two `easy` routers, 10.x between them |
+| `cgnat` | easy home NAT behind a carrier NAT | EIM + APDF | `easy` router, 100.64.x, `port-restricted` CGN |
+
+All NAT routers drop unsolicited inbound traffic silently (no ICMP
+unreachable, no TCP RST), like typical home routers. The rules are in
+`router_nft` in `lab.sh`.
+
+### Selftest
+
+`lab.sh selftest` runs `tools/natcheck.py` in every node against the
+reflector in `gpl-svc`, which listens on `198.18.0.2:3478`, `198.18.0.2:3479`,
+`198.18.0.3:3478` and `198.18.0.4:4000`:
+
+* mapping: one socket asks three reflector endpoints (two ports on one IP, one
+  other IP) for its external address;
+* filtering: a fresh socket contacts `198.18.0.2:3478` only, the reflector then
+  sends from its other three endpoints; which of them arrive gives EIF, ADF or
+  APDF;
+* unmapped port: the reflector also sends to an external port the node never
+  used (a bound but silent socket); only a node without NAT should get it;
+* TCP: connect to `198.18.0.2:3478/tcp` and read the observed address.
+
+Observed on p2p-natlab (kernel 7.0.0-43, nftables 1.1.6), identical in every
+run so far (see RESULTS.md):
+
+| profile | mapping | filtering | port preserved | inbound to unmapped port | UDP | TCP |
+|---|---|---|---|---|---|---|
+| `public` | none (reflectors see the node's own ip:port) | open | yes | yes | yes | yes |
+| `easy` | EIM | EIF | yes | no | yes | yes |
+| `restricted` | EIM | ADF | yes | no | yes | yes |
+| `port-restricted` | EIM | APDF | yes | no | yes | yes |
+| `symmetric` | APDM (new random port per destination, also per port on one IP) | APDF | no | no | yes | yes |
+| `udp-blocked` | - | - | - | - | no | yes |
+| `double` | EIM | EIF | yes | no | yes | yes |
+| `cgnat` | EIM | APDF | yes | no | yes | yes |
+
+For `uplink=real` nodes the selftest prints "skipped": the lab reflector is
+not reachable from them. `realworld.sh --natcheck` measures them against
+reflectors on the relay VM and on the build machine instead.
+
+## uplink=real
+
+A node with `uplink=real` gets its outermost router's WAN on a veth to the VM's
+root namespace instead of `gpl-inet`. This is the one deliberate change to the
+root namespace, made only when such a node exists and undone by `down`:
+
+* `net.ipv4.ip_forward=1` (the old value is saved in `/run/gpl/ip_forward.orig`
+  and restored);
+* table `ip gpl_uplink`: masquerade of `172.30.0.0/16` and `198.19.0.0/16` out
+  of the default-route interface; a forward chain with policy drop that only
+  passes `gplu*` -> uplink (not to private, loopback, link-local or multicast
+  destinations) and established replies back; and an input chain that drops
+  everything from `gplu*`, so lab nodes cannot reach the VM itself.
+
+The default route, `enp5s0`, sshd and the rest of the VM are not touched.
+
+Such a node's packets cross **three NATs** on the way out: its emulated
+profile, the VM's masquerade, and the i3D host's masquerade to
+`213.163.75.157`. Measured (RESULTS.md, `realworld.sh --natcheck`): both
+outer layers keep the port, so the emulated profile's mapping shows through
+unchanged (`easy` stays EIM with its own port, `symmetric` stays APDM with its
+random ports), but they add APDF filtering. So `easy` with `uplink=real` is a
+port-restricted cone from the internet's point of view. The real relay (`https://213.163.75.157:56000`) is reached through the i3D host's
+hairpin NAT, and sees the node as `213.163.75.157:<port>`. There is no
+default directory for these nodes: pass `--directory` to `listen`/`send`/`pair`,
+or set `GPL_REAL_DIRECTORY=<url>` for `lab.sh up` (`realworld.sh` runs one on
+the relay VM). Lab-internal
+services (relay, directory, reflector at 198.18.0.x) are not reachable from
+`uplink=real` nodes, and vice versa.
+
+## Known limitations
+
+* **Linux conntrack is not a real NAT box.** Mappings are per 5-tuple. EIM
+  comes from masquerade keeping the source port, which works because each
+  router has exactly one host behind it; two hosts behind one router could
+  collide and get different ports. `easy`/`restricted` filtering is emulated
+  with nft sets keyed by the internal port, which relies on that same port
+  preservation (verified by the selftest's "port preserved" column).
+* **Mapping lifetimes.** One timeout for all mappings (default 120 s after
+  the last outbound packet for the EIF/ADF sets; conntrack's 30 s / 120 s for
+  the rest). Real routers vary (30 s to many minutes) and may refresh on
+  inbound traffic. Use `udp_timeout=` to test short timeouts.
+* **No hairpinning between lab nodes behind the same NAT**, no shared CGN
+  between several subscribers, no port-block allocation, no UPnP/PCP/NAT-PMP
+  (iroh's portmapper probes find nothing).
+* **Fixed LAN addressing.** Each node has its own LAN subnet; real homes
+  often share `192.168.1.0/24`, which matters when peers publish private
+  addresses (they do, see design.md §14).
+* **IPv4 only**, no DNS inside the lab.
+* **One local relay.** Multi-relay and relay-failover scenarios need a second
+  relay in `gpl-svc` (not done yet).
+* **netem jitter reorders packets**; `rate` limits per direction.
+* **VM behind the i3D host's NAT.** `uplink=real` adds two NAT layers (above);
+  nothing on the internet can open a connection to a lab node, and the host's
+  NAT behaviour is outside our control.
+* The lab VM runs everything on one kernel: CPU contention between nodes is
+  possible with many busy nodes (the experiments here use about 25 requests/s).
+
+## Driving it from a controller
+
+The intended next layer is a Python controller (on the build machine or on the
+VM) that drives `lab.sh` over ssh:
+
+1. `deploy.sh`, then `ssh p2p-natlab golem-p2p-lab/lab.sh up <topology>`
+   with a topology file it generated (or one from `topologies/`); `lab.sh
+   nodes` for the node table, `lab.sh env <node>` for relay/directory.
+2. `lab.sh selftest` as a precondition (exit code).
+3. Scenarios with `lab.sh listen` / `send` / `pair` (summary lines are
+   `key=value`), or arbitrary commands with `exec`/`spawn`/`stop`, e.g.
+   the CLI's `probe` and `--json` output once they land.
+4. Fault injection while traffic runs: `lab.sh netem <node> loss=100%`
+   (link down), `delay=`, `rate=`; `exec --root <node>-r1 conntrack -F`
+   plus, for `easy`/`restricted`, `exec --root <node>-r1 nft flush set ip gpl eif`
+   (or `adf`) to simulate a NAT reboot (all mappings lost); `stop` a process
+   (crash).
+5. `lab.sh down` at the end, and in a `finally`/trap.
+
+Stop CLI processes with SIGTERM, not SIGINT: a non-interactive shell starts
+background jobs with SIGINT ignored, the children inherit that, and
+`golem-p2p send` then keeps running (`lab.sh` itself uses `timeout -s TERM`).
+
+All state lives in `/run/gpl` (lost on reboot, like the namespaces), results
+in `~/gpl-runs/`. Commands print one result per line and exit non-zero on
+failure, so a controller can parse them without screen-scraping.
