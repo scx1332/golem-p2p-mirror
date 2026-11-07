@@ -397,18 +397,12 @@ impl PeerBench<'_> {
         let mut relay_compare = None;
         let mut interrupted = false;
         if let Some(conn) = conn {
-            let base = conn.iroh_connection().stats();
+            let base = QuicSnapshot::of(&conn);
             interrupted = self.phases(&mut peer, &mut relay_compare, log, stop).await;
             // QUIC counters of the connection: since connecting if it is
             // still the same one, else of the current one.
-            peer.quic = connection_to(ep, to).map(|c| {
-                let now = c.iroh_connection().stats();
-                if c.stable_id() == conn.stable_id() {
-                    quic_stats(&now, Some(&base))
-                } else {
-                    quic_stats(&now, None)
-                }
-            });
+            peer.quic = QuicSnapshot::to(ep, to)
+                .map(|now| now.since((now.conn == base.conn).then_some(&base)));
         }
         peer.path = path_report(ep, to, log, t0);
         (peer, relay_compare, interrupted)
@@ -432,6 +426,7 @@ impl PeerBench<'_> {
                 fmt_dur(args.interval)
             ));
             let t = Instant::now();
+            let before = QuicSnapshot::to(ep, to);
             let mut pinger = Pinger::new(ep, to, out, log.clone()).with_phase("latency");
             let interrupted = probe::ping_series(
                 &mut pinger,
@@ -443,7 +438,8 @@ impl PeerBench<'_> {
                 |_, _| {},
             )
             .await;
-            let l = latency(&pinger, self.payload_size);
+            let mut l = latency(&pinger, self.payload_size);
+            l.quic = phase_quic(ep, to, before.as_ref());
             phase_event(out, "latency", l.failed == 0, t.elapsed(), &l);
             peer.latency = Some(l);
             if interrupted {
@@ -519,6 +515,7 @@ impl PeerBench<'_> {
             fmt_dur(args.transfer_time)
         ));
         let limit = args.transfer_time + args.timeout;
+        let before = QuicSnapshot::to(ep, self.to);
         let run = async {
             if is_upload {
                 probe::upload(ep, self.to, size, Some(args.transfer_time)).await
@@ -529,7 +526,9 @@ impl PeerBench<'_> {
         let result = tokio::time::timeout(limit, run)
             .await
             .unwrap_or_else(|_| Err(golem_p2p::Error::Timeout.into()));
-        transfer_report(size, capped, result)
+        let mut r = transfer_report(size, capped, result);
+        r.quic = phase_quic(ep, self.to, before.as_ref());
+        r
     }
 
     /// `--streams` parallel workers sending echo requests of 256 KiB until
@@ -551,6 +550,7 @@ impl PeerBench<'_> {
             args.streams,
             fmt_dur(args.transfer_time)
         ));
+        let before = QuicSnapshot::to(ep, to);
         let start = Instant::now();
         let deadline = start + args.transfer_time;
         let reserved = AtomicU64::new(0);
@@ -629,6 +629,7 @@ impl PeerBench<'_> {
             loaded_samples: small.len(),
             error_kind: error.as_ref().map(|e| anyhow_kind(e, "request")),
             error: error.map(|e| format!("{e:#}")),
+            quic: phase_quic(ep, to, before.as_ref()),
         }
     }
 
@@ -669,7 +670,7 @@ impl PeerBench<'_> {
         let connected = c.ok;
         rc.connect = Some(c);
         if let Some(conn) = conn {
-            let base = conn.iroh_connection().stats();
+            let base = QuicSnapshot::of(&conn);
             let log = Arc::new(PathLog::new(self.to));
             let mut pinger = Pinger::new(ep, self.to, self.out, log).with_phase("relay_latency");
             probe::ping_series(
@@ -682,7 +683,8 @@ impl PeerBench<'_> {
                 |_, _| {},
             )
             .await;
-            let l = latency(&pinger, self.payload_size);
+            let mut l = latency(&pinger, self.payload_size);
+            l.quic = phase_quic(ep, self.to, Some(&base));
             let size = args.transfer_size.min(args.relay_transfer_size);
             let capped = size < args.transfer_size;
             let up = if args.runs(Phase::Upload) {
@@ -703,10 +705,8 @@ impl PeerBench<'_> {
             rc.latency = Some(l);
             rc.upload = up;
             rc.download = down;
-            rc.quic = connection_to(ep, self.to).map(|c| {
-                let now = c.iroh_connection().stats();
-                quic_stats(&now, (c.stable_id() == conn.stable_id()).then_some(&base))
-            });
+            rc.quic = QuicSnapshot::to(ep, self.to)
+                .map(|now| now.since((now.conn == base.conn).then_some(&base)));
             if rc.relay.is_none() {
                 rc.relay = connection_to(ep, self.to)
                     .and_then(|c| SelectedPath::of(&c).remote)
@@ -854,6 +854,7 @@ fn latency(pinger: &Pinger, payload_size: usize) -> Latency {
         jitter_ms: s.jitter_ms,
         direct_fraction: s.direct_fraction,
         final_path: path_name(s.final_path),
+        quic: None,
     }
 }
 
@@ -874,6 +875,7 @@ fn transfer_report(
             limited_by: Some(if t.by_time { "time" } else { "size" }),
             error_kind: None,
             error: None,
+            quic: None,
         },
         Err(e) => TransferReport {
             ok: false,
@@ -886,22 +888,57 @@ fn transfer_report(
     }
 }
 
-fn quic_stats(
-    now: &golem_p2p::iroh::endpoint::ConnectionStats,
-    base: Option<&golem_p2p::iroh::endpoint::ConnectionStats>,
-) -> QuicStats {
-    let d = |f: fn(&golem_p2p::iroh::endpoint::ConnectionStats) -> u64| {
-        f(now).saturating_sub(base.map_or(0, f))
-    };
-    let sent = d(|s| s.sent_packets);
-    let lost = d(|s| s.lost_packets);
-    QuicStats {
-        sent_packets: sent,
-        lost_packets: lost,
-        lost_pct: (sent > 0).then(|| round3(lost as f64 * 100.0 / sent as f64)),
-        sent_bytes: d(|s| s.udp_tx.bytes),
-        received_bytes: d(|s| s.udp_rx.bytes),
+/// The QUIC counters of a connection at one moment, to measure a phase or a
+/// whole run.
+struct QuicSnapshot {
+    /// [`Connection::stable_id`].
+    conn: usize,
+    stats: golem_p2p::iroh::endpoint::ConnectionStats,
+    /// Path MTU probes sent and lost, summed over the open paths.
+    mtu_probes: (u64, u64),
+}
+
+impl QuicSnapshot {
+    fn of(c: &Connection) -> Self {
+        let ic = c.iroh_connection();
+        let mtu_probes = ic.paths().iter().fold((0, 0), |(sent, lost), p| {
+            let s = p.stats();
+            (sent + s.sent_plpmtud_probes, lost + s.lost_plpmtud_probes)
+        });
+        Self {
+            conn: c.stable_id(),
+            stats: ic.stats(),
+            mtu_probes,
+        }
     }
+
+    /// The connection that currently serves `to`, if any.
+    fn to(ep: &Endpoint, to: NodeId) -> Option<Self> {
+        connection_to(ep, to).map(|c| Self::of(&c))
+    }
+
+    /// The counters since `base` (an earlier snapshot of the same
+    /// connection), or since the connection started.
+    fn since(&self, base: Option<&Self>) -> QuicStats {
+        let d = |f: fn(&Self) -> u64| f(self).saturating_sub(base.map_or(0, f));
+        let sent = d(|s| s.stats.sent_packets).saturating_sub(d(|s| s.mtu_probes.0));
+        let lost = d(|s| s.stats.lost_packets).saturating_sub(d(|s| s.mtu_probes.1));
+        QuicStats {
+            sent_packets: sent,
+            lost_packets: lost,
+            lost_pct: (sent > 0).then(|| round3(lost as f64 * 100.0 / sent as f64)),
+            sent_bytes: d(|s| s.stats.udp_tx.bytes),
+            received_bytes: d(|s| s.stats.udp_rx.bytes),
+        }
+    }
+}
+
+/// The QUIC counters of a phase: of the connection to `to` since `before`,
+/// if it is still the same connection.
+fn phase_quic(ep: &Endpoint, to: NodeId, before: Option<&QuicSnapshot>) -> Option<QuicStats> {
+    let before = before?;
+    let now = QuicSnapshot::to(ep, to)?;
+    (now.conn == before.conn).then(|| now.since(Some(before)))
 }
 
 fn path_report(ep: &Endpoint, to: NodeId, log: &PathLog, t0: Instant) -> PathReport {

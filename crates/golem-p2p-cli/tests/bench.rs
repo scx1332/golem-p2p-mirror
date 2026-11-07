@@ -79,6 +79,15 @@ fn check_transfer(t: &Value, bytes: u64, path: &str) {
     assert_eq!(t["limited_by"], "size", "{t:#}");
     assert!(num(t, "throughput_mbps") > 0.0 && num(t, "duration_ms") > 0.0);
     assert!(t["error"].is_null());
+    check_quic(&t["quic"]);
+}
+
+/// Checks the QUIC counters of a phase: present, and loss consistent.
+fn check_quic(q: &Value) {
+    let sent = q["sent_packets"].as_u64().unwrap();
+    let lost = q["lost_packets"].as_u64().unwrap();
+    assert!(sent > 0 && lost <= sent, "{q:#}");
+    assert!(num(q, "lost_pct") >= 0.0, "{q:#}");
 }
 
 /// Checks the latency section: every request answered, sane statistics.
@@ -91,6 +100,7 @@ fn check_latency(l: &Value, path: &str) {
     assert!(0.0 < min && min <= p50 && p50 <= p95 && p95 <= max, "{r}");
     assert!(l["jitter_ms"].as_f64().unwrap() >= 0.0);
     assert_eq!(l["final_path"], path);
+    check_quic(&l["quic"]);
 }
 
 /// Both sides relay-only: the report says "relay only" (exit code 4), all

@@ -236,6 +236,9 @@ pub struct Latency {
     /// Fraction of correct replies that came over a direct path.
     pub direct_fraction: Option<f64>,
     pub final_path: &'static str,
+    /// QUIC counters of the connection during this phase; null if the
+    /// connection changed meanwhile.
+    pub quic: Option<QuicStats>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -253,6 +256,8 @@ pub struct TransferReport {
     pub limited_by: Option<&'static str>,
     pub error_kind: Option<&'static str>,
     pub error: Option<String>,
+    /// QUIC counters of the connection during this phase.
+    pub quic: Option<QuicStats>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -273,6 +278,8 @@ pub struct Concurrency {
     pub loaded_samples: usize,
     pub error_kind: Option<&'static str>,
     pub error: Option<String>,
+    /// QUIC counters of the connection during this phase.
+    pub quic: Option<QuicStats>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -309,11 +316,15 @@ pub struct PathPoint {
     pub remote_addr: Option<String>,
 }
 
-/// QUIC counters of the connection (this side's view).
+/// QUIC counters of the connection (this side's view), for the whole run or
+/// one phase.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct QuicStats {
+    /// Packets this node sent, without path MTU probes.
     pub sent_packets: u64,
-    /// Packets this node sent that were declared lost (and resent).
+    /// Packets this node sent that were declared lost (and resent), without
+    /// path MTU probes: those are lost by design when they are larger than
+    /// the path allows.
     pub lost_packets: u64,
     pub lost_pct: Option<f64>,
     pub sent_bytes: u64,
@@ -603,17 +614,8 @@ impl Report {
                 };
                 line(s, "parallel", v);
             }
-            if let Some(q) = &p.quic
-                && let Some(pct) = q.lost_pct
-            {
-                line(
-                    s,
-                    "packet loss",
-                    format!(
-                        "{pct:.2}% of {} packets this node sent (QUIC resent them)",
-                        q.sent_packets
-                    ),
-                );
+            if let Some(v) = loss_line(p) {
+                line(s, "packet loss", v);
             }
             if let Some(i) = &p.idle {
                 let v = if i.ok {
@@ -755,6 +757,53 @@ fn write_latency(s: &mut String, l: &Latency, line: &impl Fn(&mut String, &str, 
         v += &format!("; jitter {}", fmt_ms(j));
     }
     line(s, "latency", v);
+}
+
+/// The QUIC counters of the upload, download and concurrency phases added
+/// up; `None` if none of them has counters.
+fn transfer_quic(p: &Peer) -> Option<QuicStats> {
+    let phases = [
+        p.upload.as_ref().and_then(|t| t.quic.as_ref()),
+        p.download.as_ref().and_then(|t| t.quic.as_ref()),
+        p.concurrency.as_ref().and_then(|c| c.quic.as_ref()),
+    ];
+    let mut sum: Option<QuicStats> = None;
+    for q in phases.into_iter().flatten() {
+        let s = sum.get_or_insert_with(QuicStats::default);
+        s.sent_packets += q.sent_packets;
+        s.lost_packets += q.lost_packets;
+        s.sent_bytes += q.sent_bytes;
+        s.received_bytes += q.received_bytes;
+    }
+    if let Some(s) = &mut sum {
+        s.lost_pct = (s.sent_packets > 0)
+            .then(|| crate::out::round3(s.lost_packets as f64 * 100.0 / s.sent_packets as f64));
+    }
+    sum
+}
+
+/// Packet loss of the latency phase, and of the transfers for information.
+fn loss_line(p: &Peer) -> Option<String> {
+    let pct = |q: &QuicStats| q.lost_pct.map(|v| (v, q.sent_packets));
+    let mut v = Vec::new();
+    if let Some((l, n)) = p
+        .latency
+        .as_ref()
+        .and_then(|l| l.quic.as_ref())
+        .and_then(pct)
+    {
+        v.push(format!("{l:.2}% of {n} packets while measuring latency"));
+    }
+    if let Some((l, n)) = transfer_quic(p).as_ref().and_then(pct) {
+        v.push(format!(
+            "{l:.2}% of {n} in the transfers (congestion control loses some there by design)"
+        ));
+    }
+    if v.is_empty() {
+        let (l, n) = p.quic.as_ref().and_then(pct)?;
+        v.push(format!("{l:.2}% of {n} packets"));
+    }
+    Some(format!("{}; this node's packets only", v.join("; ")))
 }
 
 fn transfer_line(t: &TransferReport) -> String {

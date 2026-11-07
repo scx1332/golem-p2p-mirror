@@ -10,6 +10,18 @@ use super::report::{
     fmt_mbps, fmt_ms, short_id,
 };
 
+/// Packet loss in the latency phase from which on the `packet_loss` hint is
+/// given. QUIC's congestion control (loss based, Cubic) treats every loss as
+/// congestion, so random loss caps a connection's throughput at roughly
+/// `1/sqrt(loss)` times what one packet per round trip gives (Mathis et al.):
+/// at 0.5% and 100 ms that is a few Mbps. The lab's 1% loss link cut 123 Mbps
+/// to 2-26 Mbps.
+const LOSS_HINT_PCT: f64 = 0.5;
+
+/// Fewer packets sent in the latency phase say too little about loss. With
+/// the defaults (10 s, one request per 200 ms) the phase sends about 110.
+const LOSS_MIN_PACKETS: u64 = 50;
+
 /// Fills `status`, `exit_code`, `verdict`, `issues`, `hints` and `unknowns`.
 pub fn analyze(r: &mut Report) {
     let f = Facts::new(r);
@@ -367,16 +379,25 @@ impl<'a> Facts<'a> {
                 ));
             }
         }
-        if let Some(q) = &p.quic
+        // Only the latency phase counts: its few small packets cannot
+        // congest any link, so what is lost there is lost by the path. In the
+        // transfers, congestion control loses packets by design while it
+        // probes for the link's capacity.
+        if let Some(q) = p.latency.as_ref().and_then(|l| l.quic.as_ref())
             && let Some(pct) = q.lost_pct
-            && pct >= 2.0
-            && q.sent_packets >= 100
+            && q.lost_packets > 0
+            && q.sent_packets >= LOSS_MIN_PACKETS
+            && pct >= LOSS_HINT_PCT
         {
             hints.push(finding(
                 "packet_loss",
                 format!(
-                    "{pct:.1}% of the packets this node sent were lost and had to be resent; \
-                     expect lower throughput and occasional delays."
+                    "{} of the {} packets this node sent while measuring latency were lost \
+                     ({pct:.1}%). The connection was nearly idle then, so the network lost them \
+                     (for example Wi-Fi, a mobile or an overloaded link), not congestion from \
+                     this test. Random loss like this slows every transfer down: about 1% can \
+                     cut the throughput of a connection by ten times or more.",
+                    q.lost_packets, q.sent_packets
                 ),
             ));
         }
@@ -459,7 +480,7 @@ impl<'a> Facts<'a> {
                 "the peer's NAT and firewall cannot be seen from this side",
             ));
         }
-        if p.quic.is_some() {
+        if p.quic.is_some() || p.latency.as_ref().is_some_and(|l| l.quic.is_some()) {
             unknowns.push(unknown(
                 "download_loss",
                 "packet loss is counted only for packets this node sent (upload direction)",
@@ -659,8 +680,8 @@ mod tests {
     use super::*;
     use crate::{
         bench::report::{
-            Connect, DirectoryCheck, HomeRelay, Local, PathPoint, PathReport, RelayCompare,
-            Settings,
+            Connect, DirectoryCheck, HomeRelay, Local, PathPoint, PathReport, QuicStats,
+            RelayCompare, Settings,
         },
         probe::Stats,
     };
@@ -963,6 +984,60 @@ mod tests {
         assert_eq!((r.status, r.exit_code), (Status::Degraded, 5));
         assert_eq!(codes(&r.issues), ["requests_failed", "transfer_refused"]);
         assert!(r.verdict.contains("but with problems"), "{}", r.verdict);
+    }
+
+    fn quic(sent: u64, lost: u64) -> QuicStats {
+        QuicStats {
+            sent_packets: sent,
+            lost_packets: lost,
+            lost_pct: Some(lost as f64 * 100.0 / sent as f64),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn packet_loss_only_from_the_latency_phase() {
+        // Congestion losses of the transfers on a fast, clean path (campaign
+        // 1: 2.3-6.8% at 135-149 Mbps) are not a problem of the path.
+        let mut p = peer(true);
+        p.latency.as_mut().unwrap().quic = Some(quic(112, 0));
+        p.upload.as_mut().unwrap().quic = Some(quic(8000, 400));
+        p.quic = Some(quic(9000, 400));
+        let mut r = report(Some(local()), Some(p));
+        analyze(&mut r);
+        assert_eq!(r.status, Status::Healthy, "{r:#?}");
+        assert!(r.hints.is_empty(), "{:?}", r.hints);
+
+        // About 1% lost while the connection was nearly idle (the lab's
+        // lossy link: 1% each way) is flagged, whatever the transfers lost.
+        let mut p = peer(true);
+        p.latency.as_mut().unwrap().quic = Some(quic(112, 1));
+        p.upload.as_mut().unwrap().quic = Some(quic(8000, 80));
+        let mut r = report(Some(local()), Some(p));
+        analyze(&mut r);
+        assert_eq!(r.status, Status::Healthy);
+        assert_eq!(codes(&r.hints), ["packet_loss"]);
+        assert!(
+            r.hints[0].message.contains("1 of the 112 packets"),
+            "{}",
+            r.hints[0].message
+        );
+
+        // Below the threshold (0.4%), or too few packets to say: no hint.
+        for q in [quic(250, 1), quic(30, 1)] {
+            let mut p = peer(true);
+            p.latency.as_mut().unwrap().quic = Some(q);
+            let mut r = report(Some(local()), Some(p));
+            analyze(&mut r);
+            assert!(r.hints.is_empty(), "{:?}", r.hints);
+        }
+        // Without counters for the latency phase the whole connection's loss
+        // is not used either.
+        let mut p = peer(true);
+        p.quic = Some(quic(9000, 900));
+        let mut r = report(Some(local()), Some(p));
+        analyze(&mut r);
+        assert!(r.hints.is_empty(), "{:?}", r.hints);
     }
 
     #[test]

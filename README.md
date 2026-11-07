@@ -202,7 +202,10 @@ download (10 MB each or 8 s); concurrency (8 streams of 256 KiB requests, 8 MB,
 plus the round trip of small requests meanwhile); with `--compare-relay` the
 same over a relay-only connection, i.e. what you get if hole punching fails;
 with `--idle 60s` whether the connection survives a minute without traffic.
-QUIC packet loss of the connection is reported too. Transfers through a relay
+QUIC packet loss is reported per phase; only loss while measuring latency
+(when the connection is nearly idle) counts as a problem of the network, as
+the transfers lose packets by design while congestion control probes for the
+link's capacity. Transfers through a relay
 are capped at `--relay-transfer-size` (4 MB) to spare shared relays. With the
 defaults a run moves at most about 36 MB (44 MB with `--compare-relay`) and
 takes about 30 to 60 s. See `golem-p2p bench --help` for all options.
