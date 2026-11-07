@@ -22,6 +22,11 @@ tracing.workspace = true
 hex.workspace = true
 url.workspace = true
 n0-future = "0.3"
+# Interface names for the published direct addresses (which addresses are on
+# container and VM bridges). The crate iroh itself uses to find its local
+# addresses, so it adds nothing to the dependency tree; keep it at iroh's
+# version.
+netwatch = "0.19.3"
 reqwest = { workspace = true, optional = true, features = ["rustls-no-provider"] }
 axum = { workspace = true, optional = true, features = ["tokio", "http1"] }
 

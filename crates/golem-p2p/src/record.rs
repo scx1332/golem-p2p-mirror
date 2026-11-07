@@ -585,6 +585,30 @@ mod tests {
         assert!(VerifiedRecord::verify(&vec![0u8; MAX_RECORD_SIZE + 1]).is_err());
     }
 
+    /// Leaving out container bridge addresses is publishing policy, not a
+    /// verification rule: a record from an older node that lists its Docker
+    /// bridge addresses (up to the limit) still verifies, and peers dial
+    /// every listed address.
+    #[tokio::test]
+    async fn record_with_docker_addrs_verifies() {
+        let (signer, key, a, _) = setup().await;
+        let mut r = base(&key, &[a]);
+        r.direct_addrs = vec!["65.109.154.126:39009".parse().unwrap()];
+        r.direct_addrs
+            .extend((17..=30).map(|b| SocketAddr::from(([172, b, 0, 1], 39009))));
+        r.direct_addrs
+            .push("[2a01:4f9:3080:1146::2]:42374".parse().unwrap());
+        assert_eq!(r.direct_addrs.len(), MAX_DIRECT_ADDRS);
+        // Signed the way an older node signed it, without our own checks.
+        let d = digest(&r);
+        let sa = signer.sign_blocking(a, &d).unwrap();
+        let bytes = encode_raw(&r, key.sign(&d).to_bytes(), vec![sa]);
+        let rec = VerifiedRecord::verify(&bytes).unwrap();
+        assert_eq!(rec.record().direct_addrs, r.direct_addrs);
+        let docker: SocketAddr = "172.17.0.1:39009".parse().unwrap();
+        assert!(rec.endpoint_addr().ip_addrs().any(|x| *x == docker));
+    }
+
     /// A record listing a plain-http relay fails verification even when every
     /// signature on it is valid, so peers never dial such a relay.
     #[tokio::test]

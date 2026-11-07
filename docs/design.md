@@ -52,6 +52,7 @@ Crate layout (`crates/golem-p2p/src`):
 | `identity` | `NodeId` (Ethereum address), 65-byte yagna signature format, recovery |
 | `signer` | `Signer` trait (identity service signs on request), `InMemorySigner` |
 | `record` | `NodeRecord`, signing and verification, limits |
+| `addrs` | which direct addresses go into our record: filter, rank, cap (section 5) |
 | `store` | `RecordStore`: bounded store of verified records with sequence rules |
 | `discovery` | `Discovery` trait, `MemoryDiscovery`, `MultiDiscovery`, `HttpDirectory` client |
 | `directory` | HTTP directory server (feature `directory-server`) |
@@ -246,7 +247,85 @@ Why each piece is there:
 * **`instance_id`.** Distinguishes a restarted process from the previous one,
   also when the endpoint key is kept.
 * **`expires_at`.** Default TTL is 1 h; the record is re-signed after a third
-  of that, and whenever identities or addresses change.
+  of that, and whenever identities or the published addresses change.
+
+### Which direct addresses are published
+
+iroh reports every address the endpoint may be reachable on: the public
+address the relays saw (QUIC address discovery, QAD) and the addresses of all
+local interfaces that are up. On a host with Docker, libvirt or Kubernetes,
+that includes the bridges to its own containers and VMs. A test host with 14
+Docker networks published its public IPv4, 14 addresses `172.17.0.1` to
+`172.30.0.1` and its IPv6 address: exactly the 16 a record holds, and since
+the record took the first 16 of a sorted list, a few more Docker networks
+would have pushed out the IPv6 address and then the public IPv4 address.
+Those bridge addresses are useless to peers anyway: their networks end at
+this host, and on a peer `172.17.0.1` is the peer's own Docker bridge (TLS
+makes dialing it harmless, but it wastes attempts). Many Golem providers run
+Docker.
+
+So `Endpoint` (module `addrs`) filters, ranks and caps the addresses before
+signing. One code path, no option needed for the default:
+
+1. **Filter by interface, not by address range.** `172.16/12` and `10/8` are
+   real LANs too, so an address is left out only if every local interface
+   that carries it is *host-internal*, by name: `docker*` (`docker0`,
+   `docker_gwbridge`), Docker's user-defined networks `br-` plus 12 hex
+   digits (not other `br-` names such as OpenWrt's `br-lan`, nor `br0` or
+   Proxmox's `vmbr0`, which carry the host's LAN address), `veth*`, `virbr*`
+   (libvirt), `lxc*` (LXC, Cilium), `lxdbr*`, `incusbr*`, `podman*`,
+   `nerdctl*`, `cni*`, `flannel*`, `cali*`, `vxlan.calico`,
+   `vxlan-v6.calico`, `cilium_*`, `kube-*` (`kube-ipvs0`, `kube-bridge`),
+   `weave*`, `vmnet*` (VMware), `vboxnet*` (VirtualBox).
+   `Builder::exclude_interface` (CLI: `--exclude-interface`) adds names or
+   prefixes (`wg*`). Inside a container the interface is `eth0`, so
+   containers still publish their container address.
+2. **Rank.** By scope: global addresses first, then private (RFC 1918,
+   CGNAT `100.64/10`, link-local, IPv6 ULA), then loopback (iroh lists
+   loopback only when there is nothing else). Within a scope, addresses that
+   are on no local interface come first: they were learned from relays (QAD),
+   i.e. the address the internet sees behind a NAT. Within each of these
+   groups IPv4 and IPv6 alternate, each sorted by address, so many addresses
+   of one family cannot starve the other. The order is deterministic.
+3. **Cap** at 16 (`MAX_DIRECT_ADDRS`). The cap now drops the least useful
+   addresses; a public or QAD address is never dropped while a private one
+   stays.
+
+The interface list comes from `netwatch`, the crate iroh itself uses to find
+its local addresses, so both see the same interfaces and no dependency is
+added. iroh does not expose where an address came from: its `DirectAddr`
+carries a `DirectAddrType` (local, QAD, port mapped, configured), but
+`Endpoint::addr`/`watch_addr` drop it, and the QAD addresses are only
+available through the unstable net report API. "On no local interface"
+identifies the QAD addresses without that API.
+
+**VPN interfaces** (`wg*`, `tailscale0`, `zt*`, `tun*`, `utun*`) are
+published, ranked by their addresses, which are private, CGNAT or ULA in
+practice: after all public addresses, so they can never push one out. The
+line drawn is "can any other machine ever reach this address": a container
+bridge cannot, a VPN can (two nodes in the same tailnet, or a private
+deployment over WireGuard without relays, where the record is the only way
+to find a peer). Dropping VPN addresses could break such setups, keeping them
+costs peers outside the VPN a failed attempt, as with LAN addresses. VPN
+paths can make a test report a "direct" connection that is really a VPN
+tunnel; test harnesses on VPN-connected machines should pass
+`--exclude-interface` for the VPN interfaces (iroh may still find the VPN
+path during hole punching, see below; the path's remote address shows it).
+
+**What golem-p2p does not control.** The record is what peers dial first and
+what the directory stores. After a connection is up (also over a relay),
+iroh runs QUIC NAT traversal: it sends all its local direct addresses
+(including Docker bridges and VPN addresses, up to 32) to the peer inside the
+encrypted connection, and both sides probe them while hole punching.
+golem-p2p cannot filter these without patching iroh (iroh 1.4.1 has no hook;
+`iroh::endpoint::Builder::addr_filter` only applies to iroh's own address
+lookup publishing, which golem-p2p does not use). They go only to
+authenticated peers, never to a directory, and TLS makes a wrong target
+harmless.
+
+**Older nodes.** This is publishing policy, not a verification rule. A record
+that lists Docker addresses (within the bounds) still verifies, and peers
+dial every address it lists.
 
 ## 6. Record store
 
@@ -356,7 +435,8 @@ separate from relays, which are https only already (section 9).
 **iroh integration.** `RecordLookup` implements iroh's `AddressLookup` from
 the endpoint's store of verified records, keyed by endpoint ID. Whenever iroh
 needs addresses for a peer (dialing, re-resolution), it gets exactly what the
-peer signed.
+peer signed. Once connected, iroh also learns the peer's local addresses from
+QUIC NAT traversal (section 5, "What golem-p2p does not control").
 
 ## 9. Relays
 
@@ -447,7 +527,7 @@ every answer afterwards comes from the new process.
 
 | state | bound |
 |---|---|
-| record size / identities / relays / addresses | 4 KiB / 16 / 8 / 16 |
+| record size / identities / relays / addresses | 4 KiB / 16 / 8 / 16 (direct addresses ranked before the cap, section 5) |
 | peer record cache (`RecordStore`) | 4096 identities + 4096 endpoints, configurable |
 | directory store | configurable, CLI uses 100 000; request body 4 KiB |
 | connections | `max_connections`, default 1024 |
@@ -492,7 +572,10 @@ GSB integration itself is out of scope for this seed.
 * Datagram and unidirectional streams (disabled: 0 uni streams).
 * Metrics beyond what iroh exports.
 * Explicit "withdraw" records for identities removed while offline.
-* Address filtering before publishing (private LAN addresses are published).
+* Address filtering beyond host-internal interfaces: private LAN and VPN
+  addresses are published (section 5, question 3 in section 15). Interface
+  names are only matched as Linux, macOS and BSD name them; Windows adapter
+  names (Hyper-V's `vEthernet`, WSL) are not recognized.
 * A loader for yagna's encrypted key files in the CLI (it reads raw hex keys).
 * Port mapping (UPnP, PCP, NAT-PMP). The workspace builds iroh without its
   `portmapper` feature, so `Builder::portmapper(true)` (the default) and the
@@ -509,9 +592,10 @@ QUIC/TLS 1.3, with no opt-out and no second layer; relays are https only.
    published somewhere decentralized?
 2. Should a node only use relays from a configured allowlist? Today any
    `https` relay URL in a valid record is dialed, as in iroh.
-3. Should direct LAN addresses be published to a public directory, or only
-   relay URLs plus public addresses (iroh's pkarr publishes relay only by
-   default)?
+3. Should direct LAN (and VPN) addresses be published to a public directory,
+   or only relay URLs plus public addresses (iroh's pkarr publishes relay
+   only by default)? Container and VM bridge addresses are no longer
+   published (section 5).
 4. Is a network/chain identifier needed in the record (mainnet vs testnet
    directories)?
 5. Default record TTL (1 h) and request timeout (30 s): fine for yagna?

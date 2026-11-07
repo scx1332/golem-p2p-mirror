@@ -21,13 +21,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::{
+    addrs::{self, Interfaces},
     discovery::Discovery,
     error::{Error, Result},
     identity::NodeId,
     lookup::RecordLookup,
     record::{
-        MAX_DIRECT_ADDRS, MAX_RELAYS, NodeRecord, RECORD_VERSION, RELAY_URL_SCHEME, VerifiedRecord,
-        sign_record,
+        MAX_RELAYS, NodeRecord, RECORD_VERSION, RELAY_URL_SCHEME, VerifiedRecord, sign_record,
     },
     signer::Signer,
     store::{DEFAULT_CAPACITY, RecordStore},
@@ -156,6 +156,8 @@ struct Config {
     connect_timeout: Duration,
     request_timeout: Duration,
     max_response_size: usize,
+    /// Extra interface patterns whose addresses are not published.
+    exclude_interfaces: Vec<String>,
 }
 
 /// Builder for an [`Endpoint`].
@@ -208,6 +210,7 @@ impl Builder {
                 connect_timeout: Duration::from_secs(15),
                 request_timeout: Duration::from_secs(30),
                 max_response_size: 16 * 1024 * 1024,
+                exclude_interfaces: Vec::new(),
             },
         }
     }
@@ -303,6 +306,30 @@ impl Builder {
     /// Enables or disables UPnP/PCP/NAT-PMP port mapping (enabled by default).
     pub fn portmapper(mut self, enabled: bool) -> Self {
         self.portmapper = enabled;
+        self
+    }
+
+    /// Leaves the addresses of more network interfaces out of the published
+    /// record.
+    ///
+    /// By default the record already leaves out addresses that are only on
+    /// interfaces whose network ends at this host: container and VM bridges
+    /// such as `docker0`, Docker's `br-<network id>`, `veth*`, `virbr*`,
+    /// `lxcbr*`, `cni*`, `podman*` (the full list is in the design document).
+    /// The remaining addresses are ranked (public before private) before the
+    /// record's limit of [`MAX_DIRECT_ADDRS`](crate::record::MAX_DIRECT_ADDRS)
+    /// is applied.
+    ///
+    /// Use this for other interfaces, for example VPN interfaces (`wg*`,
+    /// `tailscale0`, `zt*`), which are published by default, or a virtual
+    /// interface the default list does not know. `pattern` is an interface
+    /// name, or a prefix followed by `*`. Can be called several times.
+    ///
+    /// This only changes what this node publishes in its record. iroh still
+    /// offers all its local addresses to connected peers during hole
+    /// punching.
+    pub fn exclude_interface(mut self, pattern: impl Into<String>) -> Self {
+        self.config.exclude_interfaces.push(pattern.into());
         self
     }
 
@@ -403,7 +430,7 @@ impl Builder {
             &self.identities,
             instance_id,
             self.min_seq,
-            self.config.record_ttl,
+            &self.config,
         )
         .await;
         let initial = match initial {
@@ -489,6 +516,38 @@ struct Inner {
     config: Config,
 }
 
+/// Our current relay URLs and the direct addresses to publish: iroh's
+/// addresses without those of host-internal and excluded interfaces, best
+/// first, at most [`MAX_DIRECT_ADDRS`](crate::record::MAX_DIRECT_ADDRS) (see
+/// the `addrs` module).
+async fn local_addrs(iroh: &iroh::Endpoint, config: &Config) -> (Vec<String>, Vec<SocketAddr>) {
+    let addr = iroh.addr();
+    let relays = addr
+        .relay_urls()
+        .take(MAX_RELAYS)
+        .map(|u| u.to_string())
+        .collect();
+    let candidates: Vec<SocketAddr> = addr.ip_addrs().copied().collect();
+    if candidates.is_empty() {
+        return (relays, Vec::new());
+    }
+    let sel = addrs::select(
+        candidates,
+        &Interfaces::current().await,
+        &config.exclude_interfaces,
+    );
+    if !sel.excluded.is_empty() {
+        debug!(
+            excluded = ?sel.excluded,
+            "not publishing addresses of host-internal or excluded interfaces"
+        );
+    }
+    if !sel.over_cap.is_empty() {
+        debug!(dropped = ?sel.over_cap, "more direct addresses than a record holds");
+    }
+    (relays, sel.published)
+}
+
 /// Builds our record from the current addresses and signs it.
 async fn build_and_sign(
     iroh: &iroh::Endpoint,
@@ -496,9 +555,9 @@ async fn build_and_sign(
     identities: &Identities,
     instance_id: [u8; 16],
     prev_seq: u64,
-    ttl: Duration,
+    config: &Config,
 ) -> Result<VerifiedRecord> {
-    let addr = iroh.addr();
+    let (relay_urls, direct_addrs) = local_addrs(iroh, config).await;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -508,17 +567,13 @@ async fn build_and_sign(
     let record = NodeRecord {
         version: RECORD_VERSION,
         seq,
-        expires_at: (now + ttl).as_secs(),
+        expires_at: (now + config.record_ttl).as_secs(),
         instance_id,
         endpoint_id: *iroh.id().as_bytes(),
         default_id: identities.default_id(),
         identities: identities.all(),
-        relay_urls: addr
-            .relay_urls()
-            .take(MAX_RELAYS)
-            .map(|u| u.to_string())
-            .collect(),
-        direct_addrs: addr.ip_addrs().copied().take(MAX_DIRECT_ADDRS).collect(),
+        relay_urls,
+        direct_addrs,
     };
     Ok(sign_record(&record, iroh.secret_key(), signer).await?)
 }
@@ -542,7 +597,7 @@ impl Inner {
             &ids,
             self.instance_id,
             st.seq,
-            self.config.record_ttl,
+            &self.config,
         )
         .await?;
         st.identities = ids;
@@ -964,13 +1019,14 @@ async fn address_loop(inner: Arc<Inner>) {
                 }
                 // Debounce bursts of address changes.
                 tokio::time::sleep(Duration::from_millis(250)).await;
-                let addr = w.get();
+                // Compare what we would publish now, so that changes of
+                // addresses we do not publish (a new Docker network) do not
+                // re-sign the record.
+                let (relays, ips) = local_addrs(&inner.iroh, &inner.config).await;
                 let rec = inner.local_record();
-                let relays: BTreeSet<String> = addr.relay_urls().map(|u| u.to_string()).collect();
-                let ips: BTreeSet<SocketAddr> = addr.ip_addrs().copied().collect();
+                let relays: BTreeSet<String> = relays.into_iter().collect();
                 let rec_relays: BTreeSet<String> = rec.record().relay_urls.iter().cloned().collect();
-                let rec_ips: BTreeSet<SocketAddr> = rec.record().direct_addrs.iter().copied().collect();
-                if relays != rec_relays || ips != rec_ips {
+                if relays != rec_relays || ips != rec.record().direct_addrs {
                     debug!(?relays, ?ips, "addresses changed, republishing");
                     if let Err(e) = inner.update_record(None).await {
                         warn!("re-signing record after address change failed: {e}");

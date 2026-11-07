@@ -43,6 +43,7 @@
 
 #![warn(missing_docs)]
 
+mod addrs;
 #[cfg(feature = "directory-server")]
 pub mod directory;
 pub mod discovery;

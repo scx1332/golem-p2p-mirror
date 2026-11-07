@@ -17,6 +17,10 @@ relay-based networking in yagna (`ya-relay`).
   relay URLs, direct addresses, a sequence number and an expiry. Every listed
   identity and the endpoint key sign it. Peers accept only fully verified
   records, so relays and directories need no trust.
+* **Addresses:** a node publishes its public address (as relays see it) and
+  its interface addresses, public before private, at most 16. Addresses of
+  container and VM bridges (`docker0`, Docker's `br-<id>`, `veth*`,
+  `virbr*`, ...) are left out: no peer can reach them.
 * **Discovery:** a `Discovery` trait from node ID to verified record, with an
   in-memory implementation and an HTTP directory (client and server).
 
@@ -67,7 +71,7 @@ What the tests cover:
 | `probe.rs` (CLI) | `--json` output of `listen`, `probe` and `send` as child processes: relay-only probe with bulk transfer (every line parses, common fields, summary consistent with the replies, listener saw every request and the bulk bytes over the relay); probe that ends on a direct path with `time_to_direct_ms`; unknown node fails with exit code 1; SIGTERM ends a probe with a summary; a bulk upload above the listener's `--max-transfer-size` is refused (exit code 3, cause `refused`), one within it works; `keygen`/`directory` with `--json`, error event and exit code |
 | `relay_quic.rs` (CLI) | the relay's QUIC address discovery port (`--relay-quic-port`, per relay `,quic=PORT`, `off`) reaches iroh: a local relay with QAD on a random port sees QAD connections; invalid ports rejected |
 | `bench.rs` (CLI) | `bench --json` against a local listener: relay-only (exit code 4, every phase over the relay, transfers capped for the relay, the listener saw the upload and download) and normal (exit code 0, QAD answers, direct path, `--compare-relay` over the relay, `--idle`); the listener's limits (too large and busy refused cleanly with exit code 5, exactly the limit works); local check only, healthy and with an untrusted relay certificate; unknown node (exit code 3); SIGTERM ends a bench with a report; invalid arguments |
-| unit tests | yagna/ethsign compatibility vectors, record verification (including https-only relay URLs), record store rules and bounds; CLI: argument parsers, timestamps, percentiles, jitter, refusals, the bench verdict rules |
+| unit tests | yagna/ethsign compatibility vectors, record verification (including https-only relay URLs, and records of older nodes that list Docker addresses), record store rules and bounds, published addresses (container and VM bridges left out, LAN and VPN kept, ranking before the cap, IPv6); CLI: argument parsers, timestamps, percentiles, jitter, refusals, the bench verdict rules |
 
 ## Trying it between two machines
 
@@ -271,8 +275,8 @@ let mut events = ep.subscribe();
 ```
 
 Main API: `Endpoint::builder(signer, identities)` with `relay`,
-`relay_config`, `relay_tls`, `discovery`, `transport_mode`, `bind_addr`
-(`bind` fails for a relay URL that is not `https`); then `connect`,
+`relay_config`, `relay_tls`, `discovery`, `transport_mode`, `bind_addr`,
+`exclude_interface` (`bind` fails for a relay URL that is not `https`); then `connect`,
 `open_bi`/`open_bi_from`, `request`/`request_from`, `accept`,
 `set_identities`/`set_default_identity`/`add_alias`/`remove_alias`,
 `subscribe`, `connections`, `close`. Implement `golem_p2p::Signer` to sign

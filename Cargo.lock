@@ -1128,6 +1128,7 @@ dependencies = [
  "iroh-relay",
  "k256",
  "n0-future",
+ "netwatch",
  "postcard",
  "rand",
  "reqwest",
