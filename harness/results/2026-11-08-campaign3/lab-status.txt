@@ -1,0 +1,27 @@
+topology: /home/ubuntu/golem-p2p-lab/topologies/campaign.topo
+services (namespace gpl-svc):
+  relay          running  pid 118330
+  directory      running  pid 118340
+  reflector      running  pid 118345
+  relay https://198.18.0.1,quic=7842 (QAD 198.18.0.1:7842/udp, CA /run/gpl/relay/relay.crt), directory http://198.18.0.1:8080/
+  reflector udp 198.18.0.2:3478,198.18.0.2:3479,198.18.0.3:3478,198.18.0.4:4000 tcp 198.18.0.2:3478
+nodes:
+  NAME         PROFILE          UPLINK NODE_IP        PUBLIC_IP      LINK (procs)
+  pub1         public           lab    198.19.1.2     198.19.1.2     delay=10ms (0)
+  easy1        easy             lab    192.168.2.2    198.18.2.2     delay=10ms (0)
+  easy2        easy             lab    192.168.3.2    198.18.3.2     delay=10ms (0)
+  rc1          restricted       lab    192.168.4.2    198.18.4.2     delay=10ms (0)
+  pr1          port-restricted  lab    192.168.5.2    198.18.5.2     delay=10ms (0)
+  pr2          port-restricted  lab    192.168.6.2    198.18.6.2     delay=10ms (0)
+  sym1         symmetric        lab    192.168.7.2    198.18.7.2     delay=10ms (0)
+  sym2         symmetric        lab    192.168.8.2    198.18.8.2     delay=10ms (0)
+  udpb1        udp-blocked      lab    192.168.9.2    198.18.9.2     delay=10ms (0)
+  cgn1         cgnat            lab    192.168.10.2   198.18.10.2    delay=10ms (0)
+  dbl1         double           lab    192.168.11.2   198.18.11.2    delay=10ms (0)
+  lossy1       port-restricted  lab    192.168.12.2   198.18.12.2    delay=50ms loss=1% (0)
+  idle1        port-restricted  lab    192.168.13.2   198.18.13.2    delay=10ms udp_timeout=30 (0)
+  idle2        port-restricted  lab    192.168.14.2   198.18.14.2    delay=10ms udp_timeout=30 (0)
+  idle3        port-restricted  lab    192.168.15.2   198.18.15.2    delay=10ms udp_timeout=5 (0)
+  idle4        port-restricted  lab    192.168.16.2   198.18.16.2    delay=10ms udp_timeout=5 (0)
+root namespace: untouched (no uplink=real nodes)
+d1bc1cd 2026-11-07T23:05:37Z
