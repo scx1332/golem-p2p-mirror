@@ -1,0 +1,22 @@
+== soak_client_many_peers cycles=3000 start 01:12:30
+
+running 1 test
+test soak_client_many_peers ... cycles=     0 t=    0.2s rss_kb=  23580 anon_kb=   8876 heap_used_kb=   4593 heap_free_kb=   6606 tasks=  19 fds=  12 conns=0 slots=1 locks=1 cached=8/8 in=0 out=8 closed=8 streams=0 refused=0 failed_hs=0
+cycles=   300 t=    8.1s rss_kb=  30780 anon_kb=  16076 heap_used_kb=  10414 heap_free_kb=   7953 tasks= 318 fds=  12 conns=0 slots=1 locks=1 cached=308/308 in=0 out=308 closed=308 streams=0 refused=0 failed_hs=0
+cycles=   600 t=   15.8s rss_kb=  35948 anon_kb=  21244 heap_used_kb=  15486 heap_free_kb=   8161 tasks= 620 fds=  12 conns=0 slots=1 locks=1 cached=608/608 in=0 out=608 closed=608 streams=0 refused=0 failed_hs=0
+cycles=   900 t=   23.5s rss_kb=  41328 anon_kb=  26624 heap_used_kb=  20399 heap_free_kb=   8480 tasks= 919 fds=  12 conns=0 slots=1 locks=1 cached=908/908 in=0 out=908 closed=908 streams=0 refused=0 failed_hs=0
+cycles=  1200 t=   31.2s rss_kb=  46312 anon_kb=  31608 heap_used_kb=  25327 heap_free_kb=   8568 tasks=1220 fds=  12 conns=0 slots=1 locks=1 cached=1208/1208 in=0 out=1208 closed=1208 streams=0 refused=0 failed_hs=0
+cycles=  1500 t=   38.9s rss_kb=  51308 anon_kb=  36604 heap_used_kb=  30161 heap_free_kb=   8814 tasks=1520 fds=  12 conns=0 slots=1 locks=1 cached=1508/1508 in=0 out=1508 closed=1508 streams=0 refused=0 failed_hs=0
+cycles=  1800 t=   46.7s rss_kb=  56956 anon_kb=  42252 heap_used_kb=  35394 heap_free_kb=   9157 tasks=1819 fds=  12 conns=0 slots=1 locks=1 cached=1808/1808 in=0 out=1808 closed=1808 streams=0 refused=0 failed_hs=0
+cycles=  2100 t=   54.4s rss_kb=  61924 anon_kb=  47220 heap_used_kb=  40277 heap_free_kb=   9278 tasks=2119 fds=  12 conns=0 slots=1 locks=1 cached=2108/2108 in=0 out=2108 closed=2108 streams=0 refused=0 failed_hs=0
+cycles=  2400 t=   62.3s rss_kb=  66276 anon_kb=  51572 heap_used_kb=  44120 heap_free_kb=   9779 tasks=2333 fds=  12 conns=0 slots=1 locks=1 cached=2408/2408 in=0 out=2408 closed=2408 streams=0 refused=0 failed_hs=0
+cycles=  2700 t=   70.4s rss_kb=  67528 anon_kb=  52824 heap_used_kb=  44160 heap_free_kb=  10999 tasks=2325 fds=  12 conns=0 slots=1 locks=1 cached=2708/2708 in=0 out=2708 closed=2708 streams=0 refused=0 failed_hs=0
+cycles=  3000 t=   79.0s rss_kb=  68128 anon_kb=  53424 heap_used_kb=  43505 heap_free_kb=  12218 tasks=2284 fds=  12 conns=0 slots=1 locks=1 cached=3008/3008 in=0 out=3008 closed=3008 streams=0 refused=0 failed_hs=0
+waiting 65 s for idle per-remote state to expire
+cycles=  3000 t=  144.0s rss_kb=  68224 anon_kb=  53424 heap_used_kb=   8397 heap_free_kb=  47326 tasks=   7 fds=  12 conns=0 slots=1 locks=1 cached=3008/3008 in=0 out=3008 closed=3008 streams=0 refused=0 failed_hs=0
+baseline: anon_kb=8876 heap=Some((4593, 6606)) tasks=19 fds=12; after 3000 peers and idle: anon_kb=53424 heap=Some((8397, 47326)) tasks=7 fds=12 cached=3008/3008; memory (heap in use, or anon) per peer while running 12299 B, retained after idle 1298 B
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 144.08s
+
+exit 0 end 01:14:54

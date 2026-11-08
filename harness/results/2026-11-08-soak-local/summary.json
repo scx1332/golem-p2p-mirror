@@ -1,0 +1,4169 @@
+{
+ "runs": {
+  "steady": {
+   "scenario": "steady",
+   "load_hours": 2.506,
+   "flags": [
+    "client* rss_kb_sum grows 171579.67/h (R2 0.759, 2161162.0 -> 2734308.0, peak 2734576; still growing in the second half (73952.413/h))",
+    "client* anon_kb_sum grows 177496.792/h (R2 0.773, 611930.0 -> 1191164.0, peak 1191432; still growing in the second half (76387.218/h))",
+    "listener rss_kb grows 6180.614/h (R2 0.905, 34994.0 -> 52356.0, peak 52356; still growing in the second half (3944.309/h))",
+    "listener anon_kb grows 6199.804/h (R2 0.904, 19782.0 -> 36936.0, peak 36936; still growing in the second half (3980.318/h))",
+    "relay anon_kb grows 1813.506/h (R2 0.64, 18376.0 -> 23508.0, peak 23628; levels off in the second half)",
+    "listener proc.heap_used_kb grows 1097.815/h (R2 0.826, 18321.5 -> 21456.0, peak 21473; levels off in the second half)"
+   ],
+   "processes": {
+    "client*": {
+     "rss_kb_sum": {
+      "idle": null,
+      "start": 2161162.0,
+      "peak": 2734576,
+      "load_end": 2734308.0,
+      "after_cooldown": null,
+      "slope_per_h": 171579.67,
+      "r2": 0.759,
+      "growing": true
+     },
+     "anon_kb_sum": {
+      "idle": null,
+      "start": 611930.0,
+      "peak": 1191432,
+      "load_end": 1191164.0,
+      "after_cooldown": null,
+      "slope_per_h": 177496.792,
+      "r2": 0.773,
+      "growing": true
+     },
+     "fds_sum": {
+      "idle": null,
+      "start": 1200.0,
+      "peak": 1301,
+      "load_end": 1200.0,
+      "after_cooldown": null,
+      "slope_per_h": -0.554,
+      "r2": 0.0,
+      "growing": false
+     },
+     "threads_sum": {
+      "idle": null,
+      "start": 300.0,
+      "peak": 398,
+      "load_end": 300.0,
+      "after_cooldown": null,
+      "slope_per_h": -0.088,
+      "r2": 0.0,
+      "growing": false
+     }
+    },
+    "directory": {
+     "rss_kb": {
+      "idle": 9616.0,
+      "start": 11724.0,
+      "peak": 12940,
+      "load_end": 12940.0,
+      "after_cooldown": 12940.0,
+      "slope_per_h": 453.097,
+      "r2": 0.666,
+      "growing": false
+     },
+     "anon_kb": {
+      "idle": 1268.0,
+      "start": 3392.0,
+      "peak": 4804,
+      "load_end": 4804.0,
+      "after_cooldown": 4804.0,
+      "slope_per_h": 521.301,
+      "r2": 0.705,
+      "growing": false
+     },
+     "fds": {
+      "idle": 11.0,
+      "start": 10.0,
+      "peak": 110,
+      "load_end": 10.0,
+      "after_cooldown": 10.0,
+      "slope_per_h": -0.567,
+      "r2": 0.0,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 0.0
+    },
+    "listener": {
+     "rss_kb": {
+      "idle": 20418.0,
+      "start": 34994.0,
+      "peak": 52356,
+      "load_end": 52356.0,
+      "after_cooldown": 52364.0,
+      "slope_per_h": 6180.614,
+      "r2": 0.905,
+      "growing": true
+     },
+     "anon_kb": {
+      "idle": 4842.0,
+      "start": 19782.0,
+      "peak": 36936,
+      "load_end": 36936.0,
+      "after_cooldown": 36944.0,
+      "slope_per_h": 6199.804,
+      "r2": 0.904,
+      "growing": true
+     },
+     "fds": {
+      "idle": 14.0,
+      "start": 13.0,
+      "peak": 14,
+      "load_end": 13.0,
+      "after_cooldown": 13.0,
+      "slope_per_h": -0.012,
+      "r2": 0.001,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 8,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": -0.002,
+      "r2": 0.0,
+      "growing": false
+     },
+     "cpu_load_pct": 7.1
+    },
+    "relay": {
+     "rss_kb": {
+      "idle": 10404.0,
+      "start": 25896.0,
+      "peak": 31376,
+      "load_end": 31048.0,
+      "after_cooldown": 30900.0,
+      "slope_per_h": 1976.212,
+      "r2": 0.58,
+      "growing": false
+     },
+     "anon_kb": {
+      "idle": 1268.0,
+      "start": 18376.0,
+      "peak": 23628,
+      "load_end": 23508.0,
+      "after_cooldown": 23260.0,
+      "slope_per_h": 1813.506,
+      "r2": 0.64,
+      "growing": true
+     },
+     "fds": {
+      "idle": 14.0,
+      "start": 114.0,
+      "peak": 115,
+      "load_end": 114.0,
+      "after_cooldown": 14.0,
+      "slope_per_h": 0.001,
+      "r2": 0.0,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 1.4
+    }
+   },
+   "listener": {
+    "tokio.alive_tasks": {
+     "idle": 16.0,
+     "start": 716.0,
+     "peak": 721,
+     "load_end": 715.0,
+     "after_cooldown": 15.0,
+     "slope_per_h": -1.233,
+     "r2": 0.378,
+     "growing": false
+    },
+    "ep.connections": {
+     "idle": 0.0,
+     "start": 100.0,
+     "peak": 100,
+     "load_end": 100.0,
+     "after_cooldown": 0.0,
+     "slope_per_h": 0.0,
+     "r2": 1.0,
+     "growing": false
+    },
+    "ep.cached_identities": {
+     "idle": 0.0,
+     "start": 100.0,
+     "peak": 100,
+     "load_end": 100.0,
+     "after_cooldown": 100.0,
+     "slope_per_h": 0.0,
+     "r2": 1.0,
+     "growing": false
+    },
+    "ep.cached_endpoints": {
+     "idle": 0.0,
+     "start": 100.0,
+     "peak": 100,
+     "load_end": 100.0,
+     "after_cooldown": 100.0,
+     "slope_per_h": 0.0,
+     "r2": 1.0,
+     "growing": false
+    },
+    "proc.heap_used_kb": {
+     "idle": 4066.5,
+     "start": 18321.5,
+     "peak": 21473,
+     "load_end": 21456.0,
+     "after_cooldown": 6544.0,
+     "slope_per_h": 1097.815,
+     "r2": 0.826,
+     "growing": true
+    },
+    "proc.heap_free_kb": {
+     "idle": 4211.5,
+     "start": 5445.5,
+     "peak": 21141,
+     "load_end": 20991.0,
+     "after_cooldown": 35903.0,
+     "slope_per_h": 5791.185,
+     "r2": 0.911,
+     "growing": true
+    },
+    "ep.connections_incoming": {
+     "at_load_end": 100,
+     "last": 100
+    },
+    "ep.streams_accepted": {
+     "at_load_end": 903025,
+     "last": 903025
+    },
+    "heap_used_kb_per_connection": null,
+    "kb_per_open_connection": {
+     "heap_used_kb": 142.6,
+     "anon_kb": 149.3,
+     "rss_kb": 145.2,
+     "open_connections": 100.0
+    }
+   },
+   "directory": {
+    "store.identities": {
+     "idle": 1.0,
+     "start": 101.0,
+     "peak": 101,
+     "load_end": 101.0,
+     "after_cooldown": 101.0,
+     "last": 101,
+     "slope_per_h": 0.0,
+     "r2": 1.0,
+     "fit_hours": 2.256,
+     "growth_in_fit": 0.0,
+     "slope_second_half_per_h": 0.0,
+     "growth_second_half": 0.0,
+     "threshold": 10.1,
+     "growing": false,
+     "still_growing": false
+    },
+    "proc.heap_used_kb": {
+     "idle": 235.0,
+     "start": 366.5,
+     "peak": 3367,
+     "load_end": 415.0,
+     "after_cooldown": 415.0,
+     "last": 415,
+     "slope_per_h": -0.604,
+     "r2": 0.0,
+     "fit_hours": 2.256,
+     "growth_in_fit": -1.363,
+     "slope_second_half_per_h": 150.872,
+     "growth_second_half": 170.162,
+     "threshold": 2048.0,
+     "growing": false,
+     "still_growing": false
+    },
+    "heap_used_kb_per_identity": null
+   },
+   "clients": {
+    "bins": 31,
+    "bin_s": 300,
+    "totals": {
+     "sent": 901525,
+     "ok": 901525,
+     "failed": 0,
+     "bulk_ok": 1500,
+     "bulk_failed": 0,
+     "new_conns": 100
+    },
+    "errors": {},
+    "clients": 100,
+    "clients_with_final_event": 100,
+    "overall_hist_p50_ms": 0.5,
+    "overall_hist_p99_ms": 3.0,
+    "overall_hist_p999_ms": 15.0,
+    "first_bin": {
+     "p50": 0.226,
+     "p99": 6.068
+    },
+    "last_bin": {
+     "p50": 0.333,
+     "p99": 1.694
+    },
+    "p50_trend_ms_per_h": 0.034,
+    "p50_trend_r2": 0.027,
+    "p99_trend_ms_per_h": -0.4409,
+    "p99_trend_r2": 0.04,
+    "failure_rate": 0.0,
+    "client_mem_slope_kb_per_h": {
+     "median": 121.954,
+     "max": 189.23,
+     "min": 72.3,
+     "growing": 0
+    },
+    "client_alive_tasks_slope_per_h": {
+     "median": -0.006,
+     "max": 0.092
+    }
+   },
+   "listener_errors": {},
+   "relay_anon_kb_per_listener_connection": 171.1,
+   "relay_metrics_delta": {
+    "relayserver_accepts_total": 100,
+    "relayserver_bytes_recv_total": 11976200,
+    "relayserver_bytes_sent_total": 11976200,
+    "relayserver_got_ping_total": 798,
+    "relayserver_http_connections_closed_total": 3036,
+    "relayserver_http_connections_total": 3036,
+    "relayserver_qad_connections_closed_total": 39414,
+    "relayserver_qad_connections_total": 39514,
+    "relayserver_qad_incoming_total": 39514,
+    "relayserver_send_packets_recv_total": 344818,
+    "relayserver_send_packets_sent_total": 344818,
+    "relayserver_sent_pong_total": 798,
+    "relayserver_unique_client_keys_total": 100
+   }
+  },
+  "relay": {
+   "scenario": "relay",
+   "load_hours": 2.504,
+   "flags": [
+    "client* anon_kb_sum grows 22706.883/h (R2 0.653, 289464.0 -> 367184.0, peak 367552; levels off in the second half)",
+    "listener rss_kb grows 8389.623/h (R2 0.802, 29028.0 -> 44192.0, peak 44228; still growing in the second half (5892.799/h))",
+    "listener anon_kb grows 8647.378/h (R2 0.816, 13908.0 -> 29628.0, peak 29628; still growing in the second half (5924.838/h))",
+    "relay rss_kb grows 1320.282/h (R2 0.651, 12684.0 -> 16324.0, peak 17028; levels off in the second half)",
+    "relay anon_kb grows 1161.368/h (R2 0.734, 5508.0 -> 9100.0, peak 9100; levels off in the second half)"
+   ],
+   "processes": {
+    "client*": {
+     "rss_kb_sum": {
+      "idle": null,
+      "start": 1059120.0,
+      "peak": 1108344,
+      "load_end": 1107976.0,
+      "after_cooldown": null,
+      "slope_per_h": 9466.865,
+      "r2": 0.394,
+      "growing": false
+     },
+     "anon_kb_sum": {
+      "idle": null,
+      "start": 289464.0,
+      "peak": 367552,
+      "load_end": 367184.0,
+      "after_cooldown": null,
+      "slope_per_h": 22706.883,
+      "r2": 0.653,
+      "growing": true
+     },
+     "fds_sum": {
+      "idle": null,
+      "start": 550.0,
+      "peak": 601,
+      "load_end": 550.0,
+      "after_cooldown": null,
+      "slope_per_h": -0.276,
+      "r2": 0.0,
+      "growing": false
+     },
+     "threads_sum": {
+      "idle": null,
+      "start": 150.0,
+      "peak": 199,
+      "load_end": 150.0,
+      "after_cooldown": null,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     }
+    },
+    "directory": {
+     "rss_kb": {
+      "idle": 9672.0,
+      "start": 10764.0,
+      "peak": 11384,
+      "load_end": 11276.0,
+      "after_cooldown": 11276.0,
+      "slope_per_h": 162.689,
+      "r2": 0.665,
+      "growing": false
+     },
+     "anon_kb": {
+      "idle": 1268.0,
+      "start": 2316.0,
+      "peak": 3112,
+      "load_end": 3032.0,
+      "after_cooldown": 3032.0,
+      "slope_per_h": 247.782,
+      "r2": 0.76,
+      "growing": false
+     },
+     "fds": {
+      "idle": 11.0,
+      "start": 10.0,
+      "peak": 60,
+      "load_end": 10.0,
+      "after_cooldown": 10.0,
+      "slope_per_h": -0.279,
+      "r2": 0.0,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 0.0
+    },
+    "listener": {
+     "rss_kb": {
+      "idle": 19828.0,
+      "start": 29028.0,
+      "peak": 44228,
+      "load_end": 44192.0,
+      "after_cooldown": 44192.0,
+      "slope_per_h": 8389.623,
+      "r2": 0.802,
+      "growing": true
+     },
+     "anon_kb": {
+      "idle": 4806.0,
+      "start": 13908.0,
+      "peak": 29628,
+      "load_end": 29628.0,
+      "after_cooldown": 29628.0,
+      "slope_per_h": 8647.378,
+      "r2": 0.816,
+      "growing": true
+     },
+     "fds": {
+      "idle": 13.0,
+      "start": 12.0,
+      "peak": 14,
+      "load_end": 12.0,
+      "after_cooldown": 12.0,
+      "slope_per_h": -0.013,
+      "r2": 0.001,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 3.8
+    },
+    "relay": {
+     "rss_kb": {
+      "idle": 9804.0,
+      "start": 12684.0,
+      "peak": 17028,
+      "load_end": 16324.0,
+      "after_cooldown": 15276.0,
+      "slope_per_h": 1320.282,
+      "r2": 0.651,
+      "growing": true
+     },
+     "anon_kb": {
+      "idle": 1052.0,
+      "start": 5508.0,
+      "peak": 9100,
+      "load_end": 9100.0,
+      "after_cooldown": 7936.0,
+      "slope_per_h": 1161.368,
+      "r2": 0.734,
+      "growing": true
+     },
+     "fds": {
+      "idle": 14.0,
+      "start": 64.0,
+      "peak": 67,
+      "load_end": 64.0,
+      "after_cooldown": 14.0,
+      "slope_per_h": -0.009,
+      "r2": 0.0,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 2.6
+    }
+   },
+   "listener": {
+    "tokio.alive_tasks": {
+     "idle": 14.0,
+     "start": 363.0,
+     "peak": 371,
+     "load_end": 364.0,
+     "after_cooldown": 13.0,
+     "slope_per_h": -0.016,
+     "r2": 0.0,
+     "growing": false
+    },
+    "ep.connections": {
+     "idle": 0.0,
+     "start": 50.0,
+     "peak": 50,
+     "load_end": 50.0,
+     "after_cooldown": 0.0,
+     "slope_per_h": 0.0,
+     "r2": 1.0,
+     "growing": false
+    },
+    "ep.cached_identities": {
+     "idle": 0.0,
+     "start": 50.0,
+     "peak": 50,
+     "load_end": 50.0,
+     "after_cooldown": 50.0,
+     "slope_per_h": 0.0,
+     "r2": 1.0,
+     "growing": false
+    },
+    "ep.cached_endpoints": {
+     "idle": 0.0,
+     "start": 50.0,
+     "peak": 50,
+     "load_end": 50.0,
+     "after_cooldown": 50.0,
+     "slope_per_h": 0.0,
+     "r2": 1.0,
+     "growing": false
+    },
+    "proc.heap_used_kb": {
+     "idle": 978.0,
+     "start": 8956.0,
+     "peak": 11521,
+     "load_end": 11515.5,
+     "after_cooldown": 2769.5,
+     "slope_per_h": 636.384,
+     "r2": 0.689,
+     "growing": false
+    },
+    "proc.heap_free_kb": {
+     "idle": 3177.0,
+     "start": 4168.5,
+     "peak": 17743,
+     "load_end": 17351.5,
+     "after_cooldown": 26097.5,
+     "slope_per_h": 8039.984,
+     "r2": 0.788,
+     "growing": true
+    },
+    "ep.connections_incoming": {
+     "at_load_end": 50,
+     "last": 50
+    },
+    "ep.streams_accepted": {
+     "at_load_end": 451330,
+     "last": 451330
+    },
+    "heap_used_kb_per_connection": null,
+    "kb_per_open_connection": {
+     "heap_used_kb": 159.6,
+     "anon_kb": 180.3,
+     "rss_kb": 183.8,
+     "open_connections": 50.0
+    }
+   },
+   "directory": {
+    "store.identities": {
+     "idle": 1.0,
+     "start": 51.0,
+     "peak": 51,
+     "load_end": 51.0,
+     "after_cooldown": 51.0,
+     "last": 51,
+     "slope_per_h": 0.0,
+     "r2": 1.0,
+     "fit_hours": 2.254,
+     "growth_in_fit": 0.0,
+     "slope_second_half_per_h": 0.0,
+     "growth_second_half": 0.0,
+     "threshold": 5.1,
+     "growing": false,
+     "still_growing": false
+    },
+    "proc.heap_used_kb": {
+     "idle": 235.0,
+     "start": 327.5,
+     "peak": 1842,
+     "load_end": 364.0,
+     "after_cooldown": 364.0,
+     "last": 364,
+     "slope_per_h": -0.145,
+     "r2": 0.0,
+     "fit_hours": 2.254,
+     "growth_in_fit": -0.326,
+     "slope_second_half_per_h": 74.049,
+     "growth_second_half": 83.458,
+     "threshold": 2048.0,
+     "growing": false,
+     "still_growing": false
+    },
+    "heap_used_kb_per_identity": null
+   },
+   "clients": {
+    "bins": 31,
+    "bin_s": 300,
+    "totals": {
+     "sent": 450580,
+     "ok": 450580,
+     "failed": 0,
+     "bulk_ok": 747,
+     "bulk_failed": 3,
+     "new_conns": 50
+    },
+    "errors": {
+     "bulk": 3
+    },
+    "clients": 50,
+    "clients_with_final_event": 50,
+    "overall_hist_p50_ms": 1.0,
+    "overall_hist_p99_ms": 5.0,
+    "overall_hist_p999_ms": 50.0,
+    "first_bin": {
+     "p50": 0.386,
+     "p99": 7.857
+    },
+    "last_bin": {
+     "p50": 0.53,
+     "p99": 9.579
+    },
+    "p50_trend_ms_per_h": 0.0385,
+    "p50_trend_r2": 0.014,
+    "p99_trend_ms_per_h": -0.594,
+    "p99_trend_r2": 0.034,
+    "failure_rate": 0.0,
+    "client_mem_slope_kb_per_h": {
+     "median": 64.484,
+     "max": 106.53,
+     "min": 41.897,
+     "growing": 0
+    },
+    "client_alive_tasks_slope_per_h": {
+     "median": 0.025,
+     "max": 0.194
+    }
+   },
+   "listener_errors": {},
+   "relay_anon_kb_per_listener_connection": 89.1,
+   "relay_metrics_delta": {
+    "relayserver_accepts_total": 50,
+    "relayserver_bytes_recv_total": 1200591745,
+    "relayserver_bytes_sent_total": 1127189711,
+    "relayserver_got_ping_total": 58,
+    "relayserver_http_connections_closed_total": 19217,
+    "relayserver_http_connections_errored_total": 1,
+    "relayserver_http_connections_total": 19217,
+    "relayserver_send_packets_recv_total": 2453444,
+    "relayserver_send_packets_sent_total": 2402422,
+    "relayserver_sent_pong_total": 58,
+    "relayserver_unique_client_keys_total": 50
+   }
+  },
+  "churn": {
+   "scenario": "churn",
+   "load_hours": 2.503,
+   "flags": [
+    "directory rss_kb grows 2439.654/h (R2 0.849, 11630.0 -> 17128, peak 17128; levels off in the second half)",
+    "directory anon_kb grows 2523.156/h (R2 0.85, 3138.0 -> 8876, peak 8876; levels off in the second half)",
+    "listener rss_kb grows 7544.469/h (R2 0.929, 28924.0 -> 48776, peak 48776; still growing in the second half (5952.386/h))",
+    "listener anon_kb grows 7572.591/h (R2 0.928, 13844.0 -> 33452, peak 33452; still growing in the second half (6009.066/h))",
+    "relay rss_kb grows 1601.615/h (R2 0.878, 14342.0 -> 17872, peak 18272; levels off in the second half)",
+    "relay anon_kb grows 1369.083/h (R2 0.96, 6598.0 -> 9988, peak 9988; still growing in the second half (1537.616/h))",
+    "listener proc.heap_used_kb grows 3713.164/h (R2 0.868, 10038.0 -> 19833.0, peak 20620; still growing in the second half (3672.659/h))",
+    "directory proc.heap_used_kb grows 1718.048/h (R2 0.692, 1850.5 -> 6159.5, peak 6260; levels off in the second half)",
+    "listener errors: {'connection': 16}"
+   ],
+   "processes": {
+    "churn*": {
+     "rss_kb_sum": {
+      "idle": null,
+      "start": 121240.0,
+      "peak": 122172,
+      "load_end": 121068,
+      "after_cooldown": null,
+      "slope_per_h": -11.592,
+      "r2": 0.0,
+      "growing": false
+     },
+     "anon_kb_sum": {
+      "idle": null,
+      "start": 27656.0,
+      "peak": 27856,
+      "load_end": 27716,
+      "after_cooldown": null,
+      "slope_per_h": 18.828,
+      "r2": 0.0,
+      "growing": false
+     },
+     "fds_sum": {
+      "idle": null,
+      "start": 78.0,
+      "peak": 78,
+      "load_end": 78,
+      "after_cooldown": null,
+      "slope_per_h": 0.027,
+      "r2": 0.0,
+      "growing": false
+     },
+     "threads_sum": {
+      "idle": null,
+      "start": 24.0,
+      "peak": 29,
+      "load_end": 24,
+      "after_cooldown": null,
+      "slope_per_h": -0.122,
+      "r2": 0.004,
+      "growing": false
+     }
+    },
+    "directory": {
+     "rss_kb": {
+      "idle": 9708.0,
+      "start": 11630.0,
+      "peak": 17128,
+      "load_end": 17128,
+      "after_cooldown": 17128.0,
+      "slope_per_h": 2439.654,
+      "r2": 0.849,
+      "growing": true
+     },
+     "anon_kb": {
+      "idle": 1268.0,
+      "start": 3138.0,
+      "peak": 8876,
+      "load_end": 8876,
+      "after_cooldown": 8876.0,
+      "slope_per_h": 2523.156,
+      "r2": 0.85,
+      "growing": true
+     },
+     "fds": {
+      "idle": 11.0,
+      "start": 16.0,
+      "peak": 17,
+      "load_end": 16,
+      "after_cooldown": 10.0,
+      "slope_per_h": -0.044,
+      "r2": 0.001,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 0.2
+    },
+    "listener": {
+     "rss_kb": {
+      "idle": 20440.0,
+      "start": 28924.0,
+      "peak": 48776,
+      "load_end": 48776,
+      "after_cooldown": 48776.0,
+      "slope_per_h": 7544.469,
+      "r2": 0.929,
+      "growing": true
+     },
+     "anon_kb": {
+      "idle": 4980.0,
+      "start": 13844.0,
+      "peak": 33452,
+      "load_end": 33452,
+      "after_cooldown": 33452.0,
+      "slope_per_h": 7572.591,
+      "r2": 0.928,
+      "growing": true
+     },
+     "fds": {
+      "idle": 14.0,
+      "start": 13.0,
+      "peak": 14,
+      "load_end": 13,
+      "after_cooldown": 13.0,
+      "slope_per_h": -0.012,
+      "r2": 0.001,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 8,
+      "load_end": 7,
+      "after_cooldown": 7.0,
+      "slope_per_h": -0.002,
+      "r2": 0.0,
+      "growing": false
+     },
+     "cpu_load_pct": 2.8
+    },
+    "relay": {
+     "rss_kb": {
+      "idle": 10580.0,
+      "start": 14342.0,
+      "peak": 18272,
+      "load_end": 17872,
+      "after_cooldown": 17872.0,
+      "slope_per_h": 1601.615,
+      "r2": 0.878,
+      "growing": true
+     },
+     "anon_kb": {
+      "idle": 1232.0,
+      "start": 6598.0,
+      "peak": 9988,
+      "load_end": 9988,
+      "after_cooldown": 9988.0,
+      "slope_per_h": 1369.083,
+      "r2": 0.96,
+      "growing": true
+     },
+     "fds": {
+      "idle": 14.0,
+      "start": 20.0,
+      "peak": 20,
+      "load_end": 20,
+      "after_cooldown": 14.0,
+      "slope_per_h": 0.002,
+      "r2": 0.0,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 1.0
+    }
+   },
+   "listener": {
+    "tokio.alive_tasks": {
+     "idle": 16.0,
+     "start": 158.5,
+     "peak": 168,
+     "load_end": 160.0,
+     "after_cooldown": 15.0,
+     "slope_per_h": 0.383,
+     "r2": 0.001,
+     "growing": false
+    },
+    "ep.connections": {
+     "idle": 0.0,
+     "start": 5.5,
+     "peak": 6,
+     "load_end": 5.5,
+     "after_cooldown": 0.0,
+     "slope_per_h": 0.014,
+     "r2": 0.0,
+     "growing": false
+    },
+    "ep.cached_identities": {
+     "idle": 0.0,
+     "start": 901.5,
+     "peak": 4096,
+     "load_end": 3640.5,
+     "after_cooldown": 3690.0,
+     "slope_per_h": 1165.138,
+     "r2": 0.677,
+     "growing": true
+    },
+    "ep.cached_endpoints": {
+     "idle": 0.0,
+     "start": 1779.0,
+     "peak": 4096,
+     "load_end": 4079.0,
+     "after_cooldown": 4063.0,
+     "slope_per_h": 464.808,
+     "r2": 0.33,
+     "growing": false
+    },
+    "proc.heap_used_kb": {
+     "idle": 4076.5,
+     "start": 10038.0,
+     "peak": 20620,
+     "load_end": 19833.0,
+     "after_cooldown": 17779.0,
+     "slope_per_h": 3713.164,
+     "r2": 0.868,
+     "growing": true
+    },
+    "proc.heap_free_kb": {
+     "idle": 4180.0,
+     "start": 6882.0,
+     "peak": 16448,
+     "load_end": 16254.0,
+     "after_cooldown": 18308.0,
+     "slope_per_h": 3816.534,
+     "r2": 0.935,
+     "growing": true
+    },
+    "ep.connections_incoming": {
+     "at_load_end": 16322,
+     "last": 16322
+    },
+    "ep.streams_accepted": {
+     "at_load_end": 244907,
+     "last": 244907
+    },
+    "heap_used_kb_per_connection": {
+     "slope": 0.57077,
+     "r2": 0.868,
+     "x_range": [
+      1698,
+      16304
+     ]
+    },
+    "kb_per_open_connection": {
+     "heap_used_kb": 1083.9,
+     "anon_kb": 1672.4,
+     "rss_kb": 1605.8,
+     "open_connections": 5.5
+    }
+   },
+   "directory": {
+    "store.identities": {
+     "idle": 1.0,
+     "start": 902.5,
+     "peak": 3596,
+     "load_end": 3553.0,
+     "after_cooldown": 3415.0,
+     "last": 3388,
+     "slope_per_h": 999.683,
+     "r2": 0.65,
+     "fit_hours": 2.253,
+     "growth_in_fit": 2251.966,
+     "slope_second_half_per_h": -1.503,
+     "growth_second_half": -1.693,
+     "threshold": 90.25,
+     "growing": true,
+     "still_growing": false
+    },
+    "proc.heap_used_kb": {
+     "idle": 235.5,
+     "start": 1850.5,
+     "peak": 6260,
+     "load_end": 6159.5,
+     "after_cooldown": 5866.0,
+     "last": 5831,
+     "slope_per_h": 1718.048,
+     "r2": 0.692,
+     "fit_hours": 2.253,
+     "growth_in_fit": 3870.213,
+     "slope_second_half_per_h": -0.125,
+     "growth_second_half": -0.14,
+     "threshold": 2048.0,
+     "growing": true,
+     "still_growing": false
+    },
+    "heap_used_kb_per_identity": {
+     "slope": 1.65706,
+     "r2": 0.99,
+     "x_range": [
+      862,
+      3541
+     ]
+    }
+   },
+   "churn": {
+    "sessions": 16322,
+    "exit_codes": {
+     "0": 16322
+    },
+    "errors": {},
+    "sessions_per_min": 108.7,
+    "requests": 244744,
+    "requests_failed": 0,
+    "bind_ms": {
+     "p50": 297.242,
+     "p99": 357.971
+    },
+    "first_ok_ms": {
+     "p50": 403.504,
+     "p99": 520.48
+    },
+    "bind_ms_trend_per_h": -2.144,
+    "bind_ms_trend_r2": 0.024,
+    "first_ok_ms_trend_per_h": -0.963,
+    "first_ok_ms_trend_r2": 0.003
+   },
+   "listener_errors": {
+    "cancelled": 109,
+    "connection": 16
+   },
+   "relay_anon_kb_per_listener_connection": 975.6,
+   "relay_metrics_delta": {
+    "relayserver_accepts_total": 16304,
+    "relayserver_bytes_recv_total": 260598183,
+    "relayserver_bytes_sent_total": 260598183,
+    "relayserver_disconnects_total": 16298,
+    "relayserver_got_ping_total": 16312,
+    "relayserver_http_connections_closed_total": 32637,
+    "relayserver_http_connections_total": 32637,
+    "relayserver_qad_connections_closed_total": 16693,
+    "relayserver_qad_connections_errored_total": 16298,
+    "relayserver_qad_connections_total": 16699,
+    "relayserver_qad_incoming_total": 16699,
+    "relayserver_send_packets_recv_total": 196528,
+    "relayserver_send_packets_sent_total": 196528,
+    "relayserver_sent_pong_total": 16312,
+    "relayserver_unique_client_keys_total": 16304
+   }
+  },
+  "churn-relay": {
+   "scenario": "churn",
+   "load_hours": 1.669,
+   "flags": [
+    "directory rss_kb grows 2358.509/h (R2 0.903, 10998.0 -> 14056.0, peak 14056; levels off in the second half)",
+    "directory anon_kb grows 2447.118/h (R2 0.902, 2566.0 -> 5752.0, peak 5752; levels off in the second half)",
+    "listener rss_kb grows 5787.664/h (R2 0.918, 26980.0 -> 37392.0, peak 37392; still growing in the second half (3240.804/h))",
+    "listener anon_kb grows 6070.431/h (R2 0.919, 11248.0 -> 22160.0, peak 22160; still growing in the second half (3261.579/h))",
+    "listener proc.heap_used_kb grows 3639.015/h (R2 0.917, 5446.5 -> 11948.5, peak 11971; still growing in the second half (2221.173/h))",
+    "directory proc.heap_used_kb grows 1963.61/h (R2 0.873, 1244.0 -> 3811.0, peak 3835; levels off in the second half)",
+    "listener errors: {'connection': 41}"
+   ],
+   "processes": {
+    "churn*": {
+     "rss_kb_sum": {
+      "idle": null,
+      "start": 79884.0,
+      "peak": 80432,
+      "load_end": 79838.0,
+      "after_cooldown": null,
+      "slope_per_h": 991.017,
+      "r2": 0.004,
+      "growing": false
+     },
+     "anon_kb_sum": {
+      "idle": null,
+      "start": 17546.0,
+      "peak": 17688,
+      "load_end": 17582.0,
+      "after_cooldown": null,
+      "slope_per_h": 206.79,
+      "r2": 0.004,
+      "growing": false
+     },
+     "fds_sum": {
+      "idle": null,
+      "start": 48.0,
+      "peak": 48,
+      "load_end": 48.0,
+      "after_cooldown": null,
+      "slope_per_h": 0.732,
+      "r2": 0.006,
+      "growing": false
+     },
+     "threads_sum": {
+      "idle": null,
+      "start": 16.0,
+      "peak": 17,
+      "load_end": 16.0,
+      "after_cooldown": null,
+      "slope_per_h": 0.14,
+      "r2": 0.002,
+      "growing": false
+     }
+    },
+    "directory": {
+     "rss_kb": {
+      "idle": 9620.0,
+      "start": 10998.0,
+      "peak": 14056,
+      "load_end": 14056.0,
+      "after_cooldown": 14056.0,
+      "slope_per_h": 2358.509,
+      "r2": 0.903,
+      "growing": true
+     },
+     "anon_kb": {
+      "idle": 1268.0,
+      "start": 2566.0,
+      "peak": 5752,
+      "load_end": 5752.0,
+      "after_cooldown": 5752.0,
+      "slope_per_h": 2447.118,
+      "r2": 0.902,
+      "growing": true
+     },
+     "fds": {
+      "idle": 11.0,
+      "start": 14.0,
+      "peak": 15,
+      "load_end": 15.0,
+      "after_cooldown": 10.0,
+      "slope_per_h": 0.202,
+      "r2": 0.009,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 0.1
+    },
+    "listener": {
+     "rss_kb": {
+      "idle": 19942.0,
+      "start": 26980.0,
+      "peak": 37392,
+      "load_end": 37392.0,
+      "after_cooldown": 37448.0,
+      "slope_per_h": 5787.664,
+      "r2": 0.918,
+      "growing": true
+     },
+     "anon_kb": {
+      "idle": 4778.0,
+      "start": 11248.0,
+      "peak": 22160,
+      "load_end": 22160.0,
+      "after_cooldown": 22216.0,
+      "slope_per_h": 6070.431,
+      "r2": 0.919,
+      "growing": true
+     },
+     "fds": {
+      "idle": 13.0,
+      "start": 12.0,
+      "peak": 13,
+      "load_end": 13.0,
+      "after_cooldown": 12.0,
+      "slope_per_h": 0.01,
+      "r2": 0.0,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 2.1
+    },
+    "relay": {
+     "rss_kb": {
+      "idle": 9832.0,
+      "start": 11208.0,
+      "peak": 12908,
+      "load_end": 12908.0,
+      "after_cooldown": 12908.0,
+      "slope_per_h": 1031.921,
+      "r2": 0.864,
+      "growing": false
+     },
+     "anon_kb": {
+      "idle": 1054.0,
+      "start": 2492.0,
+      "peak": 4176,
+      "load_end": 4176.0,
+      "after_cooldown": 4176.0,
+      "slope_per_h": 976.095,
+      "r2": 0.868,
+      "growing": false
+     },
+     "fds": {
+      "idle": 14.0,
+      "start": 18.0,
+      "peak": 18,
+      "load_end": 18.0,
+      "after_cooldown": 14.0,
+      "slope_per_h": 0.183,
+      "r2": 0.01,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 1.5
+    }
+   },
+   "listener": {
+    "tokio.alive_tasks": {
+     "idle": 14.0,
+     "start": 111.5,
+     "peak": 119,
+     "load_end": 111.0,
+     "after_cooldown": 13.0,
+     "slope_per_h": 0.268,
+     "r2": 0.0,
+     "growing": false
+    },
+    "ep.connections": {
+     "idle": 0.0,
+     "start": 4.0,
+     "peak": 4,
+     "load_end": 4.0,
+     "after_cooldown": 0.0,
+     "slope_per_h": 0.033,
+     "r2": 0.0,
+     "growing": false
+    },
+    "ep.cached_identities": {
+     "idle": 0.0,
+     "start": 602.0,
+     "peak": 3652,
+     "load_end": 3625.0,
+     "after_cooldown": 3657.0,
+     "slope_per_h": 2185.249,
+     "r2": 1.0,
+     "growing": true
+    },
+    "ep.cached_endpoints": {
+     "idle": 0.0,
+     "start": 1188.0,
+     "peak": 4095,
+     "load_end": 4077.0,
+     "after_cooldown": 4060.0,
+     "slope_per_h": 2043.925,
+     "r2": 0.778,
+     "growing": true
+    },
+    "proc.heap_used_kb": {
+     "idle": 974.5,
+     "start": 5446.5,
+     "peak": 11971,
+     "load_end": 11948.5,
+     "after_cooldown": 10613.0,
+     "slope_per_h": 3639.015,
+     "r2": 0.917,
+     "growing": true
+    },
+    "proc.heap_free_kb": {
+     "idle": 3147.0,
+     "start": 4542.5,
+     "peak": 8985,
+     "load_end": 8954.5,
+     "after_cooldown": 10346.0,
+     "slope_per_h": 2465.32,
+     "r2": 0.9,
+     "growing": true
+    },
+    "ep.connections_incoming": {
+     "at_load_end": 7299,
+     "last": 7299
+    },
+    "ep.streams_accepted": {
+     "at_load_end": 109521,
+     "last": 109521
+    },
+    "heap_used_kb_per_connection": {
+     "slope": 0.83265,
+     "r2": 0.917,
+     "x_range": [
+      1132,
+      7288
+     ]
+    },
+    "kb_per_open_connection": {
+     "heap_used_kb": 1118.0,
+     "anon_kb": 1611.0,
+     "rss_kb": 1735.0,
+     "open_connections": 4.0
+    }
+   },
+   "directory": {
+    "store.identities": {
+     "idle": 1.0,
+     "start": 602.0,
+     "peak": 2399,
+     "load_end": 2385.5,
+     "after_cooldown": 2290.0,
+     "last": 2272,
+     "slope_per_h": 1377.037,
+     "r2": 0.874,
+     "fit_hours": 1.419,
+     "growth_in_fit": 1953.789,
+     "slope_second_half_per_h": 173.377,
+     "growth_second_half": 122.997,
+     "threshold": 60.2,
+     "growing": true,
+     "still_growing": true
+    },
+    "proc.heap_used_kb": {
+     "idle": 235.0,
+     "start": 1244.0,
+     "peak": 3835,
+     "load_end": 3811.0,
+     "after_cooldown": 3569.5,
+     "last": 3565,
+     "slope_per_h": 1963.61,
+     "r2": 0.873,
+     "fit_hours": 1.419,
+     "growth_in_fit": 2786.04,
+     "slope_second_half_per_h": 253.424,
+     "growth_second_half": 179.783,
+     "threshold": 2048.0,
+     "growing": true,
+     "still_growing": false
+    },
+    "heap_used_kb_per_identity": {
+     "slope": 1.42388,
+     "r2": 0.997,
+     "x_range": [
+      575,
+      2377
+     ]
+    }
+   },
+   "churn": {
+    "sessions": 7299,
+    "exit_codes": {
+     "0": 7299
+    },
+    "errors": {},
+    "sessions_per_min": 72.9,
+    "requests": 109415,
+    "requests_failed": 0,
+    "bind_ms": {
+     "p50": 275.671,
+     "p99": 321.961
+    },
+    "first_ok_ms": {
+     "p50": 382.602,
+     "p99": 493.669
+    },
+    "bind_ms_trend_per_h": 2.157,
+    "bind_ms_trend_r2": 0.063,
+    "first_ok_ms_trend_per_h": 0.538,
+    "first_ok_ms_trend_r2": 0.001
+   },
+   "listener_errors": {
+    "connection": 41,
+    "cancelled": 24
+   },
+   "relay_anon_kb_per_listener_connection": 359.5,
+   "relay_metrics_delta": {
+    "relayserver_accepts_total": 7288,
+    "relayserver_bytes_recv_total": 232393051,
+    "relayserver_bytes_sent_total": 232393051,
+    "relayserver_disconnects_total": 7285,
+    "relayserver_got_ping_total": 7296,
+    "relayserver_http_connections_closed_total": 14828,
+    "relayserver_http_connections_errored_total": 1,
+    "relayserver_http_connections_total": 14828,
+    "relayserver_send_packets_recv_total": 636156,
+    "relayserver_send_packets_sent_total": 636156,
+    "relayserver_sent_pong_total": 7296,
+    "relayserver_unique_client_keys_total": 7288
+   }
+  },
+  "steady-arena2": {
+   "scenario": "steady",
+   "load_hours": 1.172,
+   "flags": [
+    "client* rss_kb_sum grows 250204.309/h (R2 0.72, 2141134.0 -> 2422216.0, peak 2422632; still growing in the second half (128426.667/h))",
+    "client* anon_kb_sum grows 248849.955/h (R2 0.744, 574582.0 -> 858168.0, peak 858256; still growing in the second half (128450.999/h))",
+    "listener rss_kb grows 4653.568/h (R2 0.769, 33112.0 -> 38736.0, peak 38736; levels off in the second half)",
+    "listener anon_kb grows 4679.179/h (R2 0.778, 17592.0 -> 23180.0, peak 23180; levels off in the second half)",
+    "relay rss_kb grows 4938.468/h (R2 0.897, 24278.0 -> 26996.0, peak 27972; still growing in the second half (3057.935/h))",
+    "relay anon_kb grows 4995.967/h (R2 0.901, 14858.0 -> 17656.0, peak 18624; still growing in the second half (3070.925/h))",
+    "listener errors: {'connection': 1}"
+   ],
+   "processes": {
+    "client*": {
+     "rss_kb_sum": {
+      "idle": null,
+      "start": 2141134.0,
+      "peak": 2422632,
+      "load_end": 2422216.0,
+      "after_cooldown": null,
+      "slope_per_h": 250204.309,
+      "r2": 0.72,
+      "growing": true
+     },
+     "anon_kb_sum": {
+      "idle": null,
+      "start": 574582.0,
+      "peak": 858256,
+      "load_end": 858168.0,
+      "after_cooldown": null,
+      "slope_per_h": 248849.955,
+      "r2": 0.744,
+      "growing": true
+     },
+     "fds_sum": {
+      "idle": null,
+      "start": 1200.0,
+      "peak": 1300,
+      "load_end": 1200.0,
+      "after_cooldown": null,
+      "slope_per_h": -3.281,
+      "r2": 0.001,
+      "growing": false
+     },
+     "threads_sum": {
+      "idle": null,
+      "start": 300.0,
+      "peak": 381,
+      "load_end": 300.0,
+      "after_cooldown": null,
+      "slope_per_h": -0.469,
+      "r2": 0.0,
+      "growing": false
+     }
+    },
+    "directory": {
+     "rss_kb": {
+      "idle": 9484.0,
+      "start": 11684.0,
+      "peak": 12304,
+      "load_end": 12300.0,
+      "after_cooldown": 12284.0,
+      "slope_per_h": 533.377,
+      "r2": 0.735,
+      "growing": false
+     },
+     "anon_kb": {
+      "idle": 1240.0,
+      "start": 3296.0,
+      "peak": 4012,
+      "load_end": 4008.0,
+      "after_cooldown": 4008.0,
+      "slope_per_h": 607.892,
+      "r2": 0.721,
+      "growing": false
+     },
+     "fds": {
+      "idle": 11.0,
+      "start": 10.0,
+      "peak": 110,
+      "load_end": 10.0,
+      "after_cooldown": 10.0,
+      "slope_per_h": -3.355,
+      "r2": 0.001,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 0.0
+    },
+    "listener": {
+     "rss_kb": {
+      "idle": 20408.0,
+      "start": 33112.0,
+      "peak": 38736,
+      "load_end": 38736.0,
+      "after_cooldown": 38784.0,
+      "slope_per_h": 4653.568,
+      "r2": 0.769,
+      "growing": true
+     },
+     "anon_kb": {
+      "idle": 4824.0,
+      "start": 17592.0,
+      "peak": 23180,
+      "load_end": 23180.0,
+      "after_cooldown": 23208.0,
+      "slope_per_h": 4679.179,
+      "r2": 0.778,
+      "growing": true
+     },
+     "fds": {
+      "idle": 14.0,
+      "start": 13.0,
+      "peak": 14,
+      "load_end": 13.0,
+      "after_cooldown": 13.0,
+      "slope_per_h": -0.075,
+      "r2": 0.005,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 8,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": -0.01,
+      "r2": 0.001,
+      "growing": false
+     },
+     "cpu_load_pct": 8.4
+    },
+    "relay": {
+     "rss_kb": {
+      "idle": 10650.0,
+      "start": 24278.0,
+      "peak": 27972,
+      "load_end": 26996.0,
+      "after_cooldown": 27062.0,
+      "slope_per_h": 4938.468,
+      "r2": 0.897,
+      "growing": true
+     },
+     "anon_kb": {
+      "idle": 1230.0,
+      "start": 14858.0,
+      "peak": 18624,
+      "load_end": 17656.0,
+      "after_cooldown": 17708.0,
+      "slope_per_h": 4995.967,
+      "r2": 0.901,
+      "growing": true
+     },
+     "fds": {
+      "idle": 14.0,
+      "start": 114.0,
+      "peak": 115,
+      "load_end": 114.0,
+      "after_cooldown": 14.0,
+      "slope_per_h": -0.002,
+      "r2": 0.0,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 1.6
+    }
+   },
+   "listener": {
+    "tokio.alive_tasks": {
+     "idle": 16.0,
+     "start": 718.0,
+     "peak": 721,
+     "load_end": 716.0,
+     "after_cooldown": 15.0,
+     "slope_per_h": -3.425,
+     "r2": 0.521,
+     "growing": false
+    },
+    "ep.connections": {
+     "idle": 0.0,
+     "start": 100.0,
+     "peak": 100,
+     "load_end": 100.0,
+     "after_cooldown": 0.0,
+     "slope_per_h": 0.0,
+     "r2": 1.0,
+     "growing": false
+    },
+    "ep.cached_identities": {
+     "idle": 0.0,
+     "start": 100.0,
+     "peak": 100,
+     "load_end": 100.0,
+     "after_cooldown": 100.0,
+     "slope_per_h": 0.0,
+     "r2": 1.0,
+     "growing": false
+    },
+    "ep.cached_endpoints": {
+     "idle": 0.0,
+     "start": 100.0,
+     "peak": 100,
+     "load_end": 100.0,
+     "after_cooldown": 100.0,
+     "slope_per_h": 0.0,
+     "r2": 1.0,
+     "growing": false
+    },
+    "proc.heap_used_kb": {
+     "idle": 4073.5,
+     "start": 18373.5,
+     "peak": 21345,
+     "load_end": 20605.0,
+     "after_cooldown": 6311.5,
+     "slope_per_h": 2172.109,
+     "r2": 0.873,
+     "growing": false
+    },
+    "proc.heap_free_kb": {
+     "idle": 3584.5,
+     "start": 1481.5,
+     "peak": 4753,
+     "load_end": 4722.0,
+     "after_cooldown": 19015.5,
+     "slope_per_h": 1623.818,
+     "r2": 0.334,
+     "growing": false
+    },
+    "ep.connections_incoming": {
+     "at_load_end": 100,
+     "last": 100
+    },
+    "ep.streams_accepted": {
+     "at_load_end": 421895,
+     "last": 421895
+    },
+    "heap_used_kb_per_connection": null,
+    "kb_per_open_connection": {
+     "heap_used_kb": 143.0,
+     "anon_kb": 127.2,
+     "rss_kb": 126.6,
+     "open_connections": 100.0
+    }
+   },
+   "directory": {
+    "store.identities": {
+     "idle": 1.0,
+     "start": 101.0,
+     "peak": 101,
+     "load_end": 101.0,
+     "after_cooldown": 101.0,
+     "last": 101,
+     "slope_per_h": 0.0,
+     "r2": 1.0,
+     "fit_hours": 0.922,
+     "growth_in_fit": 0.0,
+     "slope_second_half_per_h": 0.0,
+     "growth_second_half": 0.0,
+     "threshold": 10.1,
+     "growing": false,
+     "still_growing": false
+    },
+    "proc.heap_used_kb": {
+     "idle": 225.0,
+     "start": 383.5,
+     "peak": 3348,
+     "load_end": 398.0,
+     "after_cooldown": 398.0,
+     "last": 398,
+     "slope_per_h": -91.177,
+     "r2": 0.001,
+     "fit_hours": 0.922,
+     "growth_in_fit": -84.033,
+     "slope_second_half_per_h": 698.918,
+     "growth_second_half": 322.08,
+     "threshold": 2048.0,
+     "growing": false,
+     "still_growing": false
+    },
+    "heap_used_kb_per_identity": null
+   },
+   "clients": {
+    "bins": 15,
+    "bin_s": 300,
+    "totals": {
+     "sent": 421194,
+     "ok": 421194,
+     "failed": 0,
+     "bulk_ok": 700,
+     "bulk_failed": 0,
+     "new_conns": 100
+    },
+    "errors": {},
+    "clients": 100,
+    "clients_with_final_event": 100,
+    "overall_hist_p50_ms": 0.75,
+    "overall_hist_p99_ms": 3.0,
+    "overall_hist_p999_ms": 20.0,
+    "first_bin": {
+     "p50": 0.629,
+     "p99": 44.106
+    },
+    "last_bin": {
+     "p50": 0.622,
+     "p99": 5.891
+    },
+    "p50_trend_ms_per_h": 0.3555,
+    "p50_trend_r2": 0.576,
+    "p99_trend_ms_per_h": 1.5914,
+    "p99_trend_r2": 0.039,
+    "failure_rate": 0.0,
+    "client_mem_slope_kb_per_h": {
+     "median": 363.855,
+     "max": 560.346,
+     "min": 165.611,
+     "growing": 0
+    },
+    "client_alive_tasks_slope_per_h": {
+     "median": -0.037,
+     "max": 0.443
+    }
+   },
+   "listener_errors": {
+    "connection": 1
+   },
+   "relay_anon_kb_per_listener_connection": 136.3,
+   "relay_metrics_delta": {
+    "relayserver_accepts_total": 100,
+    "relayserver_bytes_recv_total": 6517162,
+    "relayserver_bytes_sent_total": 6517162,
+    "relayserver_got_ping_total": 357,
+    "relayserver_http_connections_closed_total": 1513,
+    "relayserver_http_connections_total": 1513,
+    "relayserver_qad_connections_closed_total": 18339,
+    "relayserver_qad_connections_total": 18439,
+    "relayserver_qad_incoming_total": 18439,
+    "relayserver_send_packets_recv_total": 163025,
+    "relayserver_send_packets_sent_total": 163025,
+    "relayserver_sent_pong_total": 357,
+    "relayserver_unique_client_keys_total": 100
+   }
+  },
+  "churn-relay-fixed": {
+   "scenario": "churn",
+   "load_hours": 0.334,
+   "flags": [
+    "listener rss_kb grows 10027.099/h (R2 0.953, 25002.0 -> 27084.0, peak 27172; levels off in the second half)",
+    "listener anon_kb grows 10026.98/h (R2 0.953, 9570.0 -> 11652.0, peak 11740; levels off in the second half)"
+   ],
+   "processes": {
+    "churn*": {
+     "rss_kb_sum": {
+      "idle": null,
+      "start": 80196.0,
+      "peak": 80572,
+      "load_end": 80194.0,
+      "after_cooldown": null,
+      "slope_per_h": 7472.638,
+      "r2": 0.011,
+      "growing": false
+     },
+     "anon_kb_sum": {
+      "idle": null,
+      "start": 17670.0,
+      "peak": 17728,
+      "load_end": 17668.0,
+      "after_cooldown": null,
+      "slope_per_h": 1619.767,
+      "r2": 0.012,
+      "growing": false
+     },
+     "fds_sum": {
+      "idle": null,
+      "start": 48.0,
+      "peak": 48,
+      "load_end": 48.0,
+      "after_cooldown": null,
+      "slope_per_h": 4.161,
+      "r2": 0.009,
+      "growing": false
+     },
+     "threads_sum": {
+      "idle": null,
+      "start": 16.0,
+      "peak": 16,
+      "load_end": 16.0,
+      "after_cooldown": null,
+      "slope_per_h": 1.55,
+      "r2": 0.014,
+      "growing": false
+     }
+    },
+    "directory": {
+     "rss_kb": {
+      "idle": 9758.0,
+      "start": 10660.0,
+      "peak": 11512,
+      "load_end": 11476.0,
+      "after_cooldown": 11524.0,
+      "slope_per_h": 3895.082,
+      "r2": 0.986,
+      "growing": false
+     },
+     "anon_kb": {
+      "idle": 1258.0,
+      "start": 2032.0,
+      "peak": 2884,
+      "load_end": 2848.0,
+      "after_cooldown": 2896.0,
+      "slope_per_h": 3895.082,
+      "r2": 0.986,
+      "growing": false
+     },
+     "fds": {
+      "idle": 11.0,
+      "start": 14.0,
+      "peak": 15,
+      "load_end": 14.5,
+      "after_cooldown": 10.0,
+      "slope_per_h": 1.808,
+      "r2": 0.023,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 0.1
+    },
+    "listener": {
+     "rss_kb": {
+      "idle": 19886.0,
+      "start": 25002.0,
+      "peak": 27172,
+      "load_end": 27084.0,
+      "after_cooldown": 27172.0,
+      "slope_per_h": 10027.099,
+      "r2": 0.953,
+      "growing": true
+     },
+     "anon_kb": {
+      "idle": 4594.0,
+      "start": 9570.0,
+      "peak": 11740,
+      "load_end": 11652.0,
+      "after_cooldown": 11740.0,
+      "slope_per_h": 10026.98,
+      "r2": 0.953,
+      "growing": true
+     },
+     "fds": {
+      "idle": 13.0,
+      "start": 12.0,
+      "peak": 13,
+      "load_end": 13.0,
+      "after_cooldown": 12.0,
+      "slope_per_h": 1.722,
+      "r2": 0.215,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 1.7
+    },
+    "relay": {
+     "rss_kb": {
+      "idle": 9780.0,
+      "start": 11438.0,
+      "peak": 11696,
+      "load_end": 11692.0,
+      "after_cooldown": 11696.0,
+      "slope_per_h": 1160.89,
+      "r2": 0.884,
+      "growing": false
+     },
+     "anon_kb": {
+      "idle": 996.0,
+      "start": 2654.0,
+      "peak": 2944,
+      "load_end": 2940.0,
+      "after_cooldown": 2944.0,
+      "slope_per_h": 1331.056,
+      "r2": 0.897,
+      "growing": false
+     },
+     "fds": {
+      "idle": 14.0,
+      "start": 18.0,
+      "peak": 18,
+      "load_end": 18.0,
+      "after_cooldown": 14.0,
+      "slope_per_h": 0.16,
+      "r2": 0.0,
+      "growing": false
+     },
+     "threads": {
+      "idle": 7.0,
+      "start": 7.0,
+      "peak": 7,
+      "load_end": 7.0,
+      "after_cooldown": 7.0,
+      "slope_per_h": 0.0,
+      "r2": 1.0,
+      "growing": false
+     },
+     "cpu_load_pct": 1.3
+    }
+   },
+   "listener": {
+    "tokio.alive_tasks": {
+     "idle": 15.0,
+     "start": 109.0,
+     "peak": 115,
+     "load_end": 110.5,
+     "after_cooldown": 13.0,
+     "slope_per_h": 11.159,
+     "r2": 0.021,
+     "growing": false
+    },
+    "ep.connections": {
+     "idle": 0.0,
+     "start": 4.0,
+     "peak": 4,
+     "load_end": 4.0,
+     "after_cooldown": 0.0,
+     "slope_per_h": 0.961,
+     "r2": 0.007,
+     "growing": false
+    },
+    "ep.cached_identities": {
+     "idle": 0.0,
+     "start": 237.0,
+     "peak": 740,
+     "load_end": 713.0,
+     "after_cooldown": 742.0,
+     "slope_per_h": 2194.865,
+     "r2": 1.0,
+     "growing": true
+    },
+    "ep.cached_endpoints": {
+     "idle": 0.0,
+     "start": 458.0,
+     "peak": 1464,
+     "load_end": 1410.0,
+     "after_cooldown": 1468.0,
+     "slope_per_h": 4391.065,
+     "r2": 1.0,
+     "growing": true
+    },
+    "proc.heap_used_kb": {
+     "idle": 963.0,
+     "start": 4372.5,
+     "peak": 5706,
+     "load_end": 5653.5,
+     "after_cooldown": 4303.0,
+     "slope_per_h": 5896.579,
+     "r2": 0.929,
+     "growing": false
+    },
+    "proc.heap_free_kb": {
+     "idle": 3140.0,
+     "start": 3972.5,
+     "peak": 4871,
+     "load_end": 4808.5,
+     "after_cooldown": 6196.0,
+     "slope_per_h": 3974.949,
+     "r2": 0.812,
+     "growing": false
+    },
+    "ep.connections_incoming": {
+     "at_load_end": 1468,
+     "last": 1468
+    },
+    "ep.streams_accepted": {
+     "at_load_end": 22026,
+     "last": 22026
+    },
+    "heap_used_kb_per_connection": {
+     "slope": 1.34311,
+     "r2": 0.929,
+     "x_range": [
+      404,
+      1464
+     ]
+    },
+    "kb_per_open_connection": {
+     "heap_used_kb": 852.4,
+     "anon_kb": 1223.5,
+     "rss_kb": 1319.5,
+     "open_connections": 4.0
+    }
+   },
+   "directory": {
+    "store.identities": {
+     "idle": 1.0,
+     "start": 238.0,
+     "peak": 741,
+     "load_end": 714.0,
+     "after_cooldown": 743.0,
+     "last": 743,
+     "slope_per_h": 2196.067,
+     "r2": 1.0,
+     "fit_hours": 0.25,
+     "growth_in_fit": 549.432,
+     "slope_second_half_per_h": 2198.572,
+     "growth_second_half": 275.029,
+     "threshold": 23.8,
+     "growing": true,
+     "still_growing": true
+    },
+    "proc.heap_used_kb": {
+     "idle": 235.0,
+     "start": 738.0,
+     "peak": 1483,
+     "load_end": 1434.5,
+     "after_cooldown": 1343.0,
+     "last": 1343,
+     "slope_per_h": 3354.18,
+     "r2": 0.99,
+     "fit_hours": 0.25,
+     "growth_in_fit": 839.179,
+     "slope_second_half_per_h": 3092.143,
+     "growth_second_half": 386.81,
+     "threshold": 2048.0,
+     "growing": false,
+     "still_growing": false
+    },
+    "heap_used_kb_per_identity": {
+     "slope": 1.52749,
+     "r2": 0.991,
+     "x_range": [
+      211,
+      741
+     ]
+    }
+   },
+   "churn": {
+    "sessions": 1468,
+    "exit_codes": {
+     "0": 1468
+    },
+    "errors": {},
+    "sessions_per_min": 73.34,
+    "requests": 22026,
+    "requests_failed": 0,
+    "bind_ms": {
+     "p50": 266.983,
+     "p99": 282.114
+    },
+    "first_ok_ms": {
+     "p50": 371.285,
+     "p99": 478.037
+    }
+   },
+   "listener_errors": {},
+   "relay_anon_kb_per_listener_connection": 414.5,
+   "relay_metrics_delta": {
+    "relayserver_accepts_total": 1464,
+    "relayserver_bytes_recv_total": 46682912,
+    "relayserver_bytes_sent_total": 46682912,
+    "relayserver_disconnects_total": 1463,
+    "relayserver_got_ping_total": 1468,
+    "relayserver_http_connections_closed_total": 2983,
+    "relayserver_http_connections_total": 2983,
+    "relayserver_send_packets_recv_total": 127827,
+    "relayserver_send_packets_sent_total": 127827,
+    "relayserver_sent_pong_total": 1468,
+    "relayserver_unique_client_keys_total": 1464
+   }
+  }
+ },
+ "library": {
+  "client_many_peers-3000": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 0.2,
+     "rss_kb": 23580,
+     "anon_kb": 8876,
+     "heap_used_kb": 4593,
+     "heap_free_kb": 6606,
+     "tasks": 19,
+     "fds": 12
+    },
+    {
+     "n": 300,
+     "t_s": 8.1,
+     "rss_kb": 30780,
+     "anon_kb": 16076,
+     "heap_used_kb": 10414,
+     "heap_free_kb": 7953,
+     "tasks": 318,
+     "fds": 12
+    },
+    {
+     "n": 600,
+     "t_s": 15.8,
+     "rss_kb": 35948,
+     "anon_kb": 21244,
+     "heap_used_kb": 15486,
+     "heap_free_kb": 8161,
+     "tasks": 620,
+     "fds": 12
+    },
+    {
+     "n": 900,
+     "t_s": 23.5,
+     "rss_kb": 41328,
+     "anon_kb": 26624,
+     "heap_used_kb": 20399,
+     "heap_free_kb": 8480,
+     "tasks": 919,
+     "fds": 12
+    },
+    {
+     "n": 1200,
+     "t_s": 31.2,
+     "rss_kb": 46312,
+     "anon_kb": 31608,
+     "heap_used_kb": 25327,
+     "heap_free_kb": 8568,
+     "tasks": 1220,
+     "fds": 12
+    },
+    {
+     "n": 1500,
+     "t_s": 38.9,
+     "rss_kb": 51308,
+     "anon_kb": 36604,
+     "heap_used_kb": 30161,
+     "heap_free_kb": 8814,
+     "tasks": 1520,
+     "fds": 12
+    },
+    {
+     "n": 1800,
+     "t_s": 46.7,
+     "rss_kb": 56956,
+     "anon_kb": 42252,
+     "heap_used_kb": 35394,
+     "heap_free_kb": 9157,
+     "tasks": 1819,
+     "fds": 12
+    },
+    {
+     "n": 2100,
+     "t_s": 54.4,
+     "rss_kb": 61924,
+     "anon_kb": 47220,
+     "heap_used_kb": 40277,
+     "heap_free_kb": 9278,
+     "tasks": 2119,
+     "fds": 12
+    },
+    {
+     "n": 2400,
+     "t_s": 62.3,
+     "rss_kb": 66276,
+     "anon_kb": 51572,
+     "heap_used_kb": 44120,
+     "heap_free_kb": 9779,
+     "tasks": 2333,
+     "fds": 12
+    },
+    {
+     "n": 2700,
+     "t_s": 70.4,
+     "rss_kb": 67528,
+     "anon_kb": 52824,
+     "heap_used_kb": 44160,
+     "heap_free_kb": 10999,
+     "tasks": 2325,
+     "fds": 12
+    },
+    {
+     "n": 3000,
+     "t_s": 79.0,
+     "rss_kb": 68128,
+     "anon_kb": 53424,
+     "heap_used_kb": 43505,
+     "heap_free_kb": 12218,
+     "tasks": 2284,
+     "fds": 12
+    },
+    {
+     "n": 3000,
+     "t_s": 144.0,
+     "rss_kb": 68224,
+     "anon_kb": 53424,
+     "heap_used_kb": 8397,
+     "heap_free_kb": 47326,
+     "tasks": 7,
+     "fds": 12
+    }
+   ],
+   "result": "baseline: anon_kb=8876 heap=Some((4593, 6606)) tasks=19 fds=12; after 3000 peers and idle: anon_kb=53424 heap=Some((8397, 47326)) tasks=7 fds=12 cached=3008/3008; memory (heap in use, or anon) per peer while running 12299 B, retained after idle 1298 B",
+   "exit": 0
+  },
+  "idle_nodes_no_qad-20min": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 0.0,
+     "rss_kb": 31824,
+     "anon_kb": 16452,
+     "heap_used_kb": 78578,
+     "heap_free_kb": 2881,
+     "tasks": 257,
+     "fds": 97
+    },
+    {
+     "n": 1,
+     "t_s": 60.0,
+     "rss_kb": 38088,
+     "anon_kb": 22400,
+     "heap_used_kb": 84061,
+     "heap_free_kb": 3322,
+     "tasks": 497,
+     "fds": 97
+    },
+    {
+     "n": 2,
+     "t_s": 120.0,
+     "rss_kb": 38124,
+     "anon_kb": 22500,
+     "heap_used_kb": 84286,
+     "heap_free_kb": 3201,
+     "tasks": 523,
+     "fds": 99
+    },
+    {
+     "n": 3,
+     "t_s": 180.0,
+     "rss_kb": 38248,
+     "anon_kb": 22688,
+     "heap_used_kb": 84461,
+     "heap_free_kb": 3234,
+     "tasks": 515,
+     "fds": 97
+    },
+    {
+     "n": 4,
+     "t_s": 240.0,
+     "rss_kb": 38452,
+     "anon_kb": 22892,
+     "heap_used_kb": 84503,
+     "heap_free_kb": 3364,
+     "tasks": 515,
+     "fds": 97
+    },
+    {
+     "n": 5,
+     "t_s": 300.0,
+     "rss_kb": 38520,
+     "anon_kb": 22960,
+     "heap_used_kb": 84591,
+     "heap_free_kb": 3364,
+     "tasks": 515,
+     "fds": 97
+    },
+    {
+     "n": 6,
+     "t_s": 360.0,
+     "rss_kb": 38548,
+     "anon_kb": 22988,
+     "heap_used_kb": 84597,
+     "heap_free_kb": 3382,
+     "tasks": 514,
+     "fds": 97
+    },
+    {
+     "n": 7,
+     "t_s": 420.0,
+     "rss_kb": 38580,
+     "anon_kb": 23020,
+     "heap_used_kb": 84612,
+     "heap_free_kb": 3387,
+     "tasks": 515,
+     "fds": 97
+    },
+    {
+     "n": 8,
+     "t_s": 480.0,
+     "rss_kb": 38516,
+     "anon_kb": 23020,
+     "heap_used_kb": 84619,
+     "heap_free_kb": 3380,
+     "tasks": 515,
+     "fds": 97
+    },
+    {
+     "n": 9,
+     "t_s": 540.0,
+     "rss_kb": 36220,
+     "anon_kb": 23044,
+     "heap_used_kb": 84612,
+     "heap_free_kb": 3403,
+     "tasks": 515,
+     "fds": 97
+    },
+    {
+     "n": 10,
+     "t_s": 600.0,
+     "rss_kb": 32980,
+     "anon_kb": 23100,
+     "heap_used_kb": 84623,
+     "heap_free_kb": 3468,
+     "tasks": 515,
+     "fds": 97
+    },
+    {
+     "n": 11,
+     "t_s": 660.0,
+     "rss_kb": 32664,
+     "anon_kb": 23132,
+     "heap_used_kb": 84616,
+     "heap_free_kb": 3504,
+     "tasks": 515,
+     "fds": 97
+    },
+    {
+     "n": 12,
+     "t_s": 720.0,
+     "rss_kb": 32600,
+     "anon_kb": 23132,
+     "heap_used_kb": 84631,
+     "heap_free_kb": 3488,
+     "tasks": 516,
+     "fds": 97
+    },
+    {
+     "n": 13,
+     "t_s": 780.0,
+     "rss_kb": 32684,
+     "anon_kb": 23216,
+     "heap_used_kb": 84722,
+     "heap_free_kb": 3473,
+     "tasks": 516,
+     "fds": 97
+    },
+    {
+     "n": 14,
+     "t_s": 840.0,
+     "rss_kb": 32924,
+     "anon_kb": 23248,
+     "heap_used_kb": 84704,
+     "heap_free_kb": 3531,
+     "tasks": 516,
+     "fds": 97
+    },
+    {
+     "n": 15,
+     "t_s": 900.0,
+     "rss_kb": 32968,
+     "anon_kb": 23256,
+     "heap_used_kb": 84722,
+     "heap_free_kb": 3513,
+     "tasks": 515,
+     "fds": 97
+    },
+    {
+     "n": 16,
+     "t_s": 960.0,
+     "rss_kb": 32980,
+     "anon_kb": 23268,
+     "heap_used_kb": 84768,
+     "heap_free_kb": 3491,
+     "tasks": 522,
+     "fds": 97
+    },
+    {
+     "n": 17,
+     "t_s": 1020.0,
+     "rss_kb": 32988,
+     "anon_kb": 23276,
+     "heap_used_kb": 84744,
+     "heap_free_kb": 3527,
+     "tasks": 516,
+     "fds": 97
+    },
+    {
+     "n": 18,
+     "t_s": 1080.0,
+     "rss_kb": 32936,
+     "anon_kb": 23296,
+     "heap_used_kb": 84747,
+     "heap_free_kb": 3540,
+     "tasks": 516,
+     "fds": 97
+    },
+    {
+     "n": 19,
+     "t_s": 1140.0,
+     "rss_kb": 33032,
+     "anon_kb": 23308,
+     "heap_used_kb": 84754,
+     "heap_free_kb": 3533,
+     "tasks": 516,
+     "fds": 97
+    },
+    {
+     "n": 20,
+     "t_s": 1200.0,
+     "rss_kb": 47664,
+     "anon_kb": 35852,
+     "heap_used_kb": 85147,
+     "heap_free_kb": 16520,
+     "tasks": 516,
+     "fds": 97
+    }
+   ],
+   "result": "qad=false: 20 nodes for 20 min: heap Some((84286, 3201)) at minute 2, Some((85147, 16520)) at the end; tasks 523 -> 516; growth 25.4 KiB per minute (1240 B per node and minute)",
+   "exit": 0
+  },
+  "idle_nodes_qad-20min": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 0.0,
+     "rss_kb": 35248,
+     "anon_kb": 19180,
+     "heap_used_kb": 81883,
+     "heap_free_kb": 2904,
+     "tasks": 341,
+     "fds": 97
+    },
+    {
+     "n": 1,
+     "t_s": 60.0,
+     "rss_kb": 41020,
+     "anon_kb": 25232,
+     "heap_used_kb": 87321,
+     "heap_free_kb": 3454,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 2,
+     "t_s": 120.0,
+     "rss_kb": 40912,
+     "anon_kb": 25380,
+     "heap_used_kb": 87504,
+     "heap_free_kb": 3443,
+     "tasks": 599,
+     "fds": 97
+    },
+    {
+     "n": 3,
+     "t_s": 180.0,
+     "rss_kb": 41380,
+     "anon_kb": 25744,
+     "heap_used_kb": 87811,
+     "heap_free_kb": 3524,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 4,
+     "t_s": 240.0,
+     "rss_kb": 41532,
+     "anon_kb": 25896,
+     "heap_used_kb": 87895,
+     "heap_free_kb": 3544,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 5,
+     "t_s": 300.0,
+     "rss_kb": 41804,
+     "anon_kb": 26104,
+     "heap_used_kb": 88008,
+     "heap_free_kb": 3675,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 6,
+     "t_s": 360.0,
+     "rss_kb": 42636,
+     "anon_kb": 26936,
+     "heap_used_kb": 88030,
+     "heap_free_kb": 4125,
+     "tasks": 600,
+     "fds": 97
+    },
+    {
+     "n": 7,
+     "t_s": 420.0,
+     "rss_kb": 42684,
+     "anon_kb": 26984,
+     "heap_used_kb": 88050,
+     "heap_free_kb": 4150,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 8,
+     "t_s": 480.0,
+     "rss_kb": 42668,
+     "anon_kb": 27032,
+     "heap_used_kb": 88068,
+     "heap_free_kb": 4159,
+     "tasks": 600,
+     "fds": 97
+    },
+    {
+     "n": 9,
+     "t_s": 540.0,
+     "rss_kb": 40432,
+     "anon_kb": 27096,
+     "heap_used_kb": 88070,
+     "heap_free_kb": 4285,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 10,
+     "t_s": 600.0,
+     "rss_kb": 37108,
+     "anon_kb": 27156,
+     "heap_used_kb": 88248,
+     "heap_free_kb": 4159,
+     "tasks": 609,
+     "fds": 97
+    },
+    {
+     "n": 11,
+     "t_s": 660.0,
+     "rss_kb": 37152,
+     "anon_kb": 27536,
+     "heap_used_kb": 88100,
+     "heap_free_kb": 4511,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 12,
+     "t_s": 720.0,
+     "rss_kb": 37120,
+     "anon_kb": 27548,
+     "heap_used_kb": 88065,
+     "heap_free_kb": 4546,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 13,
+     "t_s": 780.0,
+     "rss_kb": 37132,
+     "anon_kb": 27560,
+     "heap_used_kb": 88194,
+     "heap_free_kb": 4417,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 14,
+     "t_s": 840.0,
+     "rss_kb": 37236,
+     "anon_kb": 27624,
+     "heap_used_kb": 88242,
+     "heap_free_kb": 4401,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 15,
+     "t_s": 900.0,
+     "rss_kb": 37188,
+     "anon_kb": 27668,
+     "heap_used_kb": 88233,
+     "heap_free_kb": 4446,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 16,
+     "t_s": 960.0,
+     "rss_kb": 37460,
+     "anon_kb": 27724,
+     "heap_used_kb": 88213,
+     "heap_free_kb": 4467,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 17,
+     "t_s": 1020.0,
+     "rss_kb": 37472,
+     "anon_kb": 27736,
+     "heap_used_kb": 88231,
+     "heap_free_kb": 4464,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 18,
+     "t_s": 1080.0,
+     "rss_kb": 37388,
+     "anon_kb": 27748,
+     "heap_used_kb": 88233,
+     "heap_free_kb": 4462,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 19,
+     "t_s": 1140.0,
+     "rss_kb": 37316,
+     "anon_kb": 27748,
+     "heap_used_kb": 88211,
+     "heap_free_kb": 4484,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 20,
+     "t_s": 1200.0,
+     "rss_kb": 52040,
+     "anon_kb": 40368,
+     "heap_used_kb": 88533,
+     "heap_free_kb": 16990,
+     "tasks": 581,
+     "fds": 97
+    }
+   ],
+   "result": "qad=true: 20 nodes for 20 min: heap Some((87504, 3443)) at minute 2, Some((88533, 16990)) at the end; tasks 599 -> 581; growth 32.3 KiB per minute (1574 B per node and minute)",
+   "exit": 0
+  },
+  "idle_nodes_qad-40min-tcache-off": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 0.0,
+     "rss_kb": 35676,
+     "anon_kb": 19776,
+     "heap_used_kb": 81433,
+     "heap_free_kb": 3794,
+     "tasks": 341,
+     "fds": 97
+    },
+    {
+     "n": 1,
+     "t_s": 60.0,
+     "rss_kb": 40524,
+     "anon_kb": 25584,
+     "heap_used_kb": 86592,
+     "heap_free_kb": 4351,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 2,
+     "t_s": 120.0,
+     "rss_kb": 40732,
+     "anon_kb": 25704,
+     "heap_used_kb": 86687,
+     "heap_free_kb": 4364,
+     "tasks": 600,
+     "fds": 97
+    },
+    {
+     "n": 3,
+     "t_s": 180.0,
+     "rss_kb": 40920,
+     "anon_kb": 25892,
+     "heap_used_kb": 86923,
+     "heap_free_kb": 4336,
+     "tasks": 598,
+     "fds": 97
+    },
+    {
+     "n": 4,
+     "t_s": 240.0,
+     "rss_kb": 39684,
+     "anon_kb": 26044,
+     "heap_used_kb": 86992,
+     "heap_free_kb": 4431,
+     "tasks": 600,
+     "fds": 97
+    },
+    {
+     "n": 5,
+     "t_s": 300.0,
+     "rss_kb": 40032,
+     "anon_kb": 26220,
+     "heap_used_kb": 87064,
+     "heap_free_kb": 4483,
+     "tasks": 600,
+     "fds": 97
+    },
+    {
+     "n": 6,
+     "t_s": 360.0,
+     "rss_kb": 40916,
+     "anon_kb": 27104,
+     "heap_used_kb": 87043,
+     "heap_free_kb": 5060,
+     "tasks": 599,
+     "fds": 97
+    },
+    {
+     "n": 7,
+     "t_s": 420.0,
+     "rss_kb": 40964,
+     "anon_kb": 27152,
+     "heap_used_kb": 87047,
+     "heap_free_kb": 5076,
+     "tasks": 600,
+     "fds": 97
+    },
+    {
+     "n": 8,
+     "t_s": 480.0,
+     "rss_kb": 40968,
+     "anon_kb": 27156,
+     "heap_used_kb": 87070,
+     "heap_free_kb": 5057,
+     "tasks": 600,
+     "fds": 97
+    },
+    {
+     "n": 9,
+     "t_s": 540.0,
+     "rss_kb": 41012,
+     "anon_kb": 27180,
+     "heap_used_kb": 87112,
+     "heap_free_kb": 5043,
+     "tasks": 600,
+     "fds": 97
+    },
+    {
+     "n": 10,
+     "t_s": 600.0,
+     "rss_kb": 41004,
+     "anon_kb": 27192,
+     "heap_used_kb": 87100,
+     "heap_free_kb": 5056,
+     "tasks": 600,
+     "fds": 97
+    },
+    {
+     "n": 11,
+     "t_s": 660.0,
+     "rss_kb": 41488,
+     "anon_kb": 27676,
+     "heap_used_kb": 87066,
+     "heap_free_kb": 5485,
+     "tasks": 600,
+     "fds": 97
+    },
+    {
+     "n": 12,
+     "t_s": 720.0,
+     "rss_kb": 41540,
+     "anon_kb": 27728,
+     "heap_used_kb": 87070,
+     "heap_free_kb": 5525,
+     "tasks": 600,
+     "fds": 97
+    },
+    {
+     "n": 13,
+     "t_s": 780.0,
+     "rss_kb": 41544,
+     "anon_kb": 27732,
+     "heap_used_kb": 87313,
+     "heap_free_kb": 5282,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 14,
+     "t_s": 840.0,
+     "rss_kb": 41688,
+     "anon_kb": 27796,
+     "heap_used_kb": 87197,
+     "heap_free_kb": 5462,
+     "tasks": 600,
+     "fds": 97
+    },
+    {
+     "n": 15,
+     "t_s": 900.0,
+     "rss_kb": 41688,
+     "anon_kb": 27796,
+     "heap_used_kb": 87188,
+     "heap_free_kb": 5471,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 16,
+     "t_s": 960.0,
+     "rss_kb": 41756,
+     "anon_kb": 27884,
+     "heap_used_kb": 87165,
+     "heap_free_kb": 5518,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 17,
+     "t_s": 1020.0,
+     "rss_kb": 40572,
+     "anon_kb": 27944,
+     "heap_used_kb": 87146,
+     "heap_free_kb": 5589,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 18,
+     "t_s": 1080.0,
+     "rss_kb": 39496,
+     "anon_kb": 27972,
+     "heap_used_kb": 87161,
+     "heap_free_kb": 5638,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 19,
+     "t_s": 1140.0,
+     "rss_kb": 38596,
+     "anon_kb": 28040,
+     "heap_used_kb": 87196,
+     "heap_free_kb": 5627,
+     "tasks": 601,
+     "fds": 97
+    },
+    {
+     "n": 20,
+     "t_s": 1200.0,
+     "rss_kb": 42108,
+     "anon_kb": 30040,
+     "heap_used_kb": 87340,
+     "heap_free_kb": 7535,
+     "tasks": 584,
+     "fds": 97
+    },
+    {
+     "n": 21,
+     "t_s": 1260.0,
+     "rss_kb": 42244,
+     "anon_kb": 30072,
+     "heap_used_kb": 87152,
+     "heap_free_kb": 7759,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 22,
+     "t_s": 1320.0,
+     "rss_kb": 42136,
+     "anon_kb": 30080,
+     "heap_used_kb": 87111,
+     "heap_free_kb": 7800,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 23,
+     "t_s": 1380.0,
+     "rss_kb": 41068,
+     "anon_kb": 30084,
+     "heap_used_kb": 87133,
+     "heap_free_kb": 7778,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 24,
+     "t_s": 1440.0,
+     "rss_kb": 41060,
+     "anon_kb": 30084,
+     "heap_used_kb": 87158,
+     "heap_free_kb": 7753,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 25,
+     "t_s": 1500.0,
+     "rss_kb": 41048,
+     "anon_kb": 30084,
+     "heap_used_kb": 87176,
+     "heap_free_kb": 7735,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 26,
+     "t_s": 1560.0,
+     "rss_kb": 41108,
+     "anon_kb": 30144,
+     "heap_used_kb": 87186,
+     "heap_free_kb": 7789,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 27,
+     "t_s": 1620.0,
+     "rss_kb": 41180,
+     "anon_kb": 30216,
+     "heap_used_kb": 87146,
+     "heap_free_kb": 7921,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 28,
+     "t_s": 1680.0,
+     "rss_kb": 41244,
+     "anon_kb": 30224,
+     "heap_used_kb": 87170,
+     "heap_free_kb": 7897,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 29,
+     "t_s": 1740.0,
+     "rss_kb": 41256,
+     "anon_kb": 30236,
+     "heap_used_kb": 87176,
+     "heap_free_kb": 7891,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 30,
+     "t_s": 1800.0,
+     "rss_kb": 41260,
+     "anon_kb": 30240,
+     "heap_used_kb": 87204,
+     "heap_free_kb": 7863,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 31,
+     "t_s": 1860.0,
+     "rss_kb": 41376,
+     "anon_kb": 30360,
+     "heap_used_kb": 87308,
+     "heap_free_kb": 7911,
+     "tasks": 593,
+     "fds": 100
+    },
+    {
+     "n": 32,
+     "t_s": 1920.1,
+     "rss_kb": 41380,
+     "anon_kb": 30364,
+     "heap_used_kb": 87156,
+     "heap_free_kb": 8063,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 33,
+     "t_s": 1980.1,
+     "rss_kb": 41396,
+     "anon_kb": 30380,
+     "heap_used_kb": 87156,
+     "heap_free_kb": 8063,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 34,
+     "t_s": 2040.1,
+     "rss_kb": 41404,
+     "anon_kb": 30388,
+     "heap_used_kb": 87167,
+     "heap_free_kb": 8068,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 35,
+     "t_s": 2100.1,
+     "rss_kb": 41428,
+     "anon_kb": 30412,
+     "heap_used_kb": 87202,
+     "heap_free_kb": 8033,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 36,
+     "t_s": 2160.1,
+     "rss_kb": 41428,
+     "anon_kb": 30412,
+     "heap_used_kb": 87201,
+     "heap_free_kb": 8034,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 37,
+     "t_s": 2220.1,
+     "rss_kb": 41420,
+     "anon_kb": 30412,
+     "heap_used_kb": 87439,
+     "heap_free_kb": 7797,
+     "tasks": 589,
+     "fds": 97
+    },
+    {
+     "n": 38,
+     "t_s": 2280.1,
+     "rss_kb": 41340,
+     "anon_kb": 30412,
+     "heap_used_kb": 87157,
+     "heap_free_kb": 8078,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 39,
+     "t_s": 2340.1,
+     "rss_kb": 41032,
+     "anon_kb": 30412,
+     "heap_used_kb": 87169,
+     "heap_free_kb": 8066,
+     "tasks": 581,
+     "fds": 97
+    },
+    {
+     "n": 40,
+     "t_s": 2400.1,
+     "rss_kb": 41852,
+     "anon_kb": 31224,
+     "heap_used_kb": 87200,
+     "heap_free_kb": 8863,
+     "tasks": 581,
+     "fds": 97
+    }
+   ],
+   "result": "qad=true: 20 nodes for 40 min: heap Some((86687, 4364)) at minute 2, Some((87200, 8863)) at the end; tasks 600 -> 581; growth 6.5 KiB per minute (315 B per node and minute)",
+   "exit": 0
+  },
+  "large_requests-both-2000": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 0.2,
+     "rss_kb": 32784,
+     "anon_kb": 16352,
+     "heap_used_kb": 12726,
+     "heap_free_kb": 10685,
+     "tasks": 48,
+     "fds": 21
+    },
+    {
+     "n": 200,
+     "t_s": 2.5,
+     "rss_kb": 28656,
+     "anon_kb": 12224,
+     "heap_used_kb": 12790,
+     "heap_free_kb": 6421,
+     "tasks": 48,
+     "fds": 21
+    },
+    {
+     "n": 400,
+     "t_s": 4.6,
+     "rss_kb": 28736,
+     "anon_kb": 12304,
+     "heap_used_kb": 12778,
+     "heap_free_kb": 6521,
+     "tasks": 48,
+     "fds": 21
+    },
+    {
+     "n": 600,
+     "t_s": 6.7,
+     "rss_kb": 31256,
+     "anon_kb": 14824,
+     "heap_used_kb": 12774,
+     "heap_free_kb": 9245,
+     "tasks": 48,
+     "fds": 21
+    },
+    {
+     "n": 800,
+     "t_s": 9.0,
+     "rss_kb": 29836,
+     "anon_kb": 13404,
+     "heap_used_kb": 12771,
+     "heap_free_kb": 7620,
+     "tasks": 48,
+     "fds": 21
+    },
+    {
+     "n": 1000,
+     "t_s": 12.1,
+     "rss_kb": 30732,
+     "anon_kb": 14172,
+     "heap_used_kb": 12773,
+     "heap_free_kb": 8394,
+     "tasks": 48,
+     "fds": 21
+    },
+    {
+     "n": 1200,
+     "t_s": 14.9,
+     "rss_kb": 29864,
+     "anon_kb": 13624,
+     "heap_used_kb": 12813,
+     "heap_free_kb": 7814,
+     "tasks": 48,
+     "fds": 21
+    },
+    {
+     "n": 1400,
+     "t_s": 17.1,
+     "rss_kb": 32648,
+     "anon_kb": 16864,
+     "heap_used_kb": 12800,
+     "heap_free_kb": 11107,
+     "tasks": 48,
+     "fds": 21
+    },
+    {
+     "n": 1600,
+     "t_s": 19.3,
+     "rss_kb": 29688,
+     "anon_kb": 13904,
+     "heap_used_kb": 13015,
+     "heap_free_kb": 7908,
+     "tasks": 48,
+     "fds": 21
+    },
+    {
+     "n": 1800,
+     "t_s": 21.7,
+     "rss_kb": 28868,
+     "anon_kb": 13164,
+     "heap_used_kb": 13004,
+     "heap_free_kb": 7167,
+     "tasks": 48,
+     "fds": 21
+    },
+    {
+     "n": 2000,
+     "t_s": 23.7,
+     "rss_kb": 30244,
+     "anon_kb": 14356,
+     "heap_used_kb": 13057,
+     "heap_free_kb": 8274,
+     "tasks": 48,
+     "fds": 21
+    }
+   ],
+   "result": "baseline: heap=Some((12726, 10685)) anon_kb=16352 tasks=48; after 2000 transfers of 2 x 1 MB: heap=Some((13057, 8274)) anon_kb=14356 tasks=48; memory (heap in use, or anon) per transfer after warm-up 235.2 B",
+   "exit": 0
+  },
+  "large_requests-direct-2000": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 0.2,
+     "rss_kb": 27392,
+     "anon_kb": 12304,
+     "heap_used_kb": 9055,
+     "heap_free_kb": 7592,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 200,
+     "t_s": 2.3,
+     "rss_kb": 28336,
+     "anon_kb": 13248,
+     "heap_used_kb": 9122,
+     "heap_free_kb": 8517,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 400,
+     "t_s": 4.4,
+     "rss_kb": 27480,
+     "anon_kb": 12392,
+     "heap_used_kb": 9094,
+     "heap_free_kb": 7625,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 600,
+     "t_s": 6.5,
+     "rss_kb": 28512,
+     "anon_kb": 13424,
+     "heap_used_kb": 9125,
+     "heap_free_kb": 8690,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 800,
+     "t_s": 8.4,
+     "rss_kb": 27692,
+     "anon_kb": 12604,
+     "heap_used_kb": 9360,
+     "heap_free_kb": 7571,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 1000,
+     "t_s": 10.4,
+     "rss_kb": 24900,
+     "anon_kb": 9684,
+     "heap_used_kb": 9116,
+     "heap_free_kb": 4895,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 1200,
+     "t_s": 12.9,
+     "rss_kb": 31516,
+     "anon_kb": 16300,
+     "heap_used_kb": 12216,
+     "heap_free_kb": 8423,
+     "tasks": 28,
+     "fds": 14
+    },
+    {
+     "n": 1400,
+     "t_s": 15.4,
+     "rss_kb": 27556,
+     "anon_kb": 12340,
+     "heap_used_kb": 9442,
+     "heap_free_kb": 7225,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 1600,
+     "t_s": 17.9,
+     "rss_kb": 27008,
+     "anon_kb": 11792,
+     "heap_used_kb": 9123,
+     "heap_free_kb": 7056,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 1800,
+     "t_s": 20.3,
+     "rss_kb": 28640,
+     "anon_kb": 13424,
+     "heap_used_kb": 9108,
+     "heap_free_kb": 8643,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 2000,
+     "t_s": 22.6,
+     "rss_kb": 27792,
+     "anon_kb": 12576,
+     "heap_used_kb": 9102,
+     "heap_free_kb": 7805,
+     "tasks": 27,
+     "fds": 14
+    }
+   ],
+   "result": "baseline: heap=Some((9055, 7592)) anon_kb=12304 tasks=27; after 2000 transfers of 2 x 1 MB: heap=Some((9102, 7805)) anon_kb=12576 tasks=27; memory (heap in use, or anon) per transfer after warm-up -254.4 B",
+   "exit": 0
+  },
+  "large_requests-relay-2000": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 0.7,
+     "rss_kb": 27216,
+     "anon_kb": 11552,
+     "heap_used_kb": 6303,
+     "heap_free_kb": 7252,
+     "tasks": 40,
+     "fds": 19
+    },
+    {
+     "n": 200,
+     "t_s": 8.4,
+     "rss_kb": 29484,
+     "anon_kb": 13996,
+     "heap_used_kb": 6621,
+     "heap_free_kb": 9386,
+     "tasks": 40,
+     "fds": 19
+    },
+    {
+     "n": 400,
+     "t_s": 16.1,
+     "rss_kb": 29912,
+     "anon_kb": 14296,
+     "heap_used_kb": 6703,
+     "heap_free_kb": 9596,
+     "tasks": 40,
+     "fds": 19
+    },
+    {
+     "n": 600,
+     "t_s": 28.9,
+     "rss_kb": 29624,
+     "anon_kb": 14008,
+     "heap_used_kb": 6699,
+     "heap_free_kb": 9308,
+     "tasks": 40,
+     "fds": 19
+    },
+    {
+     "n": 800,
+     "t_s": 42.5,
+     "rss_kb": 32396,
+     "anon_kb": 16876,
+     "heap_used_kb": 6713,
+     "heap_free_kb": 12162,
+     "tasks": 40,
+     "fds": 19
+    },
+    {
+     "n": 1000,
+     "t_s": 51.6,
+     "rss_kb": 29348,
+     "anon_kb": 13828,
+     "heap_used_kb": 6772,
+     "heap_free_kb": 9055,
+     "tasks": 46,
+     "fds": 19
+    },
+    {
+     "n": 1200,
+     "t_s": 63.6,
+     "rss_kb": 28320,
+     "anon_kb": 13936,
+     "heap_used_kb": 9707,
+     "heap_free_kb": 6228,
+     "tasks": 41,
+     "fds": 19
+    },
+    {
+     "n": 1400,
+     "t_s": 73.7,
+     "rss_kb": 32896,
+     "anon_kb": 18092,
+     "heap_used_kb": 9680,
+     "heap_free_kb": 10407,
+     "tasks": 41,
+     "fds": 19
+    },
+    {
+     "n": 1600,
+     "t_s": 82.7,
+     "rss_kb": 28864,
+     "anon_kb": 14060,
+     "heap_used_kb": 6815,
+     "heap_free_kb": 9240,
+     "tasks": 40,
+     "fds": 19
+    },
+    {
+     "n": 1800,
+     "t_s": 90.6,
+     "rss_kb": 31572,
+     "anon_kb": 16768,
+     "heap_used_kb": 6793,
+     "heap_free_kb": 11970,
+     "tasks": 40,
+     "fds": 19
+    },
+    {
+     "n": 2000,
+     "t_s": 97.3,
+     "rss_kb": 32056,
+     "anon_kb": 17380,
+     "heap_used_kb": 6817,
+     "heap_free_kb": 12566,
+     "tasks": 40,
+     "fds": 19
+    }
+   ],
+   "result": "baseline: heap=Some((6303, 7252)) anon_kb=11552 tasks=40; after 2000 transfers of 2 x 1 MB: heap=Some((6817, 12566)) anon_kb=17380 tasks=40; memory (heap in use, or anon) per transfer after warm-up 80.9 B",
+   "exit": 0
+  },
+  "requests_one_connection-500000": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 0.0,
+     "rss_kb": 20416,
+     "anon_kb": 5604,
+     "heap_used_kb": 7631,
+     "heap_free_kb": 3336,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 50000,
+     "t_s": 1.2,
+     "rss_kb": 21376,
+     "anon_kb": 6564,
+     "heap_used_kb": 7686,
+     "heap_free_kb": 4141,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 100000,
+     "t_s": 2.5,
+     "rss_kb": 21508,
+     "anon_kb": 6696,
+     "heap_used_kb": 7726,
+     "heap_free_kb": 4225,
+     "tasks": 28,
+     "fds": 14
+    },
+    {
+     "n": 150000,
+     "t_s": 3.7,
+     "rss_kb": 21576,
+     "anon_kb": 6764,
+     "heap_used_kb": 7739,
+     "heap_free_kb": 4280,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 200000,
+     "t_s": 5.0,
+     "rss_kb": 21320,
+     "anon_kb": 6764,
+     "heap_used_kb": 7726,
+     "heap_free_kb": 4293,
+     "tasks": 28,
+     "fds": 14
+    },
+    {
+     "n": 250000,
+     "t_s": 6.2,
+     "rss_kb": 21332,
+     "anon_kb": 6776,
+     "heap_used_kb": 7747,
+     "heap_free_kb": 4272,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 300000,
+     "t_s": 7.4,
+     "rss_kb": 21332,
+     "anon_kb": 6776,
+     "heap_used_kb": 7753,
+     "heap_free_kb": 4266,
+     "tasks": 29,
+     "fds": 14
+    },
+    {
+     "n": 350000,
+     "t_s": 8.6,
+     "rss_kb": 21344,
+     "anon_kb": 6788,
+     "heap_used_kb": 7764,
+     "heap_free_kb": 4267,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 400000,
+     "t_s": 9.9,
+     "rss_kb": 21344,
+     "anon_kb": 6788,
+     "heap_used_kb": 7765,
+     "heap_free_kb": 4266,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 450000,
+     "t_s": 11.2,
+     "rss_kb": 21472,
+     "anon_kb": 6788,
+     "heap_used_kb": 7773,
+     "heap_free_kb": 4258,
+     "tasks": 27,
+     "fds": 14
+    },
+    {
+     "n": 500000,
+     "t_s": 12.5,
+     "rss_kb": 21504,
+     "anon_kb": 6820,
+     "heap_used_kb": 7788,
+     "heap_free_kb": 4243,
+     "tasks": 28,
+     "fds": 14
+    }
+   ],
+   "result": "baseline: heap=Some((7631, 3336)) anon_kb=5604 tasks=27; after 500000 requests: heap=Some((7788, 4243)) anon_kb=6820 tasks=28; memory (heap in use, or anon) per request after warm-up 0.16 B",
+   "exit": 0
+  },
+  "server_direct-10000": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 0.2,
+     "rss_kb": 23636,
+     "anon_kb": 8972,
+     "heap_used_kb": 4687,
+     "heap_free_kb": 6684,
+     "tasks": 20,
+     "fds": 12
+    },
+    {
+     "n": 1000,
+     "t_s": 24.6,
+     "rss_kb": 67964,
+     "anon_kb": 53108,
+     "heap_used_kb": 22560,
+     "heap_free_kb": 33879,
+     "tasks": 1024,
+     "fds": 12
+    },
+    {
+     "n": 2000,
+     "t_s": 51.2,
+     "rss_kb": 85380,
+     "anon_kb": 70524,
+     "heap_used_kb": 38880,
+     "heap_free_kb": 34715,
+     "tasks": 2024,
+     "fds": 12
+    },
+    {
+     "n": 3000,
+     "t_s": 75.5,
+     "rss_kb": 95652,
+     "anon_kb": 80796,
+     "heap_used_kb": 45752,
+     "heap_free_kb": 37983,
+     "tasks": 2392,
+     "fds": 12
+    },
+    {
+     "n": 4000,
+     "t_s": 99.6,
+     "rss_kb": 100948,
+     "anon_kb": 86092,
+     "heap_used_kb": 49093,
+     "heap_free_kb": 39958,
+     "tasks": 2472,
+     "fds": 12
+    },
+    {
+     "n": 5000,
+     "t_s": 133.0,
+     "rss_kb": 103084,
+     "anon_kb": 88228,
+     "heap_used_kb": 44214,
+     "heap_free_kb": 46825,
+     "tasks": 2128,
+     "fds": 12
+    },
+    {
+     "n": 6000,
+     "t_s": 159.7,
+     "rss_kb": 103344,
+     "anon_kb": 88488,
+     "heap_used_kb": 42597,
+     "heap_free_kb": 48642,
+     "tasks": 2016,
+     "fds": 12
+    },
+    {
+     "n": 7000,
+     "t_s": 184.2,
+     "rss_kb": 103360,
+     "anon_kb": 88504,
+     "heap_used_kb": 46275,
+     "heap_free_kb": 44980,
+     "tasks": 2272,
+     "fds": 12
+    },
+    {
+     "n": 8000,
+     "t_s": 208.6,
+     "rss_kb": 105884,
+     "anon_kb": 91028,
+     "heap_used_kb": 50145,
+     "heap_free_kb": 43626,
+     "tasks": 2480,
+     "fds": 12
+    },
+    {
+     "n": 9000,
+     "t_s": 233.0,
+     "rss_kb": 106444,
+     "anon_kb": 91588,
+     "heap_used_kb": 50142,
+     "heap_free_kb": 44189,
+     "tasks": 2472,
+     "fds": 12
+    },
+    {
+     "n": 10000,
+     "t_s": 257.3,
+     "rss_kb": 106688,
+     "anon_kb": 91832,
+     "heap_used_kb": 50047,
+     "heap_free_kb": 44528,
+     "tasks": 2472,
+     "fds": 12
+    },
+    {
+     "n": 10000,
+     "t_s": 322.3,
+     "rss_kb": 106816,
+     "anon_kb": 91832,
+     "heap_used_kb": 13559,
+     "heap_free_kb": 81016,
+     "tasks": 8,
+     "fds": 12
+    }
+   ],
+   "result": "baseline: rss_kb=23636 anon_kb=8972 heap=Some((4687, 6684)) tasks=20 fds=12; after 10000 sessions and idle: rss_kb=106816 anon_kb=91832 heap=Some((13559, 81016)) tasks=8 fds=12 cached=4063/4063; memory (heap in use, or anon) per session while running 692 B, retained after idle 908 B",
+   "exit": 0
+  },
+  "server_direct-2000-anon-only": {
+   "checkpoints": [],
+   "result": "baseline: rss_kb=23800 anon_kb=8984 tasks=19 fds=12; after 2000 sessions and idle: rss_kb=85744 anon_kb=70736 tasks=8 fds=12; growth per session after warm-up: rss 17686 B, anon 17686 B",
+   "exit": 101
+  },
+  "server_direct-2000": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 0.2,
+     "rss_kb": 23620,
+     "anon_kb": 8876,
+     "heap_used_kb": 4674,
+     "heap_free_kb": 6721,
+     "tasks": 19,
+     "fds": 12
+    },
+    {
+     "n": 200,
+     "t_s": 5.1,
+     "rss_kb": 53332,
+     "anon_kb": 38524,
+     "heap_used_kb": 9281,
+     "heap_free_kb": 33394,
+     "tasks": 224,
+     "fds": 12
+    },
+    {
+     "n": 400,
+     "t_s": 10.1,
+     "rss_kb": 57740,
+     "anon_kb": 42932,
+     "heap_used_kb": 12593,
+     "heap_free_kb": 33595,
+     "tasks": 424,
+     "fds": 12
+    },
+    {
+     "n": 600,
+     "t_s": 14.9,
+     "rss_kb": 60548,
+     "anon_kb": 45740,
+     "heap_used_kb": 15931,
+     "heap_free_kb": 32928,
+     "tasks": 624,
+     "fds": 12
+    },
+    {
+     "n": 800,
+     "t_s": 19.8,
+     "rss_kb": 64732,
+     "anon_kb": 49924,
+     "heap_used_kb": 19106,
+     "heap_free_kb": 34129,
+     "tasks": 824,
+     "fds": 12
+    },
+    {
+     "n": 1000,
+     "t_s": 24.6,
+     "rss_kb": 68396,
+     "anon_kb": 53588,
+     "heap_used_kb": 22542,
+     "heap_free_kb": 34073,
+     "tasks": 1024,
+     "fds": 12
+    },
+    {
+     "n": 1200,
+     "t_s": 30.0,
+     "rss_kb": 65696,
+     "anon_kb": 50888,
+     "heap_used_kb": 25739,
+     "heap_free_kb": 28332,
+     "tasks": 1224,
+     "fds": 12
+    },
+    {
+     "n": 1400,
+     "t_s": 36.2,
+     "rss_kb": 74468,
+     "anon_kb": 59660,
+     "heap_used_kb": 28959,
+     "heap_free_kb": 33900,
+     "tasks": 1424,
+     "fds": 12
+    },
+    {
+     "n": 1600,
+     "t_s": 42.5,
+     "rss_kb": 78208,
+     "anon_kb": 63400,
+     "heap_used_kb": 32067,
+     "heap_free_kb": 34316,
+     "tasks": 1624,
+     "fds": 12
+    },
+    {
+     "n": 1800,
+     "t_s": 48.3,
+     "rss_kb": 82256,
+     "anon_kb": 67448,
+     "heap_used_kb": 35698,
+     "heap_free_kb": 34929,
+     "tasks": 1824,
+     "fds": 12
+    },
+    {
+     "n": 2000,
+     "t_s": 54.0,
+     "rss_kb": 79624,
+     "anon_kb": 64816,
+     "heap_used_kb": 38855,
+     "heap_free_kb": 28948,
+     "tasks": 2024,
+     "fds": 12
+    },
+    {
+     "n": 2000,
+     "t_s": 119.0,
+     "rss_kb": 79496,
+     "anon_kb": 64816,
+     "heap_used_kb": 8969,
+     "heap_free_kb": 58834,
+     "tasks": 8,
+     "fds": 12
+    }
+   ],
+   "result": "baseline: rss_kb=23620 anon_kb=8876 heap=Some((4674, 6721)) tasks=19 fds=12; after 2000 sessions and idle: rss_kb=79496 anon_kb=64816 heap=Some((8969, 58834)) tasks=8 fds=12 cached=2008/2008; memory (heap in use, or anon) per session while running 16775 B, retained after idle 2199 B",
+   "exit": 0
+  },
+  "server_direct-5000-fresh-partial": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 0.4,
+     "rss_kb": 23472,
+     "anon_kb": 9016,
+     "heap_used_kb": 4589,
+     "heap_free_kb": 6850,
+     "tasks": 18,
+     "fds": 12
+    },
+    {
+     "n": 500,
+     "t_s": 25.1,
+     "rss_kb": 59088,
+     "anon_kb": 44628,
+     "heap_used_kb": 13966,
+     "heap_free_kb": 34029,
+     "tasks": 520,
+     "fds": 12
+    },
+    {
+     "n": 1000,
+     "t_s": 49.9,
+     "rss_kb": 67248,
+     "anon_kb": 53472,
+     "heap_used_kb": 22164,
+     "heap_free_kb": 34455,
+     "tasks": 1020,
+     "fds": 12
+    },
+    {
+     "n": 1500,
+     "t_s": 73.7,
+     "rss_kb": 72860,
+     "anon_kb": 59276,
+     "heap_used_kb": 26282,
+     "heap_free_kb": 35929,
+     "tasks": 1240,
+     "fds": 12
+    },
+    {
+     "n": 2000,
+     "t_s": 99.3,
+     "rss_kb": 74672,
+     "anon_kb": 61088,
+     "heap_used_kb": 27424,
+     "heap_free_kb": 36615,
+     "tasks": 1240,
+     "fds": 12
+    },
+    {
+     "n": 2500,
+     "t_s": 123.2,
+     "rss_kb": 69368,
+     "anon_kb": 55784,
+     "heap_used_kb": 27885,
+     "heap_free_kb": 30782,
+     "tasks": 1232,
+     "fds": 12
+    },
+    {
+     "n": 3000,
+     "t_s": 147.7,
+     "rss_kb": 70252,
+     "anon_kb": 56668,
+     "heap_used_kb": 28466,
+     "heap_free_kb": 31077,
+     "tasks": 1232,
+     "fds": 12
+    },
+    {
+     "n": 3500,
+     "t_s": 171.6,
+     "rss_kb": 79948,
+     "anon_kb": 66428,
+     "heap_used_kb": 29389,
+     "heap_free_kb": 39962,
+     "tasks": 1256,
+     "fds": 12
+    }
+   ],
+   "result": null,
+   "exit": null
+  },
+  "server_direct-50000": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 0.2,
+     "rss_kb": 23992,
+     "anon_kb": 9064,
+     "heap_used_kb": 4704,
+     "heap_free_kb": 6783,
+     "tasks": 19,
+     "fds": 12
+    },
+    {
+     "n": 5000,
+     "t_s": 144.0,
+     "rss_kb": 97680,
+     "anon_kb": 82616,
+     "heap_used_kb": 42080,
+     "heap_free_kb": 43411,
+     "tasks": 1984,
+     "fds": 12
+    },
+    {
+     "n": 10000,
+     "t_s": 324.0,
+     "rss_kb": 94028,
+     "anon_kb": 84388,
+     "heap_used_kb": 37635,
+     "heap_free_kb": 49612,
+     "tasks": 1624,
+     "fds": 12
+    },
+    {
+     "n": 15000,
+     "t_s": 529.5,
+     "rss_kb": 97060,
+     "anon_kb": 87228,
+     "heap_used_kb": 35903,
+     "heap_free_kb": 54160,
+     "tasks": 1400,
+     "fds": 12
+    },
+    {
+     "n": 20000,
+     "t_s": 765.9,
+     "rss_kb": 97652,
+     "anon_kb": 87356,
+     "heap_used_kb": 33795,
+     "heap_free_kb": 56268,
+     "tasks": 1256,
+     "fds": 12
+    },
+    {
+     "n": 25000,
+     "t_s": 1038.2,
+     "rss_kb": 99472,
+     "anon_kb": 87496,
+     "heap_used_kb": 30587,
+     "heap_free_kb": 59476,
+     "tasks": 1030,
+     "fds": 12
+    },
+    {
+     "n": 30000,
+     "t_s": 1280.5,
+     "rss_kb": 106708,
+     "anon_kb": 94512,
+     "heap_used_kb": 36619,
+     "heap_free_kb": 60460,
+     "tasks": 1224,
+     "fds": 12
+    },
+    {
+     "n": 35000,
+     "t_s": 1578.4,
+     "rss_kb": 106892,
+     "anon_kb": 94544,
+     "heap_used_kb": 34652,
+     "heap_free_kb": 62427,
+     "tasks": 1072,
+     "fds": 12
+    },
+    {
+     "n": 40000,
+     "t_s": 1852.5,
+     "rss_kb": 106892,
+     "anon_kb": 94544,
+     "heap_used_kb": 37287,
+     "heap_free_kb": 59792,
+     "tasks": 1184,
+     "fds": 12
+    },
+    {
+     "n": 45000,
+     "t_s": 2127.4,
+     "rss_kb": 106892,
+     "anon_kb": 94544,
+     "heap_used_kb": 36730,
+     "heap_free_kb": 60349,
+     "tasks": 1152,
+     "fds": 12
+    },
+    {
+     "n": 50000,
+     "t_s": 2392.7,
+     "rss_kb": 106572,
+     "anon_kb": 94544,
+     "heap_used_kb": 36922,
+     "heap_free_kb": 60157,
+     "tasks": 1168,
+     "fds": 12
+    },
+    {
+     "n": 50000,
+     "t_s": 2457.7,
+     "rss_kb": 107028,
+     "anon_kb": 94860,
+     "heap_used_kb": 19472,
+     "heap_free_kb": 77923,
+     "tasks": 8,
+     "fds": 12
+    }
+   ],
+   "result": "baseline: rss_kb=23992 anon_kb=9064 heap=Some((4704, 6783)) tasks=19 fds=12; after 50000 sessions and idle: rss_kb=107028 anon_kb=94860 heap=Some((19472, 77923)) tasks=8 fds=12 cached=4088/4088; memory (heap in use, or anon) per session while running 97 B, retained after idle 302 B",
+   "exit": 0
+  },
+  "server_relay-2000": {
+   "checkpoints": [
+    {
+     "n": 0,
+     "t_s": 2.2,
+     "rss_kb": 22404,
+     "anon_kb": 6636,
+     "heap_used_kb": 4719,
+     "heap_free_kb": 3888,
+     "tasks": 26,
+     "fds": 16
+    },
+    {
+     "n": 200,
+     "t_s": 11.6,
+     "rss_kb": 31472,
+     "anon_kb": 15512,
+     "heap_used_kb": 9849,
+     "heap_free_kb": 8722,
+     "tasks": 233,
+     "fds": 16
+    },
+    {
+     "n": 400,
+     "t_s": 20.3,
+     "rss_kb": 34912,
+     "anon_kb": 18952,
+     "heap_used_kb": 13174,
+     "heap_free_kb": 8509,
+     "tasks": 433,
+     "fds": 16
+    },
+    {
+     "n": 600,
+     "t_s": 29.1,
+     "rss_kb": 38100,
+     "anon_kb": 22140,
+     "heap_used_kb": 16553,
+     "heap_free_kb": 8606,
+     "tasks": 633,
+     "fds": 16
+    },
+    {
+     "n": 800,
+     "t_s": 38.0,
+     "rss_kb": 41596,
+     "anon_kb": 25636,
+     "heap_used_kb": 19649,
+     "heap_free_kb": 8746,
+     "tasks": 833,
+     "fds": 16
+    },
+    {
+     "n": 1000,
+     "t_s": 47.0,
+     "rss_kb": 44824,
+     "anon_kb": 28864,
+     "heap_used_kb": 23165,
+     "heap_free_kb": 8486,
+     "tasks": 1033,
+     "fds": 16
+    },
+    {
+     "n": 1200,
+     "t_s": 55.9,
+     "rss_kb": 48244,
+     "anon_kb": 32284,
+     "heap_used_kb": 26310,
+     "heap_free_kb": 9193,
+     "tasks": 1233,
+     "fds": 16
+    },
+    {
+     "n": 1400,
+     "t_s": 64.7,
+     "rss_kb": 51660,
+     "anon_kb": 35700,
+     "heap_used_kb": 28780,
+     "heap_free_kb": 9879,
+     "tasks": 1377,
+     "fds": 16
+    },
+    {
+     "n": 1600,
+     "t_s": 73.6,
+     "rss_kb": 52972,
+     "anon_kb": 37012,
+     "heap_used_kb": 29105,
+     "heap_free_kb": 10578,
+     "tasks": 1385,
+     "fds": 16
+    },
+    {
+     "n": 1800,
+     "t_s": 82.4,
+     "rss_kb": 54748,
+     "anon_kb": 38788,
+     "heap_used_kb": 30266,
+     "heap_free_kb": 11189,
+     "tasks": 1385,
+     "fds": 16
+    },
+    {
+     "n": 2000,
+     "t_s": 91.2,
+     "rss_kb": 55260,
+     "anon_kb": 39300,
+     "heap_used_kb": 30453,
+     "heap_free_kb": 11742,
+     "tasks": 1385,
+     "fds": 16
+    },
+    {
+     "n": 2000,
+     "t_s": 156.2,
+     "rss_kb": 55388,
+     "anon_kb": 39300,
+     "heap_used_kb": 10574,
+     "heap_free_kb": 31621,
+     "tasks": 17,
+     "fds": 16
+    }
+   ],
+   "result": "baseline: rss_kb=22404 anon_kb=6636 heap=Some((4719, 3888)) tasks=26 fds=16; after 2000 sessions and idle: rss_kb=55388 anon_kb=39300 heap=Some((10574, 31621)) tasks=17 fds=16 cached=2008/2008; memory (heap in use, or anon) per session while running 10403 B, retained after idle 2998 B",
+   "exit": 0
+  }
+ }
+}

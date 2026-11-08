@@ -26,7 +26,11 @@ campaign/campaign4.sh    campaign 4: the same scenarios after the upload-count/c
 campaign/summarize.py    campaign directory -> summary.json + table.md (all bench formats)
 campaign/compare.py      two campaign directories -> compare.json + compare.md;
                          --series: several -> compare<N>.json + compare<N>.md
-results/<date>-<name>/   raw data and summaries of campaigns
+soak/soak.sh             soak tests: many clients against one listener for hours,
+                         resources sampled over time (section "Soak tests")
+soak/sampler.py          samples RSS, heap, threads, fds, sockets, CPU of the run's processes
+soak/summarize.py        soak run -> summary.json, table.md, plot/*.csv (growth fits)
+results/<date>-<name>/   raw data and summaries of campaigns and soak runs
 ```
 
 Results of benchmark campaign 1: [results/2026-11-07-campaign1/](results/2026-11-07-campaign1/);
@@ -408,6 +412,101 @@ campaign 3 (`compare.md`) and over campaigns 1-4 (`compare4.md`). It also
 samples this machine's load average every 10 s while the `realworld`,
 `startup` and `relay` steps run (`DIR/hetzner-load.txt`), since other work on
 the build machine can shift the numbers measured there.
+
+## Soak tests
+
+`soak/soak.sh` runs many clients against one listener for hours and samples
+the resources of every process, to find leaks, unbounded growth, slowdowns
+and failures under churn in the library, the CLI's listener and directory,
+and the iroh relay. It needs only the CLI binary, `iroh-relay` 1.4.1 (for a
+local relay), `python3`, `openssl` and `curl`; no root. Results of the first
+soak (local, 2.5 h runs, findings in `notes.md`):
+[results/2026-11-08-soak-local/](results/2026-11-08-soak-local/).
+
+```sh
+cargo build --release -p golem-p2p-cli
+cargo install iroh-relay --version 1.4.1 --features server --root target/soak-tools
+harness/soak/soak.sh run steady --out /tmp/soak-steady --duration 2h --clients 100
+harness/soak/soak.sh run relay  --out /tmp/soak-relay  --duration 2h --clients 50
+harness/soak/soak.sh run churn  --out /tmp/soak-churn  --duration 2h --workers 6 --session 3s
+harness/soak/soak.sh stop --out /tmp/soak-steady      # early stop (the run ends itself)
+```
+
+Scenarios of `run` (a local relay with a self-signed certificate, a local
+directory and a listener on `127.0.0.1`, then the load, then a cool-down):
+
+| scenario | load |
+|---|---|
+| `steady` | `--clients` processes of `golem-p2p soak`, each one echo request (`--payload-size`) per `--interval` over a direct path, and an upload of `--bulk-size` every `--bulk-every` |
+| `relay` | the same with `--relay-only` on the clients and the listener: everything goes through the relay |
+| `churn` | `--workers` loops of client sessions: start `golem-p2p soak` for `--session` (one request per `--session-interval`), exit, start again. Odd workers use a fresh identity every session, even ones cycle through `--reuse-keys` keys of their own; every session has a new iroh endpoint key, as on every process start |
+
+Phases (in `phases.jsonl`): `idle` (services only, `--idle`), `load_start`,
+`load_end`, `cooldown` (clients gone, `--cooldown`), `end`. The whole run
+goes into a systemd user scope in the slice `golem-soak.slice`, capped at
+`SOAK_CPU_QUOTA` (600 %) and `SOAK_MEMORY_MAX` (6G) for all concurrent runs
+together (`SOAK_SLICE=` disables this); `systemctl --user stop
+golem-soak.slice` ends everything. Clients run with 2 tokio worker threads
+(`SOAK_CLIENT_THREADS`).
+
+What is recorded in the run directory:
+
+* `samples.jsonl`, from `soak/sampler.py` every `--sample-interval` seconds:
+  per process (relay, directory, listener) RSS, peak RSS, anonymous RSS
+  (mostly heap), threads, open fds, sockets, CPU time; the clients and churn
+  workers aggregated (count, sums, maxima); the cgroup's memory; the host's
+  load; and the relay's Prometheus metrics every minute.
+* `listener.jsonl` and `directory.jsonl`: their `stats` events every 30 s
+  (`--stats-interval`, see [docs/cli-events.md](../docs/cli-events.md)): tokio
+  tasks, the endpoint's connection tables and counters, the directory's store
+  size. The listener's per-request events are dropped.
+* `clients/client-<i>.jsonl`: each client's `soak_stats` every
+  `--stats-interval` (counts, errors, RTT percentiles and histogram, uploads,
+  its own memory and tasks); `churn/churn-<w>.jsonl`: one `soak_stats` per
+  session plus `session_exit` lines with the exit code.
+* `relay/relay.log`, `*.err`, `meta.json`, `phases.jsonl`.
+
+`soak/summarize.py DIR` (run at the end of `run`) writes `summary.json`,
+`table.md` and `plot/*.csv` (`procs.csv`, `listener_stats.csv`,
+`directory_stats.csv`, `latency.csv` and `churn.csv` per 5-minute bin). For
+every series it reports idle, after warm-up (a quarter of the load, at most
+15 min), peak, end of load and after cool-down, and a least-squares slope
+over the load after warm-up; `flags` lists what grows beyond a threshold
+(memory 5 % and 2 MiB, fds 4, threads 2, tasks 10 % and 20, with R^2 >= 0.6),
+gauges that do not return to idle after the cool-down, latency trends and
+churn slowdowns. It also fits memory against the connections the listener
+served (KiB per connection) and against the directory's stored records.
+`summarize.py` reads `.jsonl.gz` as well, so raw data can be compressed.
+
+**Remote soaks.** The pieces also run separately, with the services on one
+host and clients on others: `services` starts what is not given by
+`SOAK_RELAY` (+ `SOAK_RELAY_CA`, `SOAK_RELAY_METRICS`), `SOAK_DIRECTORY` and
+`SOAK_TO`, and writes `DIR/env`; `clients`, `churn` and `sample` read it (or
+the same variables); `stop DIR [load|all]` ends them. `SOAK_HOST_IP` is the
+address local services bind to (`0.0.0.0` for all), `SOAK_PUBLIC_IP` the
+address other hosts reach them on (it goes into the local relay's
+certificate and URL and into the directory URL), `SOAK_BIND` the nodes' UDP
+address (empty: all interfaces), `GOLEM_P2P` and `IROH_RELAY_BIN` the
+binaries. Every process gets `--run-id <basename of DIR>` (`SOAK_RUN`), so
+use the same run directory name on every host, run `sample` on each, and
+copy the client hosts' `clients/`, `churn/` and `samples.jsonl` (renamed,
+e.g. `samples-clients.jsonl`, and appended) into one directory for
+`summarize`. A relay started by `services` needs its certificate on the
+client hosts at the same path (`DIR/relay/relay.crt`). For example, with
+the services on the relay VM and clients on the build machine:
+
+```sh
+# relay VM: directory and listener, using the VM's own iroh-relay
+SOAK_HOST_IP=0.0.0.0 SOAK_PUBLIC_IP=VM_IP SOAK_BIND= SOAK_SLICE= \
+  SOAK_RELAY=https://VM_IP:443,quic=7842 SOAK_RELAY_CA=relay.crt \
+  SOAK_RELAY_METRICS=http://127.0.0.1:9090/metrics SOAK_RELAY_MATCH=iroh-relay \
+  soak.sh services --out ~/soak/r1 && soak.sh sample --out ~/soak/r1
+# client host: DIR/env (and the relay certificate) copied from the VM
+SOAK_BIND= soak.sh clients --out ~/soak/r1 --clients 100 && soak.sh sample --out ~/soak/r1
+soak.sh churn --out ~/soak/r1 --workers 6 --session 3s     # or churn
+# at the end, on every host
+soak.sh stop --out ~/soak/r1
+```
 
 ## Driving it from a controller
 
