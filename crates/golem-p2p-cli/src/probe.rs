@@ -436,15 +436,19 @@ fn describe_refusal(reason: &str, detail: &str) -> String {
     }
 }
 
-/// An upload was stopped at its time limit, and the listener's count of
-/// what arrived did not come back in time.
+/// The listener's count of an upload did not come back in time.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "stopped the upload at the time limit, but the listener did not report what it received \
-     within {} s",
-    .0.as_secs()
+    "{}, but the listener did not report what it received within {} s",
+    if *.stopped { "stopped the upload at the time limit" } else { "sent the whole upload" },
+    .wait.as_secs()
 )]
-pub struct NoCount(pub Duration);
+pub struct NoCount {
+    /// How long the upload waited for the count.
+    pub wait: Duration,
+    /// The upload was stopped at its time limit (else everything was sent).
+    pub stopped: bool,
+}
 
 /// The error kind of a failed transfer: `refused` for a listener limit,
 /// `no_count` for an upload whose count did not come back, else the library
@@ -499,10 +503,14 @@ pub fn mbps(bytes: u64, elapsed: Duration) -> f64 {
 }
 
 /// Uploads up to `max_bytes` to the listener's sink in one stream and waits
-/// for its count. With `max_time`, the upload ends then: whatever is not yet
+/// for its count. With `max_time`, writing ends then: whatever is not yet
 /// delivered is dropped (the stream is reset with [`UPLOAD_STOPPED`]), and
 /// the listener reports what arrived until then (waiting at most
-/// [`count_wait`] more for that, else [`NoCount`]).
+/// [`count_wait`] more for that, else [`NoCount`]). An upload written
+/// completely before `max_time` is not stopped: what the stream buffered is
+/// still on its way, and the listener counts it once it has arrived, which
+/// on a slow path can be after `max_time`. Its count is awaited until
+/// `max_time`, or [`count_wait`] after the write if that is later.
 pub async fn upload(
     ep: &Endpoint,
     to: NodeId,
@@ -525,44 +533,54 @@ pub async fn upload(
         send.finish()?;
         Ok::<_, anyhow::Error>(())
     };
-    // `None`: the time limit ended the upload.
+    // `None`: the time limit cut writing off.
     let written = match deadline {
         Some(d) => tokio::time::timeout_at(d, write).await.ok(),
         None => Some(write.await),
     };
+    let by_time = written.is_none();
+    // The listener's count is read once: `read_to_end` cut off by a timeout
+    // leaves the stream unreadable ("closed stream").
     let reply = match written {
-        // Everything written: the listener's count, unless the time limit
-        // comes first.
-        Some(Ok(())) => {
-            let count = match deadline {
-                Some(d) => tokio::time::timeout_at(d, recv.read_to_end(4096))
-                    .await
-                    .ok(),
-                None => Some(recv.read_to_end(4096).await),
-            };
-            match count {
-                Some(r) => Some(r?),
-                None => None,
+        // Everything written: wait for the count, past the time limit if
+        // need be (see above).
+        Some(Ok(())) => match deadline {
+            Some(d) => {
+                let now = tokio::time::Instant::now();
+                let until = d.max(now + count_wait(start.elapsed(), path_rtt(ep, to)));
+                match tokio::time::timeout_at(until, recv.read_to_end(4096)).await {
+                    Ok(r) => r?,
+                    Err(_) => {
+                        return Err(NoCount {
+                            wait: until - now,
+                            stopped: false,
+                        }
+                        .into());
+                    }
+                }
             }
-        }
+            None => recv.read_to_end(4096).await?,
+        },
         // Read the reply also if writing failed: a refusal says why.
         Some(Err(e)) => {
             match tokio::time::timeout(Duration::from_secs(5), recv.read_to_end(4096)).await {
-                Ok(Ok(r)) if r.starts_with(b"refused") => Some(r),
+                Ok(Ok(r)) if r.starts_with(b"refused") => r,
                 _ => return Err(e),
             }
         }
-        None => None,
-    };
-    let by_time = reply.is_none();
-    let reply = match reply {
-        Some(r) => r,
+        // Cut off by the time limit: stop; the listener counts what arrived.
         None => {
             let _ = send.reset(UPLOAD_STOPPED);
             let wait = count_wait(start.elapsed(), path_rtt(ep, to));
             match tokio::time::timeout(wait, recv.read_to_end(4096)).await {
                 Ok(r) => r?,
-                Err(_) => return Err(NoCount(wait).into()),
+                Err(_) => {
+                    return Err(NoCount {
+                        wait,
+                        stopped: true,
+                    }
+                    .into());
+                }
             }
         }
     };
@@ -636,6 +654,8 @@ pub async fn download(
         })?;
     let mut got = rest.len() as u64;
     let mut by_time = false;
+    // `read_chunk` is cancel-safe: cut off by the time limit, nothing read
+    // is lost (and the stream is not read again).
     loop {
         let chunk = match deadline {
             Some(d) => match tokio::time::timeout_at(d, recv.read_chunk(usize::MAX)).await {
@@ -662,6 +682,8 @@ pub async fn download(
         }
     }
     let elapsed = start.elapsed();
+    // Every byte arrived, only the end of the stream not yet: complete.
+    by_time &= got < announced;
     if !by_time && got != announced {
         bail!("listener sent {got} of {announced} bytes");
     }
@@ -803,9 +825,19 @@ mod tests {
         assert_eq!(transfer_error_kind(&e, "bulk"), "refused");
         let e = anyhow::Error::from(golem_p2p::Error::Timeout);
         assert_eq!(transfer_error_kind(&e, "bulk"), "timeout");
-        let e = anyhow::Error::from(NoCount(Duration::from_secs(8)));
+        let e = anyhow::Error::from(NoCount {
+            wait: Duration::from_secs(8),
+            stopped: true,
+        });
         assert_eq!(transfer_error_kind(&e, "transfer"), "no_count");
+        assert!(e.to_string().starts_with("stopped the upload"), "{e}");
         assert!(e.to_string().ends_with("within 8 s"), "{e}");
+        let e = anyhow::Error::from(NoCount {
+            wait: Duration::from_secs(3),
+            stopped: false,
+        });
+        assert_eq!(transfer_error_kind(&e, "transfer"), "no_count");
+        assert!(e.to_string().starts_with("sent the whole upload"), "{e}");
     }
 
     #[test]
@@ -834,5 +866,108 @@ mod tests {
             "mismatch"
         );
         assert_eq!(crate::out::error_kind(&golem_p2p::Error::Closed), "closed");
+    }
+
+    /// Two endpoints on loopback, direct only, connected.
+    async fn pair() -> (Endpoint, Endpoint) {
+        use golem_p2p::{Identities, InMemorySigner, MemoryDiscovery, TransportMode};
+        let discovery = Arc::new(MemoryDiscovery::new());
+        let mut eps = Vec::new();
+        for _ in 0..2 {
+            let signer = InMemorySigner::new();
+            let id = signer.generate();
+            let ep = Endpoint::builder(signer, Identities::new(id))
+                .discovery(discovery.clone())
+                .transport_mode(TransportMode::DirectOnly)
+                .bind_addr((std::net::Ipv4Addr::LOCALHOST, 0).into())
+                .bind()
+                .await
+                .unwrap();
+            eps.push(ep);
+        }
+        let (b, a) = (eps.pop().unwrap(), eps.pop().unwrap());
+        a.connect(b.node_id()).await.unwrap();
+        (a, b)
+    }
+
+    /// Accepts one upload on `ep`, reads it as the listener does, waits
+    /// `delay`, then replies with the count. `pace`: read in chunks of at
+    /// most 16 KiB with this pause after each (a slow link).
+    fn sink(
+        ep: &Endpoint,
+        delay: Duration,
+        pace: Option<Duration>,
+    ) -> tokio::task::JoinHandle<u64> {
+        let ep = ep.clone();
+        tokio::spawn(async move {
+            let mut inc = ep.accept().await.unwrap();
+            let mut n = 0u64;
+            {
+                let (_, recv) = inc.streams();
+                let mut buf = vec![0u8; 16 * 1024];
+                loop {
+                    match recv.read(&mut buf).await {
+                        Ok(Some(k)) => n += k as u64,
+                        Ok(None) => break,
+                        Err(golem_p2p::iroh::endpoint::ReadError::Reset(c))
+                            if c == UPLOAD_STOPPED =>
+                        {
+                            break;
+                        }
+                        Err(e) => panic!("sink: {e}"),
+                    }
+                    if let Some(p) = pace {
+                        tokio::time::sleep(p).await;
+                    }
+                }
+            }
+            n -= SINK_MAGIC.len() as u64;
+            tokio::time::sleep(delay).await;
+            inc.respond(format!("sink_bytes={n}").as_bytes())
+                .await
+                .unwrap();
+            n
+        })
+    }
+
+    /// An upload written completely before the time limit is complete, also
+    /// if the listener's count comes back only after the limit (campaign 3,
+    /// debug/lossy-extra run 10: the listener had all 10 MB at 7.9 s, the
+    /// count arrived after 8 s, and the upload failed with "read error:
+    /// closed stream").
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_counted_after_the_time_limit() {
+        let (a, b) = pair().await;
+        let counted = sink(&b, Duration::from_millis(600), None);
+        let limit = Duration::from_millis(200);
+        let t = upload(&a, b.node_id(), 100_000, Some(limit)).await.unwrap();
+        assert_eq!(counted.await.unwrap(), 100_000);
+        assert_eq!(t.bytes, 100_000);
+        assert!(!t.by_time, "{t:?}");
+        assert!(t.elapsed >= Duration::from_millis(600), "{t:?}");
+        a.close().await;
+        b.close().await;
+    }
+
+    /// An upload cut off by the time limit while writing is stopped, and
+    /// reports what the listener received until then.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_stopped_at_the_time_limit() {
+        let (a, b) = pair().await;
+        let counted = sink(&b, Duration::ZERO, Some(Duration::from_millis(20)));
+        let t = upload(
+            &a,
+            b.node_id(),
+            50_000_000,
+            Some(Duration::from_millis(300)),
+        )
+        .await
+        .unwrap();
+        let n = counted.await.unwrap();
+        assert!(t.by_time, "{t:?}");
+        assert_eq!(t.bytes, n);
+        assert!(n > 0 && n < 50_000_000, "{t:?}");
+        a.close().await;
+        b.close().await;
     }
 }

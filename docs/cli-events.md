@@ -313,7 +313,7 @@ discovery (QAD) over UDP, and with HTTPS):
 |---|---|---|
 | `connect` | object | `ok`, `lookup_ms` (directory lookup), `connect_ms` (lookup and both handshakes), `handshake_ms` (`connect_ms - lookup_ms`), `path` and `remote_addr` right after connecting, `peer_endpoint`, `error_kind`, `error` |
 | `latency` | object or null | `duration_ms`, `sent`, `ok`, `failed`, `failed_pct`, `rtt_ms` {`min`, `p50`, `p95`, `max`, `mean`}, `rtt_samples`, `jitter_ms`, `direct_fraction`, `final_path` (as in `summary`), `quic` (below, during this phase), `loss` (packet loss once the path had settled: `from_ms` (when counting started, from the start of the phase), `sent_packets`, `lost_packets`, `lost_pct`, counted like `quic`; null if the selected path changed until the end of the phase, or the connection changed; see **Packet loss**) |
-| `upload`, `download` | object or null | `ok`, `requested_bytes` (after the relay cap), `relay_capped`, `bytes`, `duration_ms`, `throughput_mbps`, `path` (at the end), `limited_by` (`size` or `time`), `error_kind` (`refused` for a listener limit; `no_count`: an upload stopped at the time limit whose count did not come back in time), `error`, `quic` (during this phase) |
+| `upload`, `download` | object or null | `ok`, `requested_bytes` (after the relay cap), `relay_capped`, `bytes`, `duration_ms`, `throughput_mbps`, `path` (at the end), `limited_by` (`size` or `time`), `error_kind` (`refused` for a listener limit; `no_count`: an upload whose count did not come back in time, see **Bench phases**), `error`, `quic` (during this phase) |
 | `concurrency` | object or null | `ok`, `streams`, `request_bytes` (256 KiB, smaller on a slow link), `sized_for_mbps` (the requests were made smaller for a slow link: the slower of the upload and download throughput they were sized for; null if not), `requests` (correct replies), `failed`, `unfinished` (still running at `--transfer-time`, cut off; not failures), `limited_by` (`size` or `time`), `total_bytes` (payload, each way), `duration_ms`, `throughput_mbps` (payload, each way), `rtt_ms` (of these requests), `loaded_rtt_ms` and `loaded_samples` (small requests sent meanwhile), `error_kind`, `error`, `quic` (during this phase) |
 | `idle` | object or null | `idle_ms`, `ok` (a request succeeded afterwards), `survived` (the same connection was still open), `path_before`, `path_after`, `attempts` (at most 3), `recovery_ms` (first request to first reply), `rtt_ms`, `error` |
 | `path` | object | `time_to_direct_ms` (from the start of connecting), `changes`, `final_path` (`unknown` if there was no connection at the end), `final_remote_addr`, `timeline` [{`t_ms`, `path`, `remote_addr`}] (at most 64 entries) |
@@ -506,9 +506,16 @@ brackets):
    path takes seconds, so the bench waits for that count at least 3 s, as
    long as the upload ran (8 s), or three round trips (QUIC's smoothed RTT,
    which includes queueing), whichever is longest, at most 30 s; without it
-   the upload fails with `error_kind` `no_count`. A download stops reading.
-   Throughput is the bytes
-   over the time from opening the stream to the listener's count (upload) or
+   the upload fails with `error_kind` `no_count`. An upload written
+   completely before the time limit is not stopped (`limited_by: "size"`):
+   what the stream buffered (up to QUIC's stream window, 1.25 MB) is still
+   on its way, and the listener counts it once it has arrived, which on a
+   slow path can be after the time limit; the bench waits for that count
+   until the time limit, or, if that ends later, as long as it would after a
+   stop, counted from the end of writing (`no_count` if it does not come
+   either). A download stops reading (one whose bytes had all arrived counts
+   as complete, also if the end of the stream had not). Throughput is the
+   bytes over the time from opening the stream to the listener's count (upload) or
    to the last byte (download).
 5. `concurrency`: `--streams` (8) workers send echo requests of 256 KiB until
    `--concurrency-size` (8 MB of requests) or `--transfer-time`; requests
