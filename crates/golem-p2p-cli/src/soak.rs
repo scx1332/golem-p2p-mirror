@@ -573,15 +573,55 @@ pub fn proc_stats() -> Value {
         fds = Some(n);
         sockets = Some(s);
     }
+    let heap = heap_kb();
     json!({
         "rss_kb": field("VmRSS"),
         "hwm_kb": field("VmHWM"),
         "anon_kb": field("RssAnon"),
+        "heap_used_kb": heap.map(|h| h.0),
+        "heap_free_kb": heap.map(|h| h.1),
         "threads": field("Threads"),
         "fds": fds,
         "sockets": sockets,
         "cpu_s": cpu_seconds(),
     })
+}
+
+/// Heap in use and free heap held by the allocator, in KiB (glibc only;
+/// `None` elsewhere). In use is what the program has allocated and not freed
+/// (including large blocks mapped separately); free is memory the allocator
+/// keeps for reuse. Growth of the first is a leak, growth of the second only
+/// fragmentation or retention.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn heap_kb() -> Option<(u64, u64)> {
+    #[repr(C)]
+    struct Mallinfo2 {
+        arena: usize,
+        ordblks: usize,
+        smblks: usize,
+        hblks: usize,
+        hblkhd: usize,
+        usmblks: usize,
+        fsmblks: usize,
+        uordblks: usize,
+        fordblks: usize,
+        keepcost: usize,
+    }
+    unsafe extern "C" {
+        fn mallinfo2() -> Mallinfo2;
+    }
+    // SAFETY: mallinfo2 (glibc >= 2.33) takes no arguments and returns a
+    // plain struct; it locks the allocator's arenas internally.
+    let m = unsafe { mallinfo2() };
+    Some((
+        ((m.uordblks + m.hblkhd) / 1024) as u64,
+        (m.fordblks / 1024) as u64,
+    ))
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn heap_kb() -> Option<(u64, u64)> {
+    None
 }
 
 /// User plus system CPU time of this process, from `/proc/self/stat`

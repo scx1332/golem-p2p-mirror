@@ -32,6 +32,42 @@ fn memory_kb() -> (u64, u64) {
     (field("VmRSS"), field("RssAnon"))
 }
 
+/// Heap in use and free heap held by the allocator, in KiB (glibc only;
+/// `None` elsewhere). In use is what the program has allocated and not freed
+/// (including large blocks the allocator mapped separately), so it tells a
+/// leak from memory that was freed but not returned to the system.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn heap_kb() -> Option<(u64, u64)> {
+    #[repr(C)]
+    struct Mallinfo2 {
+        arena: usize,
+        ordblks: usize,
+        smblks: usize,
+        hblks: usize,
+        hblkhd: usize,
+        usmblks: usize,
+        fsmblks: usize,
+        uordblks: usize,
+        fordblks: usize,
+        keepcost: usize,
+    }
+    unsafe extern "C" {
+        fn mallinfo2() -> Mallinfo2;
+    }
+    // SAFETY: mallinfo2 (glibc >= 2.33) takes no arguments and returns a
+    // plain struct; it locks the allocator's arenas internally.
+    let m = unsafe { mallinfo2() };
+    Some((
+        ((m.uordblks + m.hblkhd) / 1024) as u64,
+        (m.fordblks / 1024) as u64,
+    ))
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn heap_kb() -> Option<(u64, u64)> {
+    None
+}
+
 fn alive_tasks() -> usize {
     tokio::runtime::Handle::current()
         .metrics()
@@ -162,6 +198,8 @@ struct Checkpoint {
     secs: f64,
     rss_kb: u64,
     anon_kb: u64,
+    /// Heap in use and free heap (glibc), see [`heap_kb`].
+    heap: Option<(u64, u64)>,
     tasks: usize,
     fds: usize,
     stats: EndpointStats,
@@ -175,14 +213,17 @@ impl Checkpoint {
             secs: start.elapsed().as_secs_f64(),
             rss_kb,
             anon_kb,
+            heap: heap_kb(),
             tasks: alive_tasks(),
             fds: fds(),
             stats: ep.stats(),
         };
         let s = &c.stats;
+        let (used, free) = c.heap.unwrap_or_default();
         println!(
-            "cycles={:>6} t={:>7.1}s rss_kb={:>7} anon_kb={:>7} tasks={:>4} fds={:>4} conns={} \
-             slots={} locks={} cached={}/{} in={} out={} closed={} streams={} refused={} failed_hs={}",
+            "cycles={:>6} t={:>7.1}s rss_kb={:>7} anon_kb={:>7} heap_used_kb={used:>7} \
+             heap_free_kb={free:>7} tasks={:>4} fds={:>4} conns={} slots={} locks={} \
+             cached={}/{} in={} out={} closed={} streams={} refused={} failed_hs={}",
             c.cycles,
             c.secs,
             c.rss_kb,
@@ -202,6 +243,12 @@ impl Checkpoint {
             s.handshakes_failed,
         );
         c
+    }
+
+    /// The memory that must not grow: heap in use where the allocator
+    /// reports it, anonymous resident memory otherwise.
+    fn mem_kb(&self) -> u64 {
+        self.heap.map_or(self.anon_kb, |(used, _)| used)
     }
 }
 
@@ -283,32 +330,34 @@ async fn soak_server(net: &TestNet, client_opts: NodeOpts, server_opts: NodeOpts
         (cycles + PARALLEL) * REQUESTS as u64,
         "every request reached the server once: {s:?}"
     );
-    // Memory per session after the first checkpoints (allocator warm-up).
+    // Memory per session after the first checkpoints (allocator warm-up),
+    // and what stays once the per-remote state has expired.
     let tail: Vec<(f64, f64)> = points
         .iter()
         .skip(points.len() / 5)
-        .map(|c| (c.cycles as f64, c.rss_kb as f64))
+        .map(|c| (c.cycles as f64, c.mem_kb() as f64))
         .collect();
-    let anon: Vec<(f64, f64)> = points
-        .iter()
-        .skip(points.len() / 5)
-        .map(|c| (c.cycles as f64, c.anon_kb as f64))
-        .collect();
-    let rss_per_session = slope(&tail) * 1024.0;
-    let anon_per_session = slope(&anon) * 1024.0;
+    let per_session = slope(&tail) * 1024.0;
+    let retained = (after.mem_kb() as f64 - base.mem_kb() as f64) * 1024.0 / cycles as f64;
     println!(
-        "baseline: rss_kb={} anon_kb={} tasks={} fds={}; after {cycles} sessions and idle: \
-         rss_kb={} anon_kb={} tasks={} fds={}; growth per session after warm-up: \
-         rss {rss_per_session:.0} B, anon {anon_per_session:.0} B",
+        "baseline: rss_kb={} anon_kb={} heap={:?} tasks={} fds={}; after {cycles} sessions \
+         and idle: rss_kb={} anon_kb={} heap={:?} tasks={} fds={} cached={}/{}; memory \
+         (heap in use, or anon) per session while running {per_session:.0} B, retained \
+         after idle {retained:.0} B",
         base.rss_kb,
         base.anon_kb,
+        base.heap,
         base.tasks,
         base.fds,
         after.rss_kb,
         after.anon_kb,
+        after.heap,
         after.tasks,
-        after.fds
+        after.fds,
+        s.cached_identities,
+        s.cached_endpoints,
     );
+    let anon_per_session = retained;
     assert!(
         after.tasks <= base.tasks + 4,
         "tasks did not return to idle: {} before, {} after",

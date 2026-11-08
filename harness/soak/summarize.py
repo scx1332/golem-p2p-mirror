@@ -297,6 +297,7 @@ def summarize(d):
     kinds = {
         "rss_kb": "mem_kb", "anon_kb": "mem_kb", "rss_kb_sum": "mem_kb", "rss_kb_max": "mem_kb",
         "anon_kb_sum": "mem_kb", "anon_kb_max": "mem_kb", "mem_kb": "mem_kb",
+        "heap_used_kb": "mem_kb", "heap_free_kb": "mem_kb",
         "threads": "threads", "threads_sum": "threads", "fds": "fds", "fds_sum": "fds",
         "sockets": "sockets", "sockets_sum": "sockets", "n": "count",
     }
@@ -363,7 +364,7 @@ def summarize(d):
                     flat["ep." + k] = v
             for k, v in (e.get("store") or {}).items():
                 flat["store." + k] = v
-            for k in ("rss_kb", "anon_kb", "threads", "fds", "sockets", "cpu_s"):
+            for k in ("rss_kb", "anon_kb", "heap_used_kb", "heap_free_kb", "threads", "fds", "sockets", "cpu_s"):
                 flat["proc." + k] = (e.get("proc") or {}).get(k)
             for k, v in flat.items():
                 ser[k].append((t, v))
@@ -381,7 +382,8 @@ def summarize(d):
     dser, devs = stats_series(os.path.join(d, "directory.jsonl"), "directory")
     gauges = ["tokio.alive_tasks", "ep.connections", "ep.open_connections", "ep.connect_slots",
               "ep.dial_locks", "ep.handshakes", "ep.queued_streams", "ep.cached_identities",
-              "ep.cached_endpoints", "proc.rss_kb", "proc.anon_kb", "proc.fds", "proc.threads"]
+              "ep.cached_endpoints", "proc.rss_kb", "proc.anon_kb", "proc.heap_used_kb",
+              "proc.heap_free_kb", "proc.fds", "proc.threads"]
     totals = ["ep.connections_incoming", "ep.connections_closed", "ep.handshakes_failed",
               "ep.streams_accepted", "ep.streams_refused", "iroh.conns_opened", "iroh.conns_closed"]
     lst = {}
@@ -397,7 +399,10 @@ def summarize(d):
     if lser.get("proc.rss_kb") and lser.get("ep.connections_incoming"):
         lst["rss_kb_per_connection"] = per_unit(lser["proc.rss_kb"], lser["ep.connections_incoming"], ph)
         lst["anon_kb_per_connection"] = per_unit(lser["proc.anon_kb"], lser["ep.connections_incoming"], ph)
-    for g in ("tokio.alive_tasks", "ep.connections", "proc.fds"):
+        if any(v is not None for _, v in lser.get("proc.heap_used_kb", [])):
+            lst["heap_used_kb_per_connection"] = per_unit(
+                [(t, v) for t, v in lser["proc.heap_used_kb"] if v is not None], lser["ep.connections_incoming"], ph)
+    for g in ("tokio.alive_tasks", "ep.connections", "proc.fds", "proc.heap_used_kb"):
         a = lst.get(g)
         if a and a.get("growing"):
             flags.append(f"listener {g} grows {a['slope_per_h']}/h (R2 {a['r2']}, {a['start']} -> {a['load_end']})")
@@ -411,12 +416,20 @@ def summarize(d):
                              f"{a['idle']} idle, {a['after_cooldown']} after")
     summary["listener"] = lst
     dst = {}
-    for g in ("store.identities", "store.endpoints", "proc.rss_kb", "proc.anon_kb", "proc.fds", "tokio.alive_tasks"):
+    for g in ("store.identities", "store.endpoints", "proc.rss_kb", "proc.anon_kb", "proc.heap_used_kb",
+              "proc.heap_free_kb", "proc.fds", "tokio.alive_tasks"):
         if g in dser:
             k = "tasks" if g.startswith("tokio") else kinds.get(g.split(".")[1], "count")
             dst[g] = analyze(dser[g], ph, k)
     if dser.get("proc.rss_kb") and dser.get("store.identities"):
         dst["rss_kb_per_identity"] = per_unit(dser["proc.rss_kb"], dser["store.identities"], ph)
+        if any(v is not None for _, v in dser.get("proc.heap_used_kb", [])):
+            dst["heap_used_kb_per_identity"] = per_unit(
+                [(t, v) for t, v in dser["proc.heap_used_kb"] if v is not None], dser["store.identities"], ph)
+    for g in ("proc.heap_used_kb", "tokio.alive_tasks"):
+        a = dst.get(g)
+        if a and a.get("growing"):
+            flags.append(f"directory {g} grows {a['slope_per_h']}/h (R2 {a['r2']}, {a['start']} -> {a['load_end']})")
     summary["directory"] = dst
     errors = defaultdict(int)
     for e in load_jsonl(os.path.join(d, "listener.jsonl")):
@@ -464,7 +477,8 @@ def summarize(d):
             p = e.get("proc") or {}
             if p.get("rss_kb"):
                 client_proc[os.path.basename(path)].append((t, p.get("rss_kb"), p.get("anon_kb"), p.get("fds"),
-                                                            p.get("threads"), (e.get("tokio") or {}).get("alive_tasks")))
+                                                            p.get("threads"), (e.get("tokio") or {}).get("alive_tasks"),
+                                                            p.get("heap_used_kb")))
         if last_tot:
             for k in totals_c:
                 totals_c[k] += last_tot.get(k, 0)
@@ -520,19 +534,21 @@ def summarize(d):
         # Per-client memory: growth of each long-running client after warm-up.
         slopes, growing = [], 0
         for name, pts in client_proc.items():
-            a = analyze([(t, anon) for t, _, anon, *_ in pts], ph, "mem_kb")
+            # Heap in use where reported (a leak), else anonymous memory.
+            a = analyze([(t, heap if heap is not None else anon) for t, _, anon, _, _, _, heap in pts],
+                        ph, "mem_kb")
             if a and a.get("slope_per_h") is not None:
                 slopes.append(a["slope_per_h"])
                 growing += bool(a.get("growing"))
         if slopes:
-            lat["client_anon_slope_kb_per_h"] = {"median": r(statistics.median(slopes)), "max": r(max(slopes)),
+            lat["client_mem_slope_kb_per_h"] = {"median": r(statistics.median(slopes)), "max": r(max(slopes)),
                                                  "min": r(min(slopes)), "growing": growing}
             if growing > len(slopes) / 2:
                 flags.append(f"steady client memory grows in {growing} of {len(slopes)} clients: "
                              f"median {r(statistics.median(slopes))} KiB/h")
         alive = []
         for name, pts in client_proc.items():
-            fitpts = [(t, at) for t, _, _, _, _, at in pts if at is not None]
+            fitpts = [(t, at) for t, _, _, _, _, at, _ in pts if at is not None]
             a = analyze(fitpts, ph, "tasks")
             if a and a.get("slope_per_h") is not None:
                 alive.append(a["slope_per_h"])
@@ -646,7 +662,7 @@ def table(s):
         for k in ("ep.connections_incoming", "ep.streams_accepted", "ep.handshakes_failed", "ep.streams_refused"):
             if k in lst:
                 lines.append(f"\n{k}: {lst[k]}")
-        for k in ("rss_kb_per_connection", "anon_kb_per_connection"):
+        for k in ("rss_kb_per_connection", "anon_kb_per_connection", "heap_used_kb_per_connection"):
             if lst.get(k):
                 lines.append(f"\n{k}: {lst[k]}")
     c = s.get("clients")

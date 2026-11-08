@@ -399,7 +399,7 @@ of a long-running process, so that growth over time shows.
 | field | type | meaning |
 |---|---|---|
 | `uptime_s` | number | seconds since the stats task started |
-| `proc` | object | this process (Linux, from `/proc/self`; fields null elsewhere): `rss_kb` resident memory, `hwm_kb` its peak, `anon_kb` anonymous resident memory (mostly heap), `threads`, `fds` open file descriptors, `sockets` how many of them are sockets, `cpu_s` user plus system CPU time |
+| `proc` | object | this process (Linux, from `/proc/self`; fields null elsewhere): `rss_kb` resident memory, `hwm_kb` its peak, `anon_kb` anonymous resident memory (mostly heap), `heap_used_kb` heap allocated and not freed and `heap_free_kb` freed heap the allocator keeps (glibc's `mallinfo2`; null with other allocators: growth of `heap_used_kb` is a leak, growth of `heap_free_kb` only fragmentation), `threads`, `fds` open file descriptors, `sockets` how many of them are sockets, `cpu_s` user plus system CPU time |
 | `tokio` | object | the async runtime: `workers` threads, `alive_tasks` tasks spawned and not finished, `global_queue` tasks waiting in the global queue |
 | `endpoint` | object | `listen` only: the endpoint's state, see below |
 | `store` | object | `directory` only: `identities` and `endpoints` in its record store (at most 100 000 each; expired records are pruned every minute) |
