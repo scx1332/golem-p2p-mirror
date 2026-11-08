@@ -648,7 +648,9 @@ GSB integration itself is out of scope for this seed.
   `Builder::relay_config(RelayConfig::new(..).with_auth_token(..))`, not tested.
 * Persisting `seq` (the API exists via `min_seq` and `local_record().seq()`).
 * Datagram and unidirectional streams (disabled: 0 uni streams).
-* Metrics beyond what iroh exports.
+* Metrics beyond what iroh exports and `Endpoint::stats` (sizes of the
+  connection table, connect state, handshakes and queues, and connection and
+  stream counters, used by the soak tests in `harness/soak/`).
 * Explicit "withdraw" records for identities removed while offline.
 * Address filtering beyond host-internal interfaces: private LAN and VPN
   addresses are published (section 5, question 3 in section 15). Interface

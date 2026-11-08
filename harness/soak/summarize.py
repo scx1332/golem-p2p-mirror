@@ -3,6 +3,8 @@
 DIR/summary.json, DIR/table.md and plot data in DIR/plot/*.csv.
 
 Usage: summarize.py DIR [DIR...]
+       summarize.py --combine OUT_DIR RUN_DIR...   (key facts of several runs
+                                                    in OUT_DIR/summary.json)
 
 What it reads (all optional except phases.jsonl):
   phases.jsonl          idle, load_start, load_end, cooldown, end (epoch s)
@@ -414,6 +416,20 @@ def summarize(d):
             if a["after_cooldown"] > a["idle"] + slack:
                 flags.append(f"listener {g} did not return to idle after the cool-down: "
                              f"{a['idle']} idle, {a['after_cooldown']} after")
+    # Cost of an open connection: memory with the load's connections open
+    # (after warm-up) minus idle, per open connection.
+    conns = (lst.get("ep.open_connections") or {}).get("start")
+    if conns:
+        cost = {}
+        for g in ("proc.heap_used_kb", "proc.anon_kb", "proc.rss_kb"):
+            a = lst.get(g) or {}
+            if a.get("start") is not None and a.get("idle") is not None:
+                cost[g.split(".")[1]] = r((a["start"] - a["idle"]) / conns, 1)
+        cost["open_connections"] = conns
+        lst["kb_per_open_connection"] = cost
+        relay_anon = (procs.get("relay") or {}).get("anon_kb") or {}
+        if relay_anon.get("start") is not None and relay_anon.get("idle") is not None:
+            summary["relay_anon_kb_per_listener_connection"] = r((relay_anon["start"] - relay_anon["idle"]) / conns, 1)
     summary["listener"] = lst
     dst = {}
     for g in ("store.identities", "store.endpoints", "proc.rss_kb", "proc.anon_kb", "proc.heap_used_kb",
@@ -676,11 +692,64 @@ def table(s):
     return "\n".join(lines) + "\n"
 
 
+def key_facts(s):
+    """The headline numbers of one run's summary, for the combined summary."""
+    keep = ("idle", "start", "peak", "load_end", "after_cooldown", "slope_per_h", "r2", "growing")
+    out = {"scenario": (s.get("meta") or {}).get("scenario"), "load_hours": s.get("load_hours"),
+           "flags": s.get("flags"), "processes": {}}
+    for role, ms in (s.get("processes") or {}).items():
+        if role.startswith("cgroup"):
+            continue
+        f = {}
+        for m in ("rss_kb", "anon_kb", "rss_kb_sum", "anon_kb_sum", "fds", "threads", "fds_sum", "threads_sum"):
+            if ms.get(m):
+                f[m] = {k: ms[m].get(k) for k in keep}
+        if "cpu_load_pct" in ms:
+            f["cpu_load_pct"] = ms["cpu_load_pct"]
+        out["processes"][role] = f
+    wanted = ("proc.heap_used_kb", "proc.heap_free_kb", "tokio.alive_tasks", "ep.connections",
+              "ep.cached_identities", "ep.cached_endpoints", "kb_per_open_connection",
+              "heap_used_kb_per_connection", "ep.connections_incoming", "ep.streams_accepted")
+    out["listener"] = {k: ({kk: v.get(kk) for kk in keep} if isinstance(v, dict) and "peak" in v else v)
+                       for k, v in (s.get("listener") or {}).items() if k in wanted}
+    out["directory"] = {k: v for k, v in (s.get("directory") or {}).items()
+                        if k in ("proc.heap_used_kb", "store.identities", "heap_used_kb_per_identity")}
+    for k in ("clients", "churn", "listener_errors", "relay_anon_kb_per_listener_connection"):
+        if s.get(k) is not None:
+            out[k] = s[k]
+    prom = (s.get("prom") or {}).get("relay") or {}
+    if prom.get("delta_load"):
+        out["relay_metrics_delta"] = prom["delta_load"]
+    return out
+
+
+def combine(out_dir, dirs):
+    """Writes OUT_DIR/summary.json with the key facts of several runs."""
+    runs = {}
+    for d in dirs:
+        try:
+            s = json.load(open(os.path.join(d, "summary.json")))
+        except (OSError, ValueError):
+            s = summarize(d)
+        runs[os.path.basename(os.path.abspath(d))] = key_facts(s)
+    with open(os.path.join(out_dir, "summary.json"), "w") as f:
+        json.dump({"runs": runs}, f, indent=1, default=str)
+    return runs
+
+
 def main():
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    if not args:
         print(__doc__)
         return 2
-    for d in sys.argv[1:]:
+    if args[0] == "--combine":
+        if len(args) < 3:
+            print("usage: summarize.py --combine OUT_DIR RUN_DIR...")
+            return 2
+        for name, k in combine(args[1], args[2:]).items():
+            print(f"{name}: flags: {len(k['flags'] or [])}")
+        return 0
+    for d in args:
         s = summarize(d)
         print(f"{d}: flags: {len(s['flags'])}")
         for f in s["flags"]:
