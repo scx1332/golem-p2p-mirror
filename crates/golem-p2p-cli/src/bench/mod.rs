@@ -53,8 +53,8 @@ const MIN_CONCURRENCY_REQUEST: usize = 4 * 1024;
 const REQUESTS_PER_STREAM: f64 = 4.0;
 
 /// If none of the concurrency phase's requests has finished by half of
-/// `--transfer-time`, it starts over with requests this many times smaller
-/// (see [`Workers`]).
+/// `--transfer-time` and they are not about to, it starts over with requests
+/// this many times smaller (see [`Workers`]).
 const RESTART_SHRINK: usize = 16;
 
 /// The relay-only comparison measures latency for at most this long.
@@ -606,8 +606,8 @@ impl PeerBench<'_> {
     /// on a link measured at under `link_mbps`, see
     /// [`concurrency_request_size`]) until `--concurrency-size` bytes or
     /// `--transfer-time` (starting over with smaller requests if none has
-    /// finished by half of it, see [`Workers`]), while small requests measure
-    /// the round-trip time under load.
+    /// finished by half of it and they are not about to, see [`Workers`]),
+    /// while small requests measure the round-trip time under load.
     async fn concurrency(&self, link_mbps: Option<f64>) -> Concurrency {
         let args = self.args;
         let (ep, to) = (self.ep, self.to);
@@ -643,11 +643,14 @@ impl PeerBench<'_> {
             }
             Ok(())
         };
+        // Bytes on the wire both ways since the start of the phase, while it
+        // is the same connection (QUIC's UDP counters).
+        let moved = || phase_quic(ep, to, before.as_ref()).map(|q| q.sent_bytes + q.received_bytes);
         // The phase ends when the last worker does: its duration is taken
         // then (by `Workers::run`), not when the small requests below notice
         // (campaign 3: on fast paths every duration snapped to their 200 ms
         // ticks).
-        let workers = workers.run(request);
+        let workers = workers.run(request, moved);
         // Small requests every --interval while the workers run; the one in
         // flight when they are done is dropped.
         let mut small = Vec::new();
@@ -680,6 +683,7 @@ impl PeerBench<'_> {
                 cut_off,
                 request_bytes: size,
             }),
+            first_reply_ms: r.first_reply.map(ms),
             requests: r.rtts.len() as u64,
             failed: r.failed,
             unfinished: r.unfinished,
@@ -956,13 +960,21 @@ impl LossCount {
 /// requests or for `time`; a request still running then is cut off (that is
 /// not a failure).
 ///
-/// If none of the requests has finished by half of `time`, the size was too
-/// large for the link (sized for transfers that overstated it, or the link
-/// slowed down): the workers cut off their requests and start over with
-/// requests [`RESTART_SHRINK`] times smaller (whole KiB, at least
-/// [`MIN_CONCURRENCY_REQUEST`]), and only those are counted. From 256 KiB
-/// that is 16 KiB, of which 8 streams finish a round trip in the remaining
-/// 4 s (with the defaults) down to about 0.5 Mbps.
+/// If none of the requests has finished by half of `time`, the size may be
+/// too large for the link (sized for transfers that overstated it, or the
+/// link slowed down). Unless the requests in flight are about to finish (see
+/// [`on_course`]: at the pace of the connection's traffic since a quarter of
+/// `time`, they would finish by three quarters of it), the workers cut them
+/// off and start over with requests [`RESTART_SHRINK`] times smaller (whole
+/// KiB, at least [`MIN_CONCURRENCY_REQUEST`]), and only those are counted.
+/// From 256 KiB that is 16 KiB, of which 8 streams finish a round trip in the
+/// remaining 4 s (with the defaults) down to about 0.5 Mbps.
+///
+/// Up to campaign 4 every phase without a reply by half the time started
+/// over: in debug/lossy-extra run 9 that cut off requests sized only ~2x too
+/// large, 80 % of whose echoes had arrived (sized for four requests per
+/// stream, such an overestimate puts the first replies at about half the
+/// time).
 struct Workers {
     streams: usize,
     budget: u64,
@@ -990,6 +1002,8 @@ struct Requests {
     /// When the workers started over (since the start), and how many requests
     /// they cut off then.
     restart: Option<(Duration, u64)>,
+    /// When the first counted reply arrived (since the start).
+    first_reply: Option<Duration>,
 }
 
 impl Workers {
@@ -1001,26 +1015,50 @@ impl Workers {
     }
 
     /// Runs the workers. `request` sends one echo request and checks the
-    /// reply.
-    async fn run<F, Fut>(&self, request: F) -> Requests
+    /// reply; `moved` says how many bytes the connection has carried since
+    /// the start, both ways (`None` if unknown).
+    async fn run<F, Fut, M>(&self, request: F, moved: M) -> Requests
     where
         F: Fn(Vec<u8>) -> Fut,
         Fut: Future<Output = anyhow::Result<()>>,
+        M: Fn() -> Option<u64>,
     {
         let start = Instant::now();
         let deadline = tokio::time::Instant::from_std(start + self.time);
         let restart_at = tokio::time::Instant::from_std(start + self.time / 2);
+        // The pace for the restart decision is measured from here.
+        let pace_from = tokio::time::Instant::from_std(start + self.time / 4);
         let small = self.restart_size();
         let reserved = AtomicU64::new(0);
+        // Bytes of the requests started before the restart decision.
+        let first_bytes = AtomicU64::new(0);
         let seq = AtomicU64::new(0);
         let by_time = AtomicBool::new(false);
         let cut_off = AtomicU64::new(0);
         // A request has finished (replied or failed, not cut off).
         let finished = AtomicBool::new(false);
+        // `moved` at `pace_from`.
+        let moved_early = OnceLock::<Option<(Instant, u64)>>::new();
         // Taken once, at `restart_at`: when the workers started over, or
         // `None` if they go on.
         let restart = OnceLock::<Option<Instant>>::new();
         let restarted = || matches!(restart.get(), Some(Some(_)));
+        let decide = || {
+            if finished.load(Ordering::Relaxed) {
+                return None;
+            }
+            let now = Instant::now();
+            // No request has finished, so all started are still in flight,
+            // and each has to go there and back.
+            let in_flight = 2 * first_bytes.load(Ordering::Relaxed);
+            let about_to_finish = match (moved_early.get().copied().flatten(), moved()) {
+                (Some(early), Some(m)) => {
+                    on_course(early, (now, m), in_flight, start + self.time * 3 / 4)
+                }
+                _ => false,
+            };
+            (!about_to_finish).then_some(now)
+        };
         let results = Mutex::new(Requests::default());
         let worker = || async {
             loop {
@@ -1034,6 +1072,9 @@ impl Workers {
                 if reserved.fetch_add(size as u64, Ordering::Relaxed) + size as u64 > self.budget {
                     break;
                 }
+                if first_try {
+                    first_bytes.fetch_add(size as u64, Ordering::Relaxed);
+                }
                 let payload = probe::payload(seq.fetch_add(1, Ordering::Relaxed) + 1, size);
                 let t = Instant::now();
                 let req = tokio::time::timeout_at(deadline, request(payload));
@@ -1045,10 +1086,7 @@ impl Workers {
                         biased;
                         r = &mut req => r,
                         () = tokio::time::sleep_until(restart_at) => {
-                            let decided = restart.get_or_init(|| {
-                                (!finished.load(Ordering::Relaxed)).then(Instant::now)
-                            });
-                            if decided.is_some() {
+                            if restart.get_or_init(decide).is_some() {
                                 cut_off.fetch_add(1, Ordering::Relaxed);
                                 continue;
                             }
@@ -1072,7 +1110,10 @@ impl Workers {
                 }
                 let mut res = results.lock().expect("poisoned");
                 match r {
-                    Ok(()) => res.rtts.push(t.elapsed()),
+                    Ok(()) => {
+                        res.rtts.push(t.elapsed());
+                        res.first_reply.get_or_insert_with(|| start.elapsed());
+                    }
                     Err(e) => {
                         res.failed += 1;
                         res.error.get_or_insert(e);
@@ -1080,7 +1121,18 @@ impl Workers {
                 }
             }
         };
-        n0_future::join_all((0..self.streams).map(|_| worker())).await;
+        let sample = async {
+            tokio::time::sleep_until(pace_from).await;
+            let _ = moved_early.set(moved().map(|m| (Instant::now(), m)));
+            std::future::pending::<()>().await
+        };
+        tokio::select! {
+            // The sample first, should its timer and the decision's fire
+            // together.
+            biased;
+            () = sample => unreachable!("the sample waits until the workers end"),
+            _ = n0_future::join_all((0..self.streams).map(|_| worker())) => {}
+        }
         let end = Instant::now();
         let restarted_at = restart.get().copied().flatten();
         Requests {
@@ -1095,6 +1147,30 @@ impl Workers {
             ..results.into_inner().expect("poisoned")
         }
     }
+}
+
+/// Whether requests that need `in_flight` bytes on the wire in all (each
+/// request and its echo) finish by `by`, at the pace the connection's
+/// traffic had from `from` to `now` (each: a time and the bytes moved by
+/// then, both ways, since the requests started). The count includes QUIC's
+/// headers and acknowledgements (a few percent), which the margin of the
+/// restart decision (finish by three quarters of the time) covers.
+///
+/// The pace of the recent past, not since the start: requests whose upload
+/// went fast and whose echoes come back slowly (or the other way round)
+/// move at the pace of the slower direction once the faster one is done.
+fn on_course(from: (Instant, u64), now: (Instant, u64), in_flight: u64, by: Instant) -> bool {
+    let left = in_flight.saturating_sub(now.1);
+    if left == 0 {
+        return true;
+    }
+    let secs = now.0.saturating_duration_since(from.0).as_secs_f64();
+    let moved = now.1.saturating_sub(from.1);
+    if moved == 0 || secs == 0.0 {
+        // No traffic, or no time to measure it.
+        return false;
+    }
+    left as f64 * secs / moved as f64 <= by.saturating_duration_since(now.0).as_secs_f64()
 }
 
 /// What a successful transfer says the link sustains: the lower of its
@@ -1408,6 +1484,44 @@ mod tests {
         Ok(())
     }
 
+    /// No byte counts from the link.
+    fn no_count() -> Option<u64> {
+        None
+    }
+
+    /// A link that carries `streams` requests of `size` and their echoes in
+    /// `took`, at a steady pace: each request takes `took` (a smaller one
+    /// proportionally less), and `moved` counts the bytes at that pace.
+    struct Pace {
+        start: Instant,
+        streams: usize,
+        size: usize,
+        took: Duration,
+    }
+
+    impl Pace {
+        fn new(w: &Workers, took: Duration) -> Self {
+            Self {
+                start: Instant::now(),
+                streams: w.streams,
+                size: w.size,
+                took,
+            }
+        }
+
+        async fn request(&self, payload: Vec<u8>) -> anyhow::Result<()> {
+            let share = payload.len() as f64 / self.size as f64;
+            tokio::time::sleep(self.took.mul_f64(share)).await;
+            Ok(())
+        }
+
+        fn moved(&self) -> Option<u64> {
+            let all = 2.0 * (self.streams * self.size) as f64;
+            let done = self.start.elapsed().as_secs_f64() / self.took.as_secs_f64();
+            Some((all * done) as u64)
+        }
+    }
+
     #[test]
     fn restart_sizes() {
         let size = |s| workers(8, s).restart_size();
@@ -1425,7 +1539,10 @@ mod tests {
     #[tokio::test]
     async fn workers_start_over_with_smaller_requests() {
         let ms = Duration::from_millis;
-        let r = workers(4, 256 * 1024).run(|p| link(p, 16 * 1024)).await;
+        // Nothing moves on the link meanwhile.
+        let r = workers(4, 256 * 1024)
+            .run(|p| link(p, 16 * 1024), || Some(0))
+            .await;
         let (at, cut_off) = r.restart.unwrap();
         // At half the time (give or take a busy test machine).
         assert!(at >= ms(300) && at < ms(500), "{at:?}");
@@ -1445,14 +1562,17 @@ mod tests {
     async fn workers_go_on_after_a_finished_request() {
         let first = AtomicBool::new(true);
         let r = workers(4, 256 * 1024)
-            .run(|p| {
-                let max = if first.swap(false, Ordering::Relaxed) {
-                    usize::MAX
-                } else {
-                    0
-                };
-                link(p, max)
-            })
+            .run(
+                |p| {
+                    let max = if first.swap(false, Ordering::Relaxed) {
+                        usize::MAX
+                    } else {
+                        0
+                    };
+                    link(p, max)
+                },
+                no_count,
+            )
             .await;
         assert!(r.restart.is_none());
         assert_eq!((r.size, r.rtts.len(), r.unfinished), (256 * 1024, 1, 4));
@@ -1460,18 +1580,81 @@ mod tests {
         assert!(r.elapsed >= Duration::from_millis(600), "{:?}", r.elapsed);
     }
 
+    /// None of the first requests finished by half the time, but at the pace
+    /// of the link they finish by three quarters of it (at 400 of 600 ms):
+    /// no restart, they are counted (campaign 4, debug/lossy-extra run 9:
+    /// cut off at 80 %).
+    #[tokio::test]
+    async fn workers_go_on_with_requests_about_to_finish() {
+        let w = workers(4, 256 * 1024);
+        let link = Pace::new(&w, Duration::from_millis(400));
+        let r = w.run(|p| link.request(p), || link.moved()).await;
+        assert!(r.restart.is_none());
+        // The second ones would take until 800 ms.
+        assert_eq!((r.size, r.rtts.len(), r.unfinished), (256 * 1024, 4, 4));
+        assert!(r.first_reply.unwrap() >= Duration::from_millis(400));
+    }
+
+    /// At the pace of the link the first requests would finish only after
+    /// three quarters of the time (at 500 of 600 ms): the workers start over
+    /// with smaller ones.
+    #[tokio::test]
+    async fn workers_start_over_with_requests_too_slow_to_finish() {
+        let w = workers(4, 256 * 1024);
+        let link = Pace::new(&w, Duration::from_millis(500));
+        let r = w.run(|p| link.request(p), || link.moved()).await;
+        let (at, cut_off) = r.restart.unwrap();
+        assert!(at < Duration::from_millis(500), "{at:?}");
+        assert_eq!((cut_off, r.size), (4, 16 * 1024));
+        // 16 KiB take about 31 ms.
+        assert!(r.rtts.len() >= 8, "{}", r.rtts.len());
+    }
+
+    #[test]
+    fn requests_on_course() {
+        let t0 = Instant::now();
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        let by = at(6.0);
+        // Campaign 4, debug/lossy-extra run 9: 8 requests of 63 KiB went up
+        // in the first second, their echoes came back at ~1 Mbps, 412 of
+        // 516 KB by 4 s: done by about 4.8 s.
+        let need = 2 * 8 * 63 * 1024;
+        assert!(on_course((at(2.0), 653_000), (at(4.0), 928_000), need, by));
+        // Run 8: 8 requests of 131 KiB going up at ~1.2 Mbps, no echo yet:
+        // the uplink alone needs another 3.6 s, the echoes as long again.
+        let need = 2 * 8 * 131 * 1024;
+        assert!(!on_course((at(2.0), 300_000), (at(4.0), 600_000), need, by));
+        // Uploaded at once, echoes at a quarter of the pace they were sized
+        // for: two thirds of the bytes are there, but at the recent pace the
+        // rest takes until 9 s.
+        let need = 2_000_000;
+        assert!(!on_course(
+            (at(2.0), 1_125_000),
+            (at(4.0), 1_375_000),
+            need,
+            by
+        ));
+        // All bytes moved (with headers): about to finish.
+        assert!(on_course((at(2.0), 0), (at(4.0), need), need, by));
+        // Nothing moved, or no time to tell.
+        assert!(!on_course((at(2.0), 1000), (at(4.0), 1000), need, by));
+        assert!(!on_course((at(4.0), 0), (at(4.0), 1000), need, by));
+        // Too late anyway.
+        assert!(!on_course((at(2.0), 0), (at(7.0), need - 1), need, by));
+    }
+
     /// Requests that cannot get smaller are not restarted; fast requests end
     /// with the budget.
     #[tokio::test]
     async fn workers_without_restart() {
-        let r = workers(2, 4096).run(|p| link(p, 0)).await;
+        let r = workers(2, 4096).run(|p| link(p, 0), no_count).await;
         assert!(r.restart.is_none());
         assert_eq!((r.rtts.len(), r.unfinished), (0, 2));
         let w = Workers {
             budget: 10 * 4096,
             ..workers(2, 4096)
         };
-        let r = w.run(|p| link(p, 4096)).await;
+        let r = w.run(|p| link(p, 4096), no_count).await;
         assert!(r.restart.is_none() && !r.by_time);
         assert_eq!((r.rtts.len(), r.unfinished), (10, 0));
         assert!(r.elapsed < Duration::from_millis(300), "{:?}", r.elapsed);

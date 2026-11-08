@@ -314,7 +314,7 @@ discovery (QAD) over UDP, and with HTTPS):
 | `connect` | object | `ok`, `lookup_ms` (directory lookup), `connect_ms` (lookup and both handshakes), `handshake_ms` (`connect_ms - lookup_ms`), `path` and `remote_addr` right after connecting, `peer_endpoint`, `error_kind`, `error` |
 | `latency` | object or null | `duration_ms`, `sent`, `ok`, `failed`, `failed_pct`, `rtt_ms` {`min`, `p50`, `p95`, `max`, `mean`}, `rtt_samples`, `jitter_ms`, `direct_fraction`, `final_path` (as in `summary`), `quic` (below, during this phase), `loss` (packet loss once the path had settled: `from_ms` (when counting started, from the start of the phase), `sent_packets`, `lost_packets`, `lost_pct`, counted like `quic`; null if the selected path changed until the end of the phase, or the connection changed; see **Packet loss**) |
 | `upload`, `download` | object or null | `ok`, `requested_bytes` (after the relay cap), `relay_capped`, `bytes`, `duration_ms`, `throughput_mbps`, `second_half_mbps` (throughput in the second half of the transfer; of an upload: of writing, see **Bench phases**; null if it took less than 1 s), `path` (at the end), `limited_by` (`size` or `time`), `error_kind` (`refused` for a listener limit; `no_count`: an upload whose count did not come back in time, see **Bench phases**), `error`, `quic` (during this phase) |
-| `concurrency` | object or null | `ok`, `streams`, `request_bytes` (of the counted requests: 256 KiB, smaller on a slow link or after a restart), `sized_for_mbps` (the requests were made smaller for a slow link: the rate they were sized for, the lowest `throughput_mbps` or `second_half_mbps` of the upload and download; null if not; after a restart it applies to the first requests), `restart` (null, or the phase started over with smaller requests because none had finished by half of `--transfer-time`: `at_ms` (from the start of the phase), `cut_off` (first requests cut off then), `request_bytes` (their size); all other counts, times and the throughput are then of the requests since the restart), `requests` (correct replies), `failed`, `unfinished` (still running at `--transfer-time`, cut off; not failures), `limited_by` (`size` or `time`), `total_bytes` (payload, each way), `duration_ms` (until the last worker ended, from the start of the phase or the restart), `throughput_mbps` (payload, each way), `rtt_ms` (of these requests), `loaded_rtt_ms` and `loaded_samples` (small requests sent meanwhile), `error_kind`, `error`, `quic` (during this phase) |
+| `concurrency` | object or null | `ok`, `streams`, `request_bytes` (of the counted requests: 256 KiB, smaller on a slow link or after a restart), `sized_for_mbps` (the requests were made smaller for a slow link: the rate they were sized for, the lowest `throughput_mbps` or `second_half_mbps` of the upload and download; null if not; after a restart it applies to the first requests), `restart` (null, or the phase started over with smaller requests because none had finished by half of `--transfer-time` and they were not about to (see the `concurrency` phase below): `at_ms` (from the start of the phase), `cut_off` (first requests cut off then), `request_bytes` (their size); all other counts, times and the throughput are then of the requests since the restart), `first_reply_ms` (when the first counted reply arrived, from the start of the phase; null if none did; over half of `--transfer-time` without a `restart`: none had finished by then, but they were about to, so the phase went on), `requests` (correct replies), `failed`, `unfinished` (still running at `--transfer-time`, cut off; not failures), `limited_by` (`size` or `time`), `total_bytes` (payload, each way), `duration_ms` (until the last worker ended, from the start of the phase or the restart), `throughput_mbps` (payload, each way), `rtt_ms` (of these requests), `loaded_rtt_ms` and `loaded_samples` (small requests sent meanwhile), `error_kind`, `error`, `quic` (during this phase) |
 | `idle` | object or null | `idle_ms`, `ok` (a request succeeded afterwards), `survived` (the same connection was still open), `path_before`, `path_after`, `attempts` (at most 3), `recovery_ms` (first request to first reply), `rtt_ms`, `error` |
 | `path` | object | `time_to_direct_ms` (from the start of connecting), `changes`, `final_path` (`unknown` if there was no connection at the end), `final_remote_addr`, `timeline` [{`t_ms`, `path`, `remote_addr`}] (at most 64 entries) |
 | `connection_lost` | object or null | the connection made in the `connect` phase closed before the end of the run: `t_ms` (from the start of connecting), `phase` (the phase running then), `cause` (`closed_here`: this node closed it, usually because a request got no answer and nothing at all arrived from the peer during the request timeout (golem-p2p also closes a connection after a connection error, or when the peer restarted); `idle_timeout`: nothing arrived for QUIC's idle timeout; `closed_by_peer`; `reset`: the peer no longer knew the connection, e.g. it restarted; `error`), `reason` (QUIC's close reason). Null if it stayed open. A loss during the `idle` phase is reported by `idle` instead of the `connection_lost` issue |
@@ -537,14 +537,34 @@ brackets):
    overstated the link (campaign 3). Transfers under 1 s (10 MB at over
    80 Mbps) are judged by their average, so fast paths keep 256 KiB.
    If none of the requests has finished by half of `--transfer-time` (they
-   were still too large: the transfers overstated the link, or it slowed
-   down), the phase starts over (`restart`): the requests in flight are cut
-   off, and for the rest of the time the workers send requests a sixteenth
-   of the size (whole KiB, at least 4 KiB; from 256 KiB that is 16 KiB, of
-   which 8 streams finish a round trip in the remaining 4 s down to about
+   may still be too large: the transfers overstated the link, or it slowed
+   down), the phase starts over (`restart`), unless the requests in flight
+   are about to finish: at the pace the connection carried bytes (both
+   ways, QUIC's UDP counters) from a quarter to half of `--transfer-time`,
+   the bytes they still need (each request and its echo, less what the
+   connection carried since the start of the phase) would be through by
+   three quarters of it (6 s with the defaults). The recent pace, not the
+   average: an upload that went through at once and echoes that come back
+   slowly move at the echoes' pace. When it starts over, the requests in
+   flight are cut off (and cancelled on the wire, see below), and for the
+   rest of the time the workers send requests a sixteenth of the size
+   (whole KiB, at least 4 KiB; from 256 KiB that is 16 KiB, of which 8
+   streams finish a round trip in the remaining 4 s down to about
    0.5 Mbps). Only those are counted, from the restart on. The budget
    (`--concurrency-size`) includes the cut-off requests. On fast paths the
    first request finishes in milliseconds, so this does not happen there.
+   A phase that went on instead has no `restart` and a `first_reply_ms`
+   over half of `--transfer-time`. (Up to campaign 4 every phase without a
+   reply by half the time started over; in one lossy run that cut off
+   requests sized only ~2x too large, 80 % of whose echoes had arrived.)
+   Requests cut off by a restart or the time limit (and the last small
+   request) are cancelled on the wire: golem-p2p resets their streams
+   (`CANCELLED`), so QUIC stops sending them and the listener reads an
+   error instead of the request, or, if it had received the whole request
+   already, fails to send the echo. (Up to campaign 4 only requests not yet
+   written completely were reset, and the rest kept using the link after
+   the cut: after a restart they took most of a lossy uplink, and they
+   reached the listener up to 3.9 s after the phase.)
    Meanwhile small requests every `--interval` measure the round trip under
    load (over the whole phase). The phase ends when the last worker does (a
    small request still running then is dropped); its duration is taken
