@@ -41,9 +41,14 @@
 #                    start a local relay on SOAK_HOST_IP
 #   SOAK_RELAY_CA    certificate to trust for SOAK_RELAY
 #   SOAK_RELAY_METRICS  Prometheus URL of the relay, for the sampler
+#   SOAK_RELAY_MATCH    sample a relay process not started here: a substring
+#                    of its command line (e.g. iroh-relay)
 #   SOAK_DIRECTORY   directory URL; unset: start a local directory
 #   SOAK_TO          node ID of a listener elsewhere; unset: `services` starts one
-#   SOAK_HOST_IP     address for local services and their certificate [127.0.0.1]
+#   SOAK_HOST_IP     address local services bind to [127.0.0.1]; 0.0.0.0 for all
+#   SOAK_PUBLIC_IP   address other hosts reach them on: in the relay's
+#                    certificate and URL and in the directory URL
+#                    [SOAK_HOST_IP, 127.0.0.1 if that is 0.0.0.0]
 #   SOAK_BIND        UDP bind address of the nodes [127.0.0.1:0 if SOAK_HOST_IP
 #                    is 127.0.0.1, else all interfaces]
 #   SOAK_CLIENT_THREADS  tokio worker threads per client process [2]
@@ -138,6 +143,8 @@ RUN=${SOAK_RUN:-$(basename "$DIR")}
 
 GOLEM_P2P=${GOLEM_P2P:-$REPO/target/release/golem-p2p}
 HOST_IP=${SOAK_HOST_IP:-127.0.0.1}
+PUBLIC_IP=${SOAK_PUBLIC_IP:-$HOST_IP}
+[ "$PUBLIC_IP" = 0.0.0.0 ] && PUBLIC_IP=127.0.0.1
 if [ -z "${SOAK_BIND+x}" ]; then
     if [ "$HOST_IP" = 127.0.0.1 ]; then SOAK_BIND=127.0.0.1:0; else SOAK_BIND=; fi
 fi
@@ -222,7 +229,7 @@ start_relay() {
     mkdir -p "$d"
     if [ ! -f "$d/relay.crt" ]; then
         openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
-            -days 30 -subj /CN=golem-soak-relay -addext "subjectAltName=IP:$HOST_IP" \
+            -days 30 -subj /CN=golem-soak-relay -addext "subjectAltName=IP:$PUBLIC_IP" \
             -addext basicConstraints=critical,CA:FALSE -addext extendedKeyUsage=serverAuth \
             -keyout "$d/relay.key" -out "$d/relay.crt" 2>/dev/null
     fi
@@ -244,10 +251,10 @@ quic_bind_addr = "$HOST_IP:$quic"
 EOF
     "$bin" --config-path "$d/relay.toml" </dev/null >"$d/relay.log" 2>&1 &
     echo $! >"$DIR/pids/relay.pid"
-    wait_until 20 curl -skf -o /dev/null "https://$HOST_IP:$https/ping" || die "relay did not start, see $d/relay.log"
-    RELAY_SPEC="https://$HOST_IP:$https,quic=$quic"
+    wait_until 20 curl -skf -o /dev/null "https://$PUBLIC_IP:$https/ping" || die "relay did not start, see $d/relay.log"
+    RELAY_SPEC="https://$PUBLIC_IP:$https,quic=$quic"
     RELAY_CA=$d/relay.crt
-    RELAY_METRICS="http://$HOST_IP:$metrics/metrics"
+    RELAY_METRICS="http://$PUBLIC_IP:$metrics/metrics"
     setenv RELAY_SPEC "$RELAY_SPEC"
     setenv RELAY_CA "$RELAY_CA"
     setenv RELAY_METRICS "$RELAY_METRICS"
@@ -259,7 +266,10 @@ start_directory() {
         --listen "$HOST_IP:0" --stats-interval 30s </dev/null >"$DIR/directory.jsonl" 2>"$DIR/directory.err" &
     echo $! >"$DIR/pids/directory.pid"
     wait_until 10 grep -q '"event":"directory"' "$DIR/directory.jsonl" || die "directory did not start"
-    DIRECTORY_URL=$(python3 -c 'import json,sys; print(json.loads(open(sys.argv[1]).readline())["url"])' "$DIR/directory.jsonl")
+    # The URL with the address other hosts reach the directory on.
+    DIRECTORY_URL=$(python3 -c 'import json, sys, urllib.parse as u
+url = u.urlsplit(json.loads(open(sys.argv[1]).readline())["url"])
+print(url._replace(netloc=f"{sys.argv[2]}:{url.port}").geturl())' "$DIR/directory.jsonl" "$PUBLIC_IP")
     setenv DIRECTORY_URL "$DIRECTORY_URL"
     log "directory $DIRECTORY_URL"
 }
@@ -354,6 +364,7 @@ cmd_sample() {
     load_env
     local args=(--out "$DIR/samples.jsonl" --interval "$SAMPLE_INTERVAL" --run "$RUN")
     [ -f "$DIR/relay/relay.toml" ] && args+=(--match "relay=$DIR/relay/relay.toml")
+    [ -n "${SOAK_RELAY_MATCH:-}" ] && args+=(--match "relay=$SOAK_RELAY_MATCH")
     [ -n "$RELAY_METRICS" ] && args+=(--prom "relay=$RELAY_METRICS")
     python3 "$HERE/sampler.py" "${args[@]}" </dev/null 2>"$DIR/sampler.err" &
     echo $! >"$DIR/pids/sampler.pid"
@@ -437,6 +448,8 @@ json.dump({
     "cpu_quota": "${SOAK_CPU_QUOTA:-600%}", "memory_max": "${SOAK_MEMORY_MAX:-6G}",
     "host": platform.node(), "nproc": os.cpu_count(),
     "binary": "$GOLEM_P2P",
+    "env": {k: v for k, v in os.environ.items()
+            if k.startswith(("SOAK_", "MALLOC_", "GLIBC_TUNABLES", "RUST_LOG", "TOKIO_"))},
 }, open(sys.argv[1], "w"), indent=1)
 EOF
     "$GOLEM_P2P" --version >"$DIR/version.txt" 2>&1 || true

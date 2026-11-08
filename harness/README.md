@@ -480,22 +480,30 @@ served (KiB per connection) and against the directory's stored records.
 host and clients on others: `services` starts what is not given by
 `SOAK_RELAY` (+ `SOAK_RELAY_CA`, `SOAK_RELAY_METRICS`), `SOAK_DIRECTORY` and
 `SOAK_TO`, and writes `DIR/env`; `clients`, `churn` and `sample` read it (or
-the same variables); `stop DIR [load|all]` ends them; `SOAK_HOST_IP` sets
-the address local services bind to and are certified for, `SOAK_BIND` the
-nodes' UDP address, `GOLEM_P2P` and `IROH_RELAY_BIN` the binaries. Every
-process gets `--run-id <basename of DIR>` (`SOAK_RUN`), so run `sample` on
-every host with the same run directory name, and copy the client hosts'
-`clients/`, `churn/` and `samples.jsonl` into one directory for `summarize`.
-For example, with the services on the relay VM and clients on the build
-machine:
+the same variables); `stop DIR [load|all]` ends them. `SOAK_HOST_IP` is the
+address local services bind to (`0.0.0.0` for all), `SOAK_PUBLIC_IP` the
+address other hosts reach them on (it goes into the local relay's
+certificate and URL and into the directory URL), `SOAK_BIND` the nodes' UDP
+address (empty: all interfaces), `GOLEM_P2P` and `IROH_RELAY_BIN` the
+binaries. Every process gets `--run-id <basename of DIR>` (`SOAK_RUN`), so
+use the same run directory name on every host, run `sample` on each, and
+copy the client hosts' `clients/`, `churn/` and `samples.jsonl` (renamed,
+e.g. `samples-clients.jsonl`, and appended) into one directory for
+`summarize`. A relay started by `services` needs its certificate on the
+client hosts at the same path (`DIR/relay/relay.crt`). For example, with
+the services on the relay VM and clients on the build machine:
 
 ```sh
 # relay VM: directory and listener, using the VM's own iroh-relay
-SOAK_HOST_IP=0.0.0.0 SOAK_BIND= SOAK_SLICE= SOAK_RELAY=https://RELAY:443,quic=7842 \
-  SOAK_RELAY_CA=relay.crt SOAK_RELAY_METRICS=http://127.0.0.1:9090/metrics \
+SOAK_HOST_IP=0.0.0.0 SOAK_PUBLIC_IP=VM_IP SOAK_BIND= SOAK_SLICE= \
+  SOAK_RELAY=https://VM_IP:443,quic=7842 SOAK_RELAY_CA=relay.crt \
+  SOAK_RELAY_METRICS=http://127.0.0.1:9090/metrics SOAK_RELAY_MATCH=iroh-relay \
   soak.sh services --out ~/soak/r1 && soak.sh sample --out ~/soak/r1
-# client host (DIR/env copied from the VM, directory URL with the VM's address)
+# client host: DIR/env (and the relay certificate) copied from the VM
 SOAK_BIND= soak.sh clients --out ~/soak/r1 --clients 100 && soak.sh sample --out ~/soak/r1
+soak.sh churn --out ~/soak/r1 --workers 6 --session 3s     # or churn
+# at the end, on every host
+soak.sh stop --out ~/soak/r1
 ```
 
 ## Driving it from a controller
