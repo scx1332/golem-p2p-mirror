@@ -31,7 +31,11 @@ sized for the lowest of the transfers' throughput and second-half
 throughput; `transfer_second_half_mbps` in the summary) and
 `concurrency.restart` (the phase started over with smaller requests because
 none had finished by half the time limit; `concurrency.restarts` and
-`first_request_bytes`). The verdict checks judge each format by the
+`first_request_bytes`), and the one after campaign 4, which restarts only if
+the requests in flight are not on course to finish by three quarters of the
+time limit and adds `concurrency.first_reply_ms` (`concurrency.went_on`: runs
+without a restart whose first reply came after half the time limit, i.e.
+the phase went on instead of restarting). The verdict checks judge each format by the
 rules of its bench (e.g. the packet_loss threshold: 2 % of the whole
 connection in campaign 1, 0.5 % of at least 50 latency-phase packets after,
 counted from when the path had settled once `latency.loss` exists).
@@ -418,6 +422,16 @@ def latency_loss(peers):
     }
 
 
+def went_on(rep):
+    """The concurrency phase had no reply by half of --transfer-time but went
+    on instead of restarting (bench after campaign 4)."""
+    c = get(rep, "peer", "concurrency") or {}
+    t = get(rep, "settings", "transfer_time_ms")
+    first = c.get("first_reply_ms")
+    return bool(get(rep, "peer", "connect", "ok") and not c.get("restart")
+                and first is not None and t and first > t / 2)
+
+
 def summarize_scenario(sc, runs, notes):
     reps = [r["report"] for r in runs if r["report"]]
     has_peer = any(get(r, "peer") for r in reps) or any((r["meta"] or {}).get("to") for r in runs)
@@ -506,11 +520,21 @@ def summarize_scenario(sc, runs, notes):
                                          if get(p, "concurrency", "request_bytes") is not None})}
                if any("sized_for_mbps" in (p.get("concurrency") or {}) for p in peers) else {}),
             # After campaign 3: the phase started over with smaller requests
-            # (request_bytes above are then the smaller ones).
+            # (request_bytes above are then the smaller ones), because none
+            # had finished by half the time limit (after campaign 4: and they
+            # were not on course to finish by three quarters of it).
             **({"restarts": sum(1 for p in peers if get(p, "concurrency", "restart")),
                 "first_request_bytes": sorted({get(p, "concurrency", "restart", "request_bytes") for p in peers
                                                if get(p, "concurrency", "restart")})}
                if any("restart" in (p.get("concurrency") or {}) for p in peers) else {}),
+            # After campaign 4: no reply by half the time limit, but the
+            # requests in flight were about to finish, so the phase went on
+            # instead of restarting (no restart, first_reply_ms over half of
+            # --transfer-time).
+            **({"went_on": sum(1 for rep in reps if went_on(rep)),
+                "first_reply_ms_max": max((get(p, "concurrency", "first_reply_ms") or 0 for p in peers),
+                                          default=None)}
+               if any("first_reply_ms" in (p.get("concurrency") or {}) for p in peers) else {}),
         } if any(p.get("concurrency") for p in peers) else None,
         "transfer_limited_by": dict(Counter(f"{sec}:{get(p, sec, 'limited_by')}" for p in peers
                                             for sec in ("upload", "download", "concurrency")
