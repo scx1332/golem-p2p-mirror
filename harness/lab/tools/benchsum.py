@@ -22,7 +22,9 @@ Summary fields ("-" = not measured):
   lat_lost         the same, latency phase only, as the packet_loss hint judges it: lost/sent
                    of peer.latency.loss (counted once the path had settled; "unsettled" if
                    null) where the CLI reports it, else of peer.latency.quic (campaign 2)
-  up/down/conc     Mbps of upload, download, concurrency (path at the end in [])
+  up/down/conc     Mbps of upload, download, concurrency (path at the end in []); up/down
+                   add /<Mbps in the second half> when that was under half the average,
+                   conc adds :restart when the phase started over with smaller requests
   rc               --compare-relay: rtt p50 / up / down over the relay; :FAIL if not
                    everything worked, :UNREACHABLE if nothing got through (newer CLIs)
   idle             --idle: survived/ok, path before->after, recovery ms
@@ -137,7 +139,11 @@ def line(d):
         elif not t.get("ok"):
             res[k] = "FAIL:" + str(t.get("error_kind"))
         else:
-            res[k] = fmt(t.get("throughput_mbps")) + (f"[{t['path']}]" if t.get("path") else "")
+            v = fmt(t.get("throughput_mbps"))
+            half, avg = t.get("second_half_mbps"), t.get("throughput_mbps")
+            if half is not None and avg is not None and half < avg / 2:
+                v += "/" + fmt(half)
+            res[k] = v + (f"[{t['path']}]" if t.get("path") else "") + (":restart" if t.get("restart") else "")
     rc = rep.get("relay_compare")
     if rc:
         if rc.get("skipped"):
