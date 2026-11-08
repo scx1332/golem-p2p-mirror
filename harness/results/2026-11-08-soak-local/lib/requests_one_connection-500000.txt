@@ -1,0 +1,20 @@
+== soak_requests_one_connection cycles=500000 start 01:19:11
+
+running 1 test
+test soak_requests_one_connection ... cycles=     0 t=    0.0s rss_kb=  20416 anon_kb=   5604 heap_used_kb=   7631 heap_free_kb=   3336 tasks=  27 fds=  14 conns=1 slots=0 locks=0 cached=1/1 in=1 out=0 closed=0 streams=1000 refused=0 failed_hs=0
+cycles= 50000 t=    1.2s rss_kb=  21376 anon_kb=   6564 heap_used_kb=   7686 heap_free_kb=   4141 tasks=  27 fds=  14 conns=1 slots=0 locks=0 cached=1/1 in=1 out=0 closed=0 streams=51000 refused=0 failed_hs=0
+cycles=100000 t=    2.5s rss_kb=  21508 anon_kb=   6696 heap_used_kb=   7726 heap_free_kb=   4225 tasks=  28 fds=  14 conns=1 slots=0 locks=0 cached=1/1 in=1 out=0 closed=0 streams=101000 refused=0 failed_hs=0
+cycles=150000 t=    3.7s rss_kb=  21576 anon_kb=   6764 heap_used_kb=   7739 heap_free_kb=   4280 tasks=  27 fds=  14 conns=1 slots=0 locks=0 cached=1/1 in=1 out=0 closed=0 streams=151000 refused=0 failed_hs=0
+cycles=200000 t=    5.0s rss_kb=  21320 anon_kb=   6764 heap_used_kb=   7726 heap_free_kb=   4293 tasks=  28 fds=  14 conns=1 slots=0 locks=0 cached=1/1 in=1 out=0 closed=0 streams=201000 refused=0 failed_hs=0
+cycles=250000 t=    6.2s rss_kb=  21332 anon_kb=   6776 heap_used_kb=   7747 heap_free_kb=   4272 tasks=  27 fds=  14 conns=1 slots=0 locks=0 cached=1/1 in=1 out=0 closed=0 streams=251000 refused=0 failed_hs=0
+cycles=300000 t=    7.4s rss_kb=  21332 anon_kb=   6776 heap_used_kb=   7753 heap_free_kb=   4266 tasks=  29 fds=  14 conns=1 slots=0 locks=0 cached=1/1 in=1 out=0 closed=0 streams=301000 refused=0 failed_hs=0
+cycles=350000 t=    8.6s rss_kb=  21344 anon_kb=   6788 heap_used_kb=   7764 heap_free_kb=   4267 tasks=  27 fds=  14 conns=1 slots=0 locks=0 cached=1/1 in=1 out=0 closed=0 streams=351000 refused=0 failed_hs=0
+cycles=400000 t=    9.9s rss_kb=  21344 anon_kb=   6788 heap_used_kb=   7765 heap_free_kb=   4266 tasks=  27 fds=  14 conns=1 slots=0 locks=0 cached=1/1 in=1 out=0 closed=0 streams=401000 refused=0 failed_hs=0
+cycles=450000 t=   11.2s rss_kb=  21472 anon_kb=   6788 heap_used_kb=   7773 heap_free_kb=   4258 tasks=  27 fds=  14 conns=1 slots=0 locks=0 cached=1/1 in=1 out=0 closed=0 streams=451000 refused=0 failed_hs=0
+cycles=500000 t=   12.5s rss_kb=  21504 anon_kb=   6820 heap_used_kb=   7788 heap_free_kb=   4243 tasks=  28 fds=  14 conns=1 slots=0 locks=0 cached=1/1 in=1 out=0 closed=0 streams=501000 refused=0 failed_hs=0
+baseline: heap=Some((7631, 3336)) anon_kb=5604 tasks=27; after 500000 requests: heap=Some((7788, 4243)) anon_kb=6820 tasks=28; memory (heap in use, or anon) per request after warm-up 0.16 B
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 12.58s
+
+exit 0 end 01:19:24

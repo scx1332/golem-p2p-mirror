@@ -1,0 +1,31 @@
+
+running 1 test
+test soak_server_direct ... cycles=     0 t=    0.2s rss_kb=  23800 anon_kb=   8984 tasks=  19 fds=  12 conns=0 slots=0 locks=0 cached=8/8 in=8 out=0 closed=8 streams=40 refused=0 failed_hs=0
+cycles=   200 t=    5.3s rss_kb=  53636 anon_kb=  38756 tasks= 224 fds=  12 conns=0 slots=0 locks=0 cached=208/208 in=208 out=0 closed=208 streams=1040 refused=0 failed_hs=0
+cycles=   400 t=   10.0s rss_kb=  57492 anon_kb=  42612 tasks= 424 fds=  12 conns=0 slots=0 locks=0 cached=408/408 in=408 out=0 closed=408 streams=2040 refused=0 failed_hs=0
+cycles=   600 t=   14.9s rss_kb=  61200 anon_kb=  46320 tasks= 624 fds=  12 conns=0 slots=0 locks=0 cached=608/608 in=608 out=0 closed=608 streams=3040 refused=0 failed_hs=0
+cycles=   800 t=   20.0s rss_kb=  64936 anon_kb=  50056 tasks= 824 fds=  12 conns=0 slots=0 locks=0 cached=808/808 in=808 out=0 closed=808 streams=4040 refused=0 failed_hs=0
+cycles=  1000 t=   25.2s rss_kb=  68724 anon_kb=  53844 tasks=1024 fds=  12 conns=0 slots=0 locks=0 cached=1008/1008 in=1008 out=0 closed=1008 streams=5040 refused=0 failed_hs=0
+cycles=  1200 t=   30.2s rss_kb=  71992 anon_kb=  57112 tasks=1224 fds=  12 conns=0 slots=0 locks=0 cached=1208/1208 in=1208 out=0 closed=1208 streams=6040 refused=0 failed_hs=0
+cycles=  1400 t=   35.3s rss_kb=  74560 anon_kb=  59680 tasks=1424 fds=  12 conns=0 slots=0 locks=0 cached=1408/1408 in=1408 out=0 closed=1408 streams=7040 refused=0 failed_hs=0
+cycles=  1600 t=   40.5s rss_kb=  78260 anon_kb=  63380 tasks=1624 fds=  12 conns=0 slots=0 locks=0 cached=1608/1608 in=1608 out=0 closed=1608 streams=8040 refused=0 failed_hs=0
+cycles=  1800 t=   45.6s rss_kb=  82552 anon_kb=  67672 tasks=1824 fds=  12 conns=0 slots=0 locks=0 cached=1808/1808 in=1808 out=0 closed=1808 streams=9040 refused=0 failed_hs=0
+cycles=  2000 t=   50.7s rss_kb=  85616 anon_kb=  70736 tasks=2024 fds=  12 conns=0 slots=0 locks=0 cached=2008/2008 in=2008 out=0 closed=2008 streams=10040 refused=0 failed_hs=0
+waiting 65 s for idle per-remote state to expire
+cycles=  2000 t=  115.7s rss_kb=  85744 anon_kb=  70736 tasks=   8 fds=  12 conns=0 slots=0 locks=0 cached=2008/2008 in=2008 out=0 closed=2008 streams=10040 refused=0 failed_hs=0
+baseline: rss_kb=23800 anon_kb=8984 tasks=19 fds=12; after 2000 sessions and idle: rss_kb=85744 anon_kb=70736 tasks=8 fds=12; growth per session after warm-up: rss 17686 B, anon 17686 B
+
+thread 'soak_server_direct' (1782943) panicked at crates/golem-p2p/tests/soak.rs:325:5:
+memory grows by 17686 B per session
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+2026-11-08T00:49:35.700139Z ERROR iroh::socket: Endpoint dropped without calling `Endpoint::close`. Aborting ungracefully.
+FAILED
+
+failures:
+
+failures:
+    soak_server_direct
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 115.75s
+
+exit 101

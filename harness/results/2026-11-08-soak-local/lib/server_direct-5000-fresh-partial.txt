@@ -1,0 +1,10 @@
+
+running 1 test
+test soak_server_direct ... cycles=     0 t=    0.4s rss_kb=  23472 anon_kb=   9016 heap_used_kb=   4589 heap_free_kb=   6850 tasks=  18 fds=  12 conns=0 slots=0 locks=0 cached=8/8 in=8 out=0 closed=8 streams=40 refused=0 failed_hs=0
+cycles=   500 t=   25.1s rss_kb=  59088 anon_kb=  44628 heap_used_kb=  13966 heap_free_kb=  34029 tasks= 520 fds=  12 conns=0 slots=0 locks=0 cached=508/508 in=508 out=0 closed=508 streams=2540 refused=0 failed_hs=0
+cycles=  1000 t=   49.9s rss_kb=  67248 anon_kb=  53472 heap_used_kb=  22164 heap_free_kb=  34455 tasks=1020 fds=  12 conns=0 slots=0 locks=0 cached=1008/1008 in=1008 out=0 closed=1008 streams=5040 refused=0 failed_hs=0
+cycles=  1500 t=   73.7s rss_kb=  72860 anon_kb=  59276 heap_used_kb=  26282 heap_free_kb=  35929 tasks=1240 fds=  12 conns=0 slots=0 locks=0 cached=1508/1508 in=1508 out=0 closed=1508 streams=7540 refused=0 failed_hs=0
+cycles=  2000 t=   99.3s rss_kb=  74672 anon_kb=  61088 heap_used_kb=  27424 heap_free_kb=  36615 tasks=1240 fds=  12 conns=0 slots=0 locks=0 cached=2008/2008 in=2008 out=0 closed=2008 streams=10040 refused=0 failed_hs=0
+cycles=  2500 t=  123.2s rss_kb=  69368 anon_kb=  55784 heap_used_kb=  27885 heap_free_kb=  30782 tasks=1232 fds=  12 conns=0 slots=0 locks=0 cached=2508/2508 in=2508 out=0 closed=2508 streams=12540 refused=0 failed_hs=0
+cycles=  3000 t=  147.7s rss_kb=  70252 anon_kb=  56668 heap_used_kb=  28466 heap_free_kb=  31077 tasks=1232 fds=  12 conns=0 slots=0 locks=0 cached=3008/3008 in=3008 out=0 closed=3008 streams=15040 refused=0 failed_hs=0
+cycles=  3500 t=  171.6s rss_kb=  79948 anon_kb=  66428 heap_used_kb=  29389 heap_free_kb=  39962 tasks=1256 fds=  12 conns=0 slots=0 locks=0 cached=3508/3508 in=3508 out=0 closed=3508 streams=17540 refused=0 failed_hs=0

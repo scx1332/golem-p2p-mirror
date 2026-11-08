@@ -419,7 +419,9 @@ the build machine can shift the numbers measured there.
 the resources of every process, to find leaks, unbounded growth, slowdowns
 and failures under churn in the library, the CLI's listener and directory,
 and the iroh relay. It needs only the CLI binary, `iroh-relay` 1.4.1 (for a
-local relay), `python3`, `openssl` and `curl`; no root.
+local relay), `python3`, `openssl` and `curl`; no root. Results of the first
+soak (local, 2.5 h runs, findings in `notes.md`):
+[results/2026-11-08-soak-local/](results/2026-11-08-soak-local/).
 
 ```sh
 cargo build --release -p golem-p2p-cli

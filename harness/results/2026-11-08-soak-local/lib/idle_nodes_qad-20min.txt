@@ -1,0 +1,42 @@
+== soak_idle_nodes_qad minutes=20 start 01:14:00
+
+running 1 test
+test soak_idle_nodes_qad ... cycles=     0 t=    0.0s rss_kb=  35248 anon_kb=  19180 heap_used_kb=  81883 heap_free_kb=   2904 tasks= 341 fds=  97 conns=0 slots=0 locks=0 cached=0/0 in=0 out=0 closed=0 streams=0 refused=0 failed_hs=0
+cycles=     1 t=   60.0s rss_kb=  41020 anon_kb=  25232 heap_used_kb=  87321 heap_free_kb=   3454 tasks= 581 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=240 refused=0 failed_hs=0
+cycles=     2 t=  120.0s rss_kb=  40912 anon_kb=  25380 heap_used_kb=  87504 heap_free_kb=   3443 tasks= 599 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=500 refused=0 failed_hs=0
+cycles=     3 t=  180.0s rss_kb=  41380 anon_kb=  25744 heap_used_kb=  87811 heap_free_kb=   3524 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=740 refused=0 failed_hs=0
+cycles=     4 t=  240.0s rss_kb=  41532 anon_kb=  25896 heap_used_kb=  87895 heap_free_kb=   3544 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=980 refused=0 failed_hs=0
+cycles=     5 t=  300.0s rss_kb=  41804 anon_kb=  26104 heap_used_kb=  88008 heap_free_kb=   3675 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=1220 refused=0 failed_hs=0
+cycles=     6 t=  360.0s rss_kb=  42636 anon_kb=  26936 heap_used_kb=  88030 heap_free_kb=   4125 tasks= 600 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=1460 refused=0 failed_hs=0
+cycles=     7 t=  420.0s rss_kb=  42684 anon_kb=  26984 heap_used_kb=  88050 heap_free_kb=   4150 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=1700 refused=0 failed_hs=0
+cycles=     8 t=  480.0s rss_kb=  42668 anon_kb=  27032 heap_used_kb=  88068 heap_free_kb=   4159 tasks= 600 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=1940 refused=0 failed_hs=0
+cycles=     9 t=  540.0s rss_kb=  40432 anon_kb=  27096 heap_used_kb=  88070 heap_free_kb=   4285 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=2180 refused=0 failed_hs=0
+cycles=    10 t=  600.0s rss_kb=  37108 anon_kb=  27156 heap_used_kb=  88248 heap_free_kb=   4159 tasks= 609 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=2420 refused=0 failed_hs=0
+cycles=    11 t=  660.0s rss_kb=  37152 anon_kb=  27536 heap_used_kb=  88100 heap_free_kb=   4511 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=2660 refused=0 failed_hs=0
+cycles=    12 t=  720.0s rss_kb=  37120 anon_kb=  27548 heap_used_kb=  88065 heap_free_kb=   4546 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=2900 refused=0 failed_hs=0
+cycles=    13 t=  780.0s rss_kb=  37132 anon_kb=  27560 heap_used_kb=  88194 heap_free_kb=   4417 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=3140 refused=0 failed_hs=0
+cycles=    14 t=  840.0s rss_kb=  37236 anon_kb=  27624 heap_used_kb=  88242 heap_free_kb=   4401 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=3380 refused=0 failed_hs=0
+cycles=    15 t=  900.0s rss_kb=  37188 anon_kb=  27668 heap_used_kb=  88233 heap_free_kb=   4446 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=3620 refused=0 failed_hs=0
+cycles=    16 t=  960.0s rss_kb=  37460 anon_kb=  27724 heap_used_kb=  88213 heap_free_kb=   4467 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=3860 refused=0 failed_hs=0
+cycles=    17 t= 1020.0s rss_kb=  37472 anon_kb=  27736 heap_used_kb=  88231 heap_free_kb=   4464 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=4100 refused=0 failed_hs=0
+cycles=    18 t= 1080.0s rss_kb=  37388 anon_kb=  27748 heap_used_kb=  88233 heap_free_kb=   4462 tasks= 601 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=4340 refused=0 failed_hs=0
+cycles=    19 t= 1140.0s rss_kb=  37316 anon_kb=  27748 heap_used_kb=  88211 heap_free_kb=   4484 tasks= 581 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=4580 refused=0 failed_hs=0
+cycles=    20 t= 1200.0s rss_kb=  52040 anon_kb=  40368 heap_used_kb=  88533 heap_free_kb=  16990 tasks= 581 fds=  97 conns=20 slots=0 locks=0 cached=20/20 in=20 out=0 closed=0 streams=4820 refused=0 failed_hs=0
+qad=true: 20 nodes for 20 min: heap Some((87504, 3443)) at minute 2, Some((88533, 16990)) at the end; tasks 599 -> 581; growth 32.3 KiB per minute (1574 B per node and minute)
+2026-11-08T01:34:06.081609Z ERROR iroh::socket::transports::relay: relay_recv_channel closed
+2026-11-08T01:34:06.082205Z ERROR iroh::socket::transports::relay: relay_recv_channel closed
+2026-11-08T01:34:06.082258Z ERROR iroh::socket::transports::relay: relay_recv_channel closed
+2026-11-08T01:34:06.082820Z ERROR iroh::socket::transports::relay: relay_recv_channel closed
+2026-11-08T01:34:06.082849Z ERROR iroh::socket::transports::relay: relay_recv_channel closed
+2026-11-08T01:34:06.084329Z ERROR iroh::socket::transports::relay: relay_recv_channel closed
+2026-11-08T01:34:06.085897Z ERROR iroh::socket::transports::relay: relay_recv_channel closed
+2026-11-08T01:34:06.086015Z ERROR iroh::socket::transports::relay: relay_recv_channel closed
+2026-11-08T01:34:06.087424Z ERROR iroh::socket::transports::relay: relay_recv_channel closed
+2026-11-08T01:34:06.087935Z ERROR iroh::socket::transports::relay: relay_recv_channel closed
+2026-11-08T01:34:06.088051Z ERROR iroh::socket::transports::relay: relay_recv_channel closed
+2026-11-08T01:34:06.090616Z ERROR iroh::socket::transports::relay: relay_recv_channel closed
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 1205.74s
+
+exit 0 end 01:34:06

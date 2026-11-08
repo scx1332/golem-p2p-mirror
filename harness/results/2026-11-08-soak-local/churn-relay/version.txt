@@ -1,0 +1,1 @@
+golem-p2p-cli 0.1.0
