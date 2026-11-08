@@ -30,7 +30,9 @@ results/<date>-<name>/   raw data and summaries of campaigns
 
 Results of benchmark campaign 1: [results/2026-11-07-campaign1/](results/2026-11-07-campaign1/);
 campaign 2 and its comparison with campaign 1: [results/2026-11-07-campaign2/](results/2026-11-07-campaign2/)
-(`compare.md`).
+(`compare.md`); campaign 3, its comparison with campaign 2 (`compare.md`) and
+campaigns 1-3 side by side (`compare3.md`):
+[results/2026-11-08-campaign3/](results/2026-11-08-campaign3/).
 
 ## Requirements
 
@@ -344,9 +346,10 @@ Layout of a campaign directory: `scenarios.jsonl` (one line per scenario:
 (parallel relay runs: `run<r>-<i>`), `relay-metrics.txt` (the real relay's
 byte counters before and after each step that uses it), `notes.json`
 (hand-written observations merged into the summary), `summary.json`,
-`table.md`, `debug/` (extra captures), and for campaign 2 `versions.txt`
-(the binary on each machine) and `compare.json`/`compare.md` (against
-campaign 1). Keys of the local test nodes go to
+`table.md`, `debug/` (extra captures and runs, not summarized), and from
+campaign 2 on `versions.txt` (the binary on each machine) and
+`compare.json`/`compare.md` (against the previous campaign; campaign 3 also
+`compare3.json`/`compare3.md` over campaigns 1-3). Keys of the local test nodes go to
 `DIR/.keys/` (git-ignored). `summary.json` has per scenario the run counts,
 final paths, medians/percentiles of the bench measurements, `bind_ms`, and
 `verdict_checks`: the bench's verdict and net report compared with the known
