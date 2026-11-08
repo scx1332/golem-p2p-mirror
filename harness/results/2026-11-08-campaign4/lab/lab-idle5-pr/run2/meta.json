@@ -1,0 +1,23 @@
+{
+ "bench_args": "--relay https://198.18.0.1,quic=7842 --directory http://198.18.0.1:8080/ --relay-ca /run/gpl/relay/relay.crt --to 0x9113352563c48b8081fae75a419feb5a06a11fb1 --idle 60s",
+ "bencher": "idle4",
+ "bencher_delay": "10ms",
+ "bencher_jitter": null,
+ "bencher_loss": null,
+ "bencher_profile": "port-restricted",
+ "bencher_rate": null,
+ "bencher_udp_timeout": 5,
+ "bencher_uplink": "lab",
+ "deployed": "1484e3a 2026-11-08T01:06:40Z",
+ "listen_args": "--relay https://198.18.0.1,quic=7842 --directory http://198.18.0.1:8080/ --relay-ca /run/gpl/relay/relay.crt ",
+ "listener": "idle3",
+ "listener_delay": "10ms",
+ "listener_jitter": null,
+ "listener_loss": null,
+ "listener_profile": "port-restricted",
+ "listener_rate": null,
+ "listener_udp_timeout": 5,
+ "listener_uplink": "lab",
+ "run": "lab-idle5-pr-r2",
+ "to": "0x9113352563c48b8081fae75a419feb5a06a11fb1"
+}

@@ -1,0 +1,14 @@
+topology: /home/ubuntu/golem-p2p-lab/topologies/campaign-real.topo
+services (namespace gpl-svc):
+  relay          running  pid 153760
+  directory      running  pid 153769
+  reflector      running  pid 153775
+  relay https://198.18.0.1,quic=7842 (QAD 198.18.0.1:7842/udp, CA /run/gpl/relay/relay.crt), directory http://198.18.0.1:8080/
+  reflector udp 198.18.0.2:3478,198.18.0.2:3479,198.18.0.3:3478,198.18.0.4:4000 tcp 198.18.0.2:3478
+nodes:
+  NAME         PROFILE          UPLINK NODE_IP        PUBLIC_IP      LINK (procs)
+  real1        easy             real   192.168.1.2    real           (0)
+  real2        symmetric        real   192.168.2.2    real           (0)
+  real3        udp-blocked      real   192.168.3.2    real           (0)
+  lab1         easy             lab    192.168.4.2    198.18.4.2     (0)
+root namespace: table ip gpl_uplink present, ip_forward=1 (was 0), masquerade out of enp5s0

@@ -1,0 +1,2 @@
+2026-11-08T01:51:47.713159Z  INFO golem_p2p::endpoint: golem-p2p endpoint bound node_id=0x3817464356fd1abbd099791276c4898a6310e73b endpoint_id=9693d98783
+2026-11-08T01:52:25.560904Z  INFO golem_p2p::endpoint: golem-p2p endpoint bound node_id=0xa352814b135f809e9ffdf8edcde86f84c5d6dfb6 endpoint_id=bb241a02de
