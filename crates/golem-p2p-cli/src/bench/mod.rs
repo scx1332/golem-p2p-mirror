@@ -628,7 +628,6 @@ impl PeerBench<'_> {
         let deadline = tokio::time::Instant::from_std(start + args.transfer_time);
         let reserved = AtomicU64::new(0);
         let seq = AtomicU64::new(0);
-        let done = AtomicBool::new(false);
         let by_time = AtomicBool::new(false);
         let results = Mutex::new(Requests::default());
         let worker = || async {
@@ -665,36 +664,34 @@ impl PeerBench<'_> {
                 }
             }
         };
+        // The phase ends when the last worker does: its duration is taken
+        // then, not when the small requests below notice (campaign 3: on fast
+        // paths every duration snapped to their 200 ms ticks).
         let workers = async {
             n0_future::join_all((0..args.streams).map(|_| worker())).await;
-            done.store(true, Ordering::Relaxed);
+            start.elapsed()
         };
-        let small = async {
-            let mut rtts = Vec::new();
+        // Small requests every --interval while the workers run; the one in
+        // flight when they are done is dropped.
+        let mut small = Vec::new();
+        let small_requests = async {
             let mut tick = tokio::time::interval(args.interval);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut n = 0;
-            while !done.load(Ordering::Relaxed) {
+            for n in 1.. {
                 tick.tick().await;
-                if done.load(Ordering::Relaxed) {
-                    break;
-                }
-                n += 1;
                 let payload = probe::payload(n, self.payload_size);
                 let t = Instant::now();
-                let r = tokio::select! {
-                    r = ep.request(to, &payload) => Some(r),
-                    _ = wait_flag(&done) => None,
-                };
-                match r {
-                    Some(Ok(reply)) if reply.ends_with(&payload) => rtts.push(t.elapsed()),
-                    _ => {}
+                if let Ok(reply) = ep.request(to, &payload).await
+                    && reply.ends_with(&payload)
+                {
+                    small.push(t.elapsed());
                 }
             }
-            rtts
         };
-        let ((), small) = tokio::join!(workers, small);
-        let elapsed = start.elapsed();
+        let elapsed = tokio::select! {
+            elapsed = workers => elapsed,
+            () = small_requests => unreachable!("the small requests go on until the workers end"),
+        };
         let Requests {
             rtts,
             failed,
@@ -1186,12 +1183,6 @@ fn path_report(ep: &Endpoint, to: NodeId, log: &PathLog, t0: Instant) -> PathRep
                 remote_addr: e.path.remote,
             })
             .collect(),
-    }
-}
-
-async fn wait_flag(flag: &AtomicBool) {
-    while !flag.load(Ordering::Relaxed) {
-        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 

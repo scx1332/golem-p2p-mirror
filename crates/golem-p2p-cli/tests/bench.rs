@@ -477,6 +477,45 @@ async fn phases_end_at_the_time_limit() {
     }
 }
 
+/// The concurrency phase lasts until its workers are done, not until the
+/// small requests sent meanwhile (every `--interval`) next notice: on fast
+/// paths every duration was a multiple of the 200 ms interval (campaign 3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrency_ends_with_its_workers() {
+    let infra = Infra::start("bench-conc-end").await;
+    let (_lis, lis_id) = listener(&infra, "lis", &[]).await;
+    let a = strs([
+        "--to",
+        &lis_id,
+        "--skip",
+        "local,latency,upload,download",
+        "--interval",
+        "5s",
+        "--streams",
+        "4",
+        "--concurrency-size",
+        "1M",
+    ]);
+    let (code, r, evs) = bench(&bench_args(&infra, &a)).await;
+    assert_eq!(code, Some(0), "{r:#}");
+    let c = &r["peer"]["concurrency"];
+    assert_eq!(
+        (&c["ok"], &c["limited_by"]),
+        (&true.into(), &"size".into()),
+        "{c:#}"
+    );
+    // 1M allows 3 requests of 256 KiB; on loopback they take milliseconds.
+    assert_eq!(c["requests"], 3, "{c:#}");
+    assert!(num(c, "duration_ms") < 2500.0, "{c:#}");
+    let phase = events(&evs, "bench_phase")
+        .into_iter()
+        .find(|e| e["phase"] == "concurrency")
+        .unwrap();
+    assert!(num(phase, "duration_ms") < 2500.0, "{phase}");
+    // The small request sent at the start of the phase.
+    assert!(c["loaded_samples"].as_u64().unwrap() <= 1, "{c:#}");
+}
+
 /// After transfers that measured a link too slow for 256 KiB requests within
 /// the time limit (here: 1 kB transfers, whose throughput is mostly round
 /// trips, and 64 streams in 1 s), the concurrency phase uses smaller
