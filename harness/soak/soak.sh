@@ -10,6 +10,9 @@
 #   soak.sh churn --out DIR [options]      --workers W churn workers
 #   soak.sh sample --out DIR               the sampler (sampler.py)
 #   soak.sh stop --out DIR [load|all]      stop the clients/churn, or everything
+#   soak.sh phase NAME --out DIR           record a phase (idle, load_start,
+#                                          load_end, cooldown, end) in
+#                                          DIR/phases.jsonl, for split runs
 #   soak.sh summarize --out DIR            summarize.py DIR
 #   soak.sh status --out DIR               which processes of DIR are alive
 #
@@ -44,6 +47,7 @@
 #   SOAK_RELAY_MATCH    sample a relay process not started here: a substring
 #                    of its command line (e.g. iroh-relay)
 #   SOAK_DIRECTORY   directory URL; unset: start a local directory
+#   SOAK_DIRECTORY_PORT  TCP port of a directory started here [0: any free]
 #   SOAK_TO          node ID of a listener elsewhere; unset: `services` starts one
 #   SOAK_HOST_IP     address local services bind to [127.0.0.1]; 0.0.0.0 for all
 #   SOAK_PUBLIC_IP   address other hosts reach them on: in the relay's
@@ -56,6 +60,11 @@
 #                    and SOAK_MEMORY_MAX [6G] for the whole slice
 #                    [golem-soak.slice; empty: no slice]
 #   SOAK_RUN         run ID copied into every event [basename of DIR]
+#   SOAK_TAG         clients and churn workers started by this call are named
+#                    client-TAG-<i> and churn-TAG-<w> (files, pids, node names)
+#                    instead of client-<i> and churn-<w>, so that several
+#                    calls (e.g. one per lab node or NAT type) share one DIR;
+#                    the sampler and summarize.py group them by TAG
 #
 # `services` writes DIR/env with the relay, directory and listener it uses;
 # `clients`, `churn` and `sample` read it. Every process gets `--run-id` and a
@@ -86,13 +95,19 @@ secs() {
 }
 
 CMD=${1:-}
-[ -n "$CMD" ] || die "usage: soak.sh <run|services|clients|churn|sample|stop|summarize|status> --out DIR [options]"
+[ -n "$CMD" ] || die "usage: soak.sh <run|services|clients|churn|sample|stop|phase|summarize|status> --out DIR [options]"
 shift
 SCENARIO=
 if [ "$CMD" = run ]; then
     SCENARIO=${1:-}
     shift || true
     case $SCENARIO in steady | relay | churn) ;; *) die "run needs a scenario: steady, relay or churn" ;; esac
+fi
+PHASE=
+if [ "$CMD" = phase ]; then
+    PHASE=${1:-}
+    shift || true
+    case $PHASE in idle | load_start | load_end | cooldown | end) ;; *) die "phase needs idle, load_start, load_end, cooldown or end" ;; esac
 fi
 ORIG_ARGS=("$@")
 
@@ -149,6 +164,9 @@ if [ -z "${SOAK_BIND+x}" ]; then
     if [ "$HOST_IP" = 127.0.0.1 ]; then SOAK_BIND=127.0.0.1:0; else SOAK_BIND=; fi
 fi
 CLIENT_THREADS=${SOAK_CLIENT_THREADS:-2}
+TAG=${SOAK_TAG:-}
+[ -z "$TAG" ] || [[ $TAG =~ ^[a-z][a-z0-9]*$ ]] || die "SOAK_TAG must be lowercase letters and digits"
+CLIENT=client${TAG:+-$TAG} CHURN=churn${TAG:+-$TAG}
 SLICE=${SOAK_SLICE-golem-soak.slice}
 
 # Run in a systemd user scope inside $SLICE, so that the whole soak (all
@@ -202,8 +220,12 @@ alive() { [ -f "$DIR/pids/$1.pid" ] && kill -0 "$(cat "$DIR/pids/$1.pid")" 2>/de
 setenv() { echo "$1=$(printf %q "$2")" >>"$DIR/env"; }
 
 load_env() {
+    # --relay-only on the command line wins over DIR/env (e.g. relay-only
+    # clients against a listener that is not).
+    local relay_only=$RELAY_ONLY
     # shellcheck disable=SC1091
     [ -f "$DIR/env" ] && . "$DIR/env"
+    [ "$relay_only" = 1 ] && RELAY_ONLY=1
     RELAY_SPEC=${SOAK_RELAY:-${RELAY_SPEC:-}}
     RELAY_CA=${SOAK_RELAY_CA:-${RELAY_CA:-}}
     RELAY_METRICS=${SOAK_RELAY_METRICS:-${RELAY_METRICS:-}}
@@ -263,7 +285,7 @@ EOF
 
 start_directory() {
     "$GOLEM_P2P" --json --run-id "$RUN" --node-name directory directory \
-        --listen "$HOST_IP:0" --stats-interval 30s </dev/null >"$DIR/directory.jsonl" 2>"$DIR/directory.err" &
+        --listen "$HOST_IP:${SOAK_DIRECTORY_PORT:-0}" --stats-interval 30s </dev/null >"$DIR/directory.jsonl" 2>"$DIR/directory.err" &
     echo $! >"$DIR/pids/directory.pid"
     wait_until 10 grep -q '"event":"directory"' "$DIR/directory.jsonl" || die "directory did not start"
     # The URL with the address other hosts reach the directory on.
@@ -310,14 +332,14 @@ cmd_clients() {
     local i bulk=()
     [ -n "$BULK_EVERY" ] && [ "$BULK_EVERY" != 0 ] && bulk=(--bulk-every "$BULK_EVERY" --bulk-size "$BULK_SIZE")
     for i in $(seq 1 "$CLIENTS"); do
-        TOKIO_WORKER_THREADS=$CLIENT_THREADS "$GOLEM_P2P" --json --run-id "$RUN" --node-name "client-$i" \
+        TOKIO_WORKER_THREADS=$CLIENT_THREADS "$GOLEM_P2P" --json --run-id "$RUN" --node-name "$CLIENT-$i" \
             soak --to "$TO" "${NODE[@]}" --interval "$INTERVAL" --payload-size "$PAYLOAD" \
             "${bulk[@]}" --stats-interval "$STATS_INTERVAL" </dev/null \
-            >"$DIR/clients/client-$i.jsonl" 2>"$DIR/clients/client-$i.err" &
-        echo $! >"$DIR/pids/client-$i.pid"
+            >"$DIR/clients/$CLIENT-$i.jsonl" 2>"$DIR/clients/$CLIENT-$i.err" &
+        echo $! >"$DIR/pids/$CLIENT-$i.pid"
         sleep 0.1
     done
-    log "started $CLIENTS clients"
+    log "started $CLIENTS clients ($CLIENT-*)"
 }
 
 # One churn worker: sessions of --session each, back to back, until
@@ -326,20 +348,20 @@ cmd_clients() {
 # session either way, as on every process start).
 churn_worker() {
     local w=$1 n=0 key code
-    local out=$DIR/churn/churn-$w.jsonl
+    local out=$DIR/churn/$CHURN-$w.jsonl
     while [ ! -e "$DIR/stop-churn" ]; do
         n=$((n + 1))
         local keyarg=()
         if [ $((w % 2)) = 0 ]; then
-            key=$DIR/keys/churn-$w-$((n % REUSE_KEYS)).key
+            key=$DIR/keys/$CHURN-$w-$((n % REUSE_KEYS)).key
             [ -f "$key" ] || "$GOLEM_P2P" keygen --out "$key" >/dev/null
             keyarg=(--key "$key")
         fi
         set +e
-        TOKIO_WORKER_THREADS=$CLIENT_THREADS "$GOLEM_P2P" --json --run-id "$RUN" --node-name "churn-$w" \
+        TOKIO_WORKER_THREADS=$CLIENT_THREADS "$GOLEM_P2P" --json --run-id "$RUN" --node-name "$CHURN-$w" \
             soak --to "$TO" "${NODE[@]}" "${keyarg[@]}" --duration "$SESSION" \
             --interval "$SESSION_INTERVAL" --payload-size "$PAYLOAD" --stats-interval 1h </dev/null \
-            2>>"$DIR/churn/churn-$w.err" | grep --line-buffered -E '"event":"(soak_stats|error)"' >>"$out"
+            2>>"$DIR/churn/$CHURN-$w.err" | grep --line-buffered -E '"event":"(soak_stats|error)"' >>"$out"
         code=${PIPESTATUS[0]}
         set -e
         echo "{\"event\":\"session_exit\",\"ts\":$(date +%s.%N),\"worker\":$w,\"session\":$n,\"reuse\":$((1 - w % 2)),\"code\":$code}" >>"$out"
@@ -355,9 +377,9 @@ cmd_churn() {
     local w
     for w in $(seq 1 "$WORKERS"); do
         churn_worker "$w" &
-        echo $! >"$DIR/pids/churnworker-$w.pid"
+        echo $! >"$DIR/pids/churnworker-${TAG:+$TAG-}$w.pid"
     done
-    log "started $WORKERS churn workers"
+    log "started $WORKERS churn workers ($CHURN-*)"
 }
 
 cmd_sample() {
@@ -499,6 +521,7 @@ churn) cmd_churn ;;
 sample) cmd_sample ;;
 stop) cmd_stop ;;
 status) cmd_status ;;
+phase) phase "$PHASE" ;;
 summarize) python3 "$HERE/summarize.py" "$DIR" ;;
 *) die "unknown command $CMD" ;;
 esac

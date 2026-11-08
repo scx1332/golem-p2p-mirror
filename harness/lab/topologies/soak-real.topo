@@ -1,0 +1,17 @@
+# Remote soak (harness/soak/remote-lab.sh): soak clients in lab nodes whose
+# traffic leaves through the VM's real uplink (uplink=real: the emulated NAT,
+# the VM's masquerade, the i3D host's masquerade to 213.163.75.157), against
+# a listener and directory on the build machine and the real relay
+# p2p-relay1. See README "uplink=real".
+#
+# steady clients
+se1      easy             uplink=real
+spr1     port-restricted  uplink=real
+ssym1    symmetric        uplink=real
+sudp1    udp-blocked      uplink=real
+srly1    easy             uplink=real
+sidle1   port-restricted  uplink=real udp_timeout=20
+# churn workers
+sc1      easy             uplink=real
+sc2      symmetric        uplink=real
+sc3      port-restricted  uplink=real
