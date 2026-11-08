@@ -22,6 +22,7 @@ lab/tools/benchsum.py    one key=value line per `bench --json` run; run metadata
 campaign/campaign1.sh    benchmark campaign 1 (lab matrix, real world, relay, startup)
 campaign/campaign2.sh    campaign 2: the same scenarios after the bench/timeout fixes
 campaign/campaign3.sh    campaign 3: the same scenarios after the loss/relay-fallback/sizing fixes
+campaign/campaign4.sh    campaign 4: the same scenarios after the upload-count/concurrency fixes
 campaign/summarize.py    campaign directory -> summary.json + table.md (all bench formats)
 campaign/compare.py      two campaign directories -> compare.json + compare.md;
                          --series: several -> compare<N>.json + compare<N>.md
@@ -32,7 +33,9 @@ Results of benchmark campaign 1: [results/2026-11-07-campaign1/](results/2026-11
 campaign 2 and its comparison with campaign 1: [results/2026-11-07-campaign2/](results/2026-11-07-campaign2/)
 (`compare.md`); campaign 3, its comparison with campaign 2 (`compare.md`) and
 campaigns 1-3 side by side (`compare3.md`):
-[results/2026-11-08-campaign3/](results/2026-11-08-campaign3/).
+[results/2026-11-08-campaign3/](results/2026-11-08-campaign3/); campaign 4,
+its comparison with campaign 3 (`compare.md`) and campaigns 1-4 side by side
+(`compare4.md`): [results/2026-11-08-campaign4/](results/2026-11-08-campaign4/).
 
 ## Requirements
 
@@ -349,7 +352,9 @@ byte counters before and after each step that uses it), `notes.json`
 `table.md`, `debug/` (extra captures and runs, not summarized), and from
 campaign 2 on `versions.txt` (the binary on each machine) and
 `compare.json`/`compare.md` (against the previous campaign; campaign 3 also
-`compare3.json`/`compare3.md` over campaigns 1-3). Keys of the local test nodes go to
+`compare3.json`/`compare3.md` over campaigns 1-3, campaign 4
+`compare4.json`/`compare4.md` over campaigns 1-4, and `hetzner-load.txt`, the
+build machine's load average during the steps that run there). Keys of the local test nodes go to
 `DIR/.keys/` (git-ignored). `summary.json` has per scenario the run counts,
 final paths, medians/percentiles of the bench measurements, `bind_ms`, and
 `verdict_checks`: the bench's verdict and net report compared with the known
@@ -396,6 +401,13 @@ counts and checks (default output `results/<date>-campaign3`); only its
 misleading/wrong checks, RTT, throughputs (with the concurrency phase), run
 durations and lost connections of every campaign side by side, highlights
 from the last campaign's `notes.json` key `comparison_series`.
+
+`campaign/campaign4.sh` is `campaign3.sh` with the same scenarios, run counts
+and checks (default output `results/<date>-campaign4`), compared with
+campaign 3 (`compare.md`) and over campaigns 1-4 (`compare4.md`). It also
+samples this machine's load average every 10 s while the `realworld`,
+`startup` and `relay` steps run (`DIR/hetzner-load.txt`), since other work on
+the build machine can shift the numbers measured there.
 
 ## Driving it from a controller
 

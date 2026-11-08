@@ -1,0 +1,4 @@
+built from: 1484e3a at 2026-11-08T01:06:42Z
+local: golem-p2p-cli 0.1.0, sha256 1ef99ba399e0caad08921a3ebac5ed91a7635574fc590e6ff16580ce0ca067b3
+lab:   golem-p2p-cli 0.1.0 1ef99ba399e0caad08921a3ebac5ed91a7635574fc590e6ff16580ce0ca067b3  bin/golem-p2p 1484e3a 2026-11-08T01:06:40Z 
+relay VM directory: copied from the local binary whenever it starts (start_directory)

@@ -1,0 +1,6419 @@
+{
+ "commit": "1484e3a (harness on top of 5c5396a; the golem-p2p crates are those of 5c5396a)",
+ "binary": "golem-p2p-cli 0.1.0 built from 1484e3a (release, clean tree), sha256 1ef99ba399e0caad08921a3ebac5ed91a7635574fc590e6ff16580ce0ca067b3; the same binary ran on this machine, on the lab VM (DEPLOYED: 1484e3a) and as the temporary directory on the relay VM (versions.txt)",
+ "date": "2026-11-08 (UTC 01:06-02:00)",
+ "environment": {
+  "machines": [
+   {
+    "name": "hetzner",
+    "role": "controller, build machine, public node",
+    "location": "Hetzner, Helsinki",
+    "addresses": "65.109.154.126, 2a01:4f9:3080:1146::2",
+    "os": "Ubuntu 26.04.1, kernel 7.0.0-43, 32 vCPU",
+    "notes": "public IP on the interface, ufw default-deny inbound (UDP 8000 allowed by an existing rule), 14 Docker bridges (172.17-30.0.1). Shared during the campaign: another agent's local soak tests (golem-p2p relay/directory/listen on 127.0.0.1, ~1-1.5 cores) and processes of other sessions (22 root 'grep -r' scans over /home, /etc, /opt, /srv, /root at 60-90 % CPU each, Docker services); see build_machine_load"
+   },
+   {
+    "name": "p2p-natlab",
+    "role": "NAT lab (network namespaces, nftables NAT profiles, tc netem)",
+    "location": "VM on the i3D host 213.163.75.157",
+    "os": "Ubuntu 26.04, kernel 7.0.0-43, nftables 1.1.6, 8 vCPU / 16 GB",
+    "notes": "lab-internal relay and directory in namespace gpl-svc; uplink=real nodes leave through the emulated NAT, the VM's masquerade and the i3D host's masquerade; load average 0.1 before the campaign"
+   },
+   {
+    "name": "p2p-relay1",
+    "role": "real relay",
+    "location": "VM on the same i3D host",
+    "os": "Ubuntu 26.04, 4 vCPU / 7 GB",
+    "notes": "iroh-relay 1.4.1 (unchanged service, same pid before and after), https://213.163.75.157:56000 (self-signed, --relay-ca), QAD on UDP 56001, ports forwarded by an Incus nat proxy; no rate limits configured; temporary golem-p2p directory on port 56050 during the realworld/startup steps and the rw-recheck debug runs (stopped afterwards)"
+   }
+  ],
+  "build_machine_load": "This machine's 1-min load average (32 vCPU), sampled every 10 s by campaign4.sh (hetzner-load.txt): realworld 01:33:52-01:42:53 UTC 24.0-49.4 (median 30.6; 36-45 during the three slow Hetzner -> lab downloads at 01:34-01:36), startup 01:42:58-01:43:38 27.3-35.0 (median 33.1), relay 01:43:45-01:45:35 28.4-41.1 (median 35.0); 23-24 during the rw-recheck debug runs (debug/rw-recheck/load.txt); 7-11 before the campaign. The load came from other sessions (above), not from the campaign (one bench and one listener at a time, four of each in relay-parallel4). Visible effect: bind_ms of the benches on this machine 50-60 ms higher than in campaign 3 (startup-hetzner-qad-56001 608 -> 667 ms p50, qad-off 619 -> 666, relay-single 523 -> 584; lab-side binds unchanged at 248 ms); the three slow downloads may or may not be related (see observations).",
+  "relay": {
+   "lab": "iroh-relay 1.4.1 at https://198.18.0.1,quic=7842 in the lab's services namespace (as in campaigns 2-3); the relay link adds 10 ms each way",
+   "real": "https://213.163.75.157:56000,quic=56001 with --relay-ca p2p-relay1.crt",
+   "traffic_through_real_relay": "418.3 MB received and 418.3 MB forwarded by the relay (realworld 270.0 MB, startup 0, relay step 148.3 MB; campaign 3: 418.7 MB, campaign 2: 418.4 MB, campaign 1: 418.5 MB), from relayserver_bytes_recv_total/bytes_sent_total; relayserver_send_packets_dropped_total stayed at 47 (no drops during the campaign). The rw-recheck debug runs went direct (the relay carried only their connection setup)."
+  },
+  "directories": "lab: http://198.18.0.1:8080/; realworld, startup and rw-recheck: http://213.163.75.157:56050/ (temporary, on p2p-relay1); relay step: 127.0.0.1 on the Hetzner machine",
+  "paths": "As in campaigns 1-3. Lab: every access link 10 ms each way, relay link 10 ms each way (direct RTT ~40 ms, relayed ~80 ms); lossy1 50 ms + 1 % loss each way. Hetzner <-> i3D host: per flow either ~34 ms or ~37.5 ms RTT (the two route clusters of every campaign); lab nodes with uplink=real reach the real relay through the i3D host's hairpin NAT in < 1 ms.",
+  "bench_settings": "defaults of 5c5396a, otherwise campaign 3's: latency 12 s at 200 ms, 64 B, packet loss counted from when the selected path has been stable for max(1 s, 3 x min RTT) (peer.latency.loss); upload and download 10 MB each, stopped at 8 s (an upload is reset there and the listener reports what arrived; an upload written completely before 8 s is not stopped, and its count is awaited until 8 s or, if later, max(3 s, the upload's duration, 3 smoothed RTTs) after the end of writing, at most 30 s; new: second_half_mbps); concurrency 8 streams of echo requests, 8 MB, 256 KiB each or smaller on a slow link (new: sized for the lowest of the upload's and download's throughput_mbps and second_half_mbps, so that each stream can finish about four in 8 s; if none has finished by 4 s, the requests in flight are cut off and the phase starts over with requests 1/16 the size, at least 4 KiB, concurrency.restart), requests still running at 8 s are cut off; the phase now ends and is timed when its workers finish (was: at the next 200 ms tick); relay transfers capped at 4 MB; relay_fallback_failed only if nothing got through the relay-only connection; timeout 10 s; --compare-relay and --idle 60s where listed. The relay group uses --relay-only on both sides; the parallel relay runs skip the concurrency phase.",
+  "method": "Same scenarios (scenarios.jsonl identical to campaign 3's), run counts and order as campaigns 1-3 (harness/campaign/campaign4.sh = campaign3.sh with a new name, output directory and comparison, plus the load sampling): every run starts fresh processes (new iroh keys and ports; bench uses a temporary identity); 3 runs per scenario, rounds interleaved; parallel relay runs: 2 rounds of 2 and of 4 benches. Scenario side a = the bench (client, dialer), b = the listen node. Verdicts classified by summarize.py, which judges each campaign by the rules of its own bench (re-run on campaigns 1-3 it reproduces their classification). Extra, not in summary.json: 10 more lab-netem-pr runs (same nodes and arguments, --compare-relay) in debug/lossy-extra (as in campaign 3), for the loss detection rate, the upload count, the request sizing and restarts on the lossy link; and debug/rw-recheck: 9 re-runs of the direct real-world scenarios with the Hetzner listener (rw-easy-to-ufw, rw-symmetric-to-open, rw-easy-to-open without --compare-relay) right after a fresh lab.sh up campaign-real, to check the slow Hetzner -> lab downloads.",
+  "sides": "a = the node running `golem-p2p bench` (it dials), b = the node running `golem-p2p listen`",
+  "time_utc": "2026-11-08: deploy 01:06, lab 01:06:44-01:29:59, labextra 01:29:59-01:33:50, realworld 01:33:52-01:42:55, startup 01:42:58-01:43:43, relay 01:43:45-01:45:41, debug/lossy-extra 01:45:55-01:57:24, debug/rw-recheck 01:57:38-02:00:00, cleanup 02:00:07, summarize after cleanup"
+ },
+ "relay_traffic": {
+  "steps": [
+   {
+    "step": "realworld",
+    "from": "2026-11-08T01:33:56Z",
+    "to": "2026-11-08T01:42:55Z",
+    "relay_bytes_recv": 269994867,
+    "relay_bytes_sent": 269994867
+   },
+   {
+    "step": "startup",
+    "from": "2026-11-08T01:43:02Z",
+    "to": "2026-11-08T01:43:43Z",
+    "relay_bytes_recv": 0,
+    "relay_bytes_sent": 0
+   },
+   {
+    "step": "relay",
+    "from": "2026-11-08T01:43:46Z",
+    "to": "2026-11-08T01:45:41Z",
+    "relay_bytes_recv": 148347692,
+    "relay_bytes_sent": 148347692
+   }
+  ],
+  "total_bytes_recv": 418342559,
+  "total_bytes_sent": 418342559
+ },
+ "verdict_check_totals": {
+  "checks": {
+   "right": 254,
+   "misleading": 1
+  },
+  "runs_by_worst_finding": {
+   "right": 110,
+   "misleading": 1
+  }
+ },
+ "scenarios": [
+  {
+   "id": "lab-public-easy",
+   "group": "lab",
+   "title": "public (listener) <- easy (bench)",
+   "a": {
+    "role": "bench",
+    "node": "easy1",
+    "profile": "easy",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "pub1",
+    "profile": "public",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": null,
+   "args": "--compare-relay",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "direct": 3
+   },
+   "connect_ms": {
+    "p50": 130.209,
+    "p95": 130.353,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.343,
+    "p95": 40.368,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 130.242,
+    "p95": 130.381,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 40.392,
+    "p95": 40.836,
+    "n": 180
+   },
+   "jitter_ms": 0.066,
+   "loss_pct": 0.0,
+   "direct_fraction": 1.0,
+   "upload_mbps": 123.022,
+   "download_mbps": 123.926,
+   "concurrency_mbps": 209.429,
+   "loaded_rtt_ms_p50": 40.641,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 22.2,
+    "p95": 22.2,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 161.005,
+    "connect": 130.22,
+    "latency": 12000.993,
+    "upload": 650.312,
+    "download": 645.569,
+    "concurrency": 300.431,
+    "relay_compare": 7678.346
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 419,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/139",
+     "0/140",
+     "0/140"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": {
+    "rtt_ms_p50": 80.556,
+    "upload_mbps": 35.499,
+    "download_mbps": 35.168,
+    "connect_ms_p50": 256.937,
+    "ok": 3,
+    "runs": 3,
+    "reachable": 3
+   },
+   "idle": null,
+   "bind_ms": {
+    "p50": 609.045,
+    "p95": 609.301,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 609.412,
+    "p95": 609.626,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 160.999,
+     "p95": 161.003,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.2.2:49551",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.615,
+    "relay_tls_ms_p50": 40.42,
+    "relay_https_latency_ms_p50": 200.97,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {
+    "relay_fallback": 3
+   },
+   "verdict_sample": "Good: direct connection to 0x8166...9d86: 40 ms round trip, 123 Mbps up, 124 Mbps down.",
+   "notes": "Direct from the first packet; loss counted from 0 ms, 0 of 139-140 latency-phase packets lost. Concurrency 205-217 Mbps in 290-306 ms (campaign 3: 156 Mbps, the 403 ms tick).",
+   "run_dirs": [
+    "lab/lab-public-easy/run1",
+    "lab/lab-public-easy/run2",
+    "lab/lab-public-easy/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the easy profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "lab-easy-easy",
+   "group": "lab",
+   "title": "easy <- easy",
+   "a": {
+    "role": "bench",
+    "node": "easy2",
+    "profile": "easy",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "easy1",
+    "profile": "easy",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": null,
+   "args": "--compare-relay",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "direct": 3
+   },
+   "connect_ms": {
+    "p50": 130.323,
+    "p95": 131.361,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.353,
+    "p95": 40.422,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 130.364,
+    "p95": 131.402,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 40.416,
+    "p95": 40.869,
+    "n": 180
+   },
+   "jitter_ms": 0.073,
+   "loss_pct": 0.104,
+   "direct_fraction": 1.0,
+   "upload_mbps": 123.319,
+   "download_mbps": 122.401,
+   "concurrency_mbps": 226.822,
+   "loaded_rtt_ms_p50": 40.414,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 22.2,
+    "p95": 22.2,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 161.058,
+    "connect": 130.333,
+    "latency": 12001.51,
+    "upload": 648.75,
+    "download": 653.609,
+    "concurrency": 277.409,
+    "relay_compare": 7681.777
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 426,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/142",
+     "0/142",
+     "0/142"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": {
+    "rtt_ms_p50": 80.605,
+    "upload_mbps": 35.567,
+    "download_mbps": 35.262,
+    "connect_ms_p50": 256.967,
+    "ok": 3,
+    "runs": 3,
+    "reachable": 3
+   },
+   "idle": null,
+   "bind_ms": {
+    "p50": 608.839,
+    "p95": 609.363,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 609.232,
+    "p95": 609.838,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 161.052,
+     "p95": 161.073,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.3.2:40411",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.662,
+    "relay_tls_ms_p50": 40.424,
+    "relay_https_latency_ms_p50": 201.637,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {
+    "relay_fallback": 3
+   },
+   "verdict_sample": "Good: direct connection to 0x3b65...5218: 40 ms round trip, 123 Mbps up, 122 Mbps down.",
+   "notes": "Direct from the first packet; 0/142. Concurrency 198-243 Mbps.",
+   "run_dirs": [
+    "lab/lab-easy-easy/run1",
+    "lab/lab-easy-easy/run2",
+    "lab/lab-easy-easy/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the easy profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "lab-sym-easy",
+   "group": "lab",
+   "title": "symmetric (listener) <- easy (bench)",
+   "a": {
+    "role": "bench",
+    "node": "easy1",
+    "profile": "easy",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "sym1",
+    "profile": "symmetric",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": null,
+   "args": "--compare-relay",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 242.572,
+    "p95": 242.604,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.356,
+    "p95": 40.381,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 305.181,
+    "p95": 305.209,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 40.418,
+    "p95": 40.922,
+    "n": 180
+   },
+   "jitter_ms": 0.744,
+   "loss_pct": 0.052,
+   "direct_fraction": 1.0,
+   "upload_mbps": 121.852,
+   "download_mbps": 122.983,
+   "concurrency_mbps": 219.282,
+   "loaded_rtt_ms_p50": 40.346,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 22.3,
+    "p95": 22.3,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 160.968,
+    "connect": 242.58,
+    "latency": 12001.577,
+    "upload": 656.564,
+    "download": 650.517,
+    "concurrency": 286.929,
+    "relay_compare": 7669.0
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 340,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/114",
+     "0/113",
+     "0/113"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 1241.724,
+    "from_ms_max": 1241.727
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": {
+    "rtt_ms_p50": 80.594,
+    "upload_mbps": 35.648,
+    "download_mbps": 35.305,
+    "connect_ms_p50": 256.981,
+    "ok": 3,
+    "runs": 3,
+    "reachable": 3
+   },
+   "idle": null,
+   "bind_ms": {
+    "p50": 609.027,
+    "p95": 609.118,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 609.149,
+    "p95": 609.156,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 160.962,
+     "p95": 161.089,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.2.2:51833",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.628,
+    "relay_tls_ms_p50": 40.387,
+    "relay_https_latency_ms_p50": 201.806,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {
+    "relay_fallback": 3
+   },
+   "verdict_sample": "Good: direct connection to 0xf3cc...f08c (hole punching took 305 ms): 40 ms round trip, 120 Mbps up, 121 Mbps down.",
+   "notes": "Relay first, direct after ~305 ms. Loss counted from ~1.24 s (path settled): 0/113-114, no hint (as in campaign 3).",
+   "run_dirs": [
+    "lab/lab-sym-easy/run1",
+    "lab/lab-sym-easy/run2",
+    "lab/lab-sym-easy/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the easy profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "lab-easy-sym",
+   "group": "lab",
+   "title": "easy (listener) <- symmetric (bench)",
+   "a": {
+    "role": "bench",
+    "node": "sym1",
+    "profile": "symmetric",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "easy1",
+    "profile": "easy",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "direct": 3
+   },
+   "connect_ms": {
+    "p50": 130.386,
+    "p95": 130.419,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.393,
+    "p95": 40.407,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 130.437,
+    "p95": 130.479,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 40.419,
+    "p95": 40.814,
+    "n": 180
+   },
+   "jitter_ms": 0.075,
+   "loss_pct": 0.148,
+   "direct_fraction": 1.0,
+   "upload_mbps": 123.475,
+   "download_mbps": 123.095,
+   "concurrency_mbps": 207.356,
+   "loaded_rtt_ms_p50": 40.427,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 14.5,
+    "p95": 14.5,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 160.978,
+    "connect": 130.397,
+    "latency": 12001.209,
+    "upload": 647.925,
+    "download": 649.923,
+    "concurrency": 303.434
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 426,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/141",
+     "0/141",
+     "0/144"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 608.622,
+    "p95": 609.657,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 608.647,
+    "p95": 608.905,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 160.971,
+     "p95": 160.972,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.7.2:38019",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "false": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.585,
+    "relay_tls_ms_p50": 40.396,
+    "relay_https_latency_ms_p50": 201.627,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Good: direct connection to 0x3b65...5218: 40 ms round trip, 123 Mbps up, 123 Mbps down.",
+   "notes": "Symmetric bench dialing an EIF listener: direct from the first packet, 0 lost.",
+   "run_dirs": [
+    "lab/lab-easy-sym/run1",
+    "lab/lab-easy-sym/run2",
+    "lab/lab-easy-sym/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the symmetric profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "lab-pr-pr",
+   "group": "lab",
+   "title": "port-restricted <- port-restricted",
+   "a": {
+    "role": "bench",
+    "node": "pr2",
+    "profile": "port-restricted",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "pr1",
+    "profile": "port-restricted",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": null,
+   "args": "--compare-relay",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 242.558,
+    "p95": 242.723,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.359,
+    "p95": 40.379,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 289.975,
+    "p95": 290.258,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 40.424,
+    "p95": 40.761,
+    "n": 180
+   },
+   "jitter_ms": 0.771,
+   "loss_pct": 0.015,
+   "direct_fraction": 1.0,
+   "upload_mbps": 122.431,
+   "download_mbps": 123.657,
+   "concurrency_mbps": 189.818,
+   "loaded_rtt_ms_p50": 40.224,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 22.3,
+    "p95": 22.3,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 160.964,
+    "connect": 242.57,
+    "latency": 12001.094,
+    "upload": 653.448,
+    "download": 646.972,
+    "concurrency": 331.463,
+    "relay_compare": 7662.64
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 341,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/113",
+     "0/114",
+     "0/114"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 1242.159,
+    "from_ms_max": 1242.402
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": {
+    "rtt_ms_p50": 80.58,
+    "upload_mbps": 35.725,
+    "download_mbps": 35.543,
+    "connect_ms_p50": 257.034,
+    "ok": 3,
+    "runs": 3,
+    "reachable": 3
+   },
+   "idle": null,
+   "bind_ms": {
+    "p50": 608.312,
+    "p95": 608.87,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 608.903,
+    "p95": 609.315,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 160.959,
+     "p95": 161.036,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.6.2:43283",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.628,
+    "relay_tls_ms_p50": 40.394,
+    "relay_https_latency_ms_p50": 201.245,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {
+    "relay_fallback": 3
+   },
+   "verdict_sample": "Good: direct connection to 0x5b64...e020 (hole punching took 290 ms): 40 ms round trip, 122 Mbps up, 121 Mbps down.",
+   "notes": "Relay first, direct after ~290 ms; settled count 0/113-114; no false positive.",
+   "run_dirs": [
+    "lab/lab-pr-pr/run1",
+    "lab/lab-pr-pr/run2",
+    "lab/lab-pr-pr/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the port-restricted profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "lab-sym-sym",
+   "group": "lab",
+   "title": "symmetric <- symmetric",
+   "a": {
+    "role": "bench",
+    "node": "sym2",
+    "profile": "symmetric",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "sym1",
+    "profile": "symmetric",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 0,
+    "relay": 3,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 0,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 217.535,
+    "p95": 242.625,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.341,
+    "p95": 40.387,
+    "n": 3
+   },
+   "time_to_direct_ms": null,
+   "rtt_ms": {
+    "p50": 80.643,
+    "p95": 81.226,
+    "n": 180
+   },
+   "jitter_ms": 0.125,
+   "loss_pct": 0.0,
+   "direct_fraction": 0.0,
+   "upload_mbps": 35.409,
+   "download_mbps": 35.088,
+   "concurrency_mbps": 78.132,
+   "loaded_rtt_ms_p50": 80.45,
+   "transfer_relay_capped": true,
+   "run_duration_s": {
+    "p50": 15.2,
+    "p95": 15.2,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 160.999,
+    "connect": 217.543,
+    "latency": 12000.935,
+    "upload": 903.748,
+    "download": 912.002,
+    "concurrency": 402.639
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 378,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/126",
+     "0/126",
+     "0/126"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 45,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 609.095,
+    "p95": 609.383,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 609.047,
+    "p95": 610.233,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 160.993,
+     "p95": 161.051,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.8.2:8245",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "false": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.584,
+    "relay_tls_ms_p50": 40.391,
+    "relay_https_latency_ms_p50": 201.829,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "4": 3
+   },
+   "statuses": {
+    "relay_only": 3
+   },
+   "issues": {},
+   "hints": {
+    "hard_nat_likely": 3
+   },
+   "verdict_sample": "Connected to 0xf3cc...f08c, but only through a relay (https://198.18.0.1/): 81 ms round trip, 35.3 Mbps up, 35.1 Mbps down. Your NAT gave this node another public UDP port: 198.18.8.2:8245 (local port 42312). NATs that do that usually take a new port for every destination (symmetric or hard NAT), and then hole punching fails when the peer is behind a NAT too. (Whether the port really changes per destination needs answers from two relays; one answered.)",
+   "notes": "Relay only; hard_nat_likely names this side's symmetric NAT (right). Loss counted from 0 ms (the path never changed). Concurrency 75.6-80.8 Mbps through the lab relay.",
+   "run_dirs": [
+    "lab/lab-sym-sym/run1",
+    "lab/lab-sym-sym/run2",
+    "lab/lab-sym-sym/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the symmetric profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    },
+    {
+     "kind": "right",
+     "code": "relay_reason",
+     "runs": 3,
+     "detail": "relay-only blamed on the (likely) hard NAT on this side"
+    }
+   ]
+  },
+  {
+   "id": "lab-cgnat-easy",
+   "group": "lab",
+   "title": "cgnat (listener) <- easy (bench)",
+   "a": {
+    "role": "bench",
+    "node": "easy1",
+    "profile": "easy",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "cgn1",
+    "profile": "cgnat",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 217.037,
+    "p95": 242.759,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.399,
+    "p95": 40.404,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 289.98,
+    "p95": 290.209,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 40.445,
+    "p95": 40.674,
+    "n": 180
+   },
+   "jitter_ms": 0.787,
+   "loss_pct": 0.126,
+   "direct_fraction": 1.0,
+   "upload_mbps": 122.782,
+   "download_mbps": 123.698,
+   "concurrency_mbps": 227.526,
+   "loaded_rtt_ms_p50": 40.443,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 14.6,
+    "p95": 14.6,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 161.052,
+    "connect": 217.046,
+    "latency": 12001.251,
+    "upload": 651.58,
+    "download": 646.759,
+    "concurrency": 276.529
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 341,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/113",
+     "0/113",
+     "0/115"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 1242.338,
+    "from_ms_max": 1242.445
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 608.691,
+    "p95": 609.216,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 608.719,
+    "p95": 608.743,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 161.047,
+     "p95": 161.051,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.2.2:58396",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.608,
+    "relay_tls_ms_p50": 40.422,
+    "relay_https_latency_ms_p50": 201.558,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Good: direct connection to 0x803f...9020 (hole punching took 290 ms): 40 ms round trip, 123 Mbps up, 124 Mbps down.",
+   "notes": "Relay first, direct after ~290 ms; settled 0/113-115; no false positive.",
+   "run_dirs": [
+    "lab/lab-cgnat-easy/run1",
+    "lab/lab-cgnat-easy/run2",
+    "lab/lab-cgnat-easy/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the easy profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "lab-double-easy",
+   "group": "lab",
+   "title": "double NAT (listener) <- easy (bench)",
+   "a": {
+    "role": "bench",
+    "node": "easy1",
+    "profile": "easy",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "dbl1",
+    "profile": "double",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "direct": 3
+   },
+   "connect_ms": {
+    "p50": 130.418,
+    "p95": 130.817,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.469,
+    "p95": 40.514,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 130.453,
+    "p95": 130.864,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 40.393,
+    "p95": 40.624,
+    "n": 180
+   },
+   "jitter_ms": 0.095,
+   "loss_pct": 0.007,
+   "direct_fraction": 1.0,
+   "upload_mbps": 122.186,
+   "download_mbps": 123.904,
+   "concurrency_mbps": 223.185,
+   "loaded_rtt_ms_p50": 40.341,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 14.5,
+    "p95": 14.5,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 161.108,
+    "connect": 130.427,
+    "latency": 12001.545,
+    "upload": 654.775,
+    "download": 645.688,
+    "concurrency": 281.919
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 427,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/143",
+     "0/143",
+     "0/141"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 608.877,
+    "p95": 609.901,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 609.246,
+    "p95": 610.356,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 161.1,
+     "p95": 161.498,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.2.2:51165",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.577,
+    "relay_tls_ms_p50": 40.449,
+    "relay_https_latency_ms_p50": 201.722,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Good: direct connection to 0x04dc...ac84: 40 ms round trip, 122 Mbps up, 124 Mbps down.",
+   "notes": "Direct from the first packet; 0 lost.",
+   "run_dirs": [
+    "lab/lab-double-easy/run1",
+    "lab/lab-double-easy/run2",
+    "lab/lab-double-easy/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the easy profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "lab-easy-udpb",
+   "group": "lab",
+   "title": "easy (listener) <- udp-blocked (bench)",
+   "a": {
+    "role": "bench",
+    "node": "udpb1",
+    "profile": "udp-blocked",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "easy1",
+    "profile": "easy",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 0,
+    "relay": 3,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 0,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 242.455,
+    "p95": 242.622,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.391,
+    "p95": 40.408,
+    "n": 3
+   },
+   "time_to_direct_ms": null,
+   "rtt_ms": {
+    "p50": 80.618,
+    "p95": 81.098,
+    "n": 180
+   },
+   "jitter_ms": 0.121,
+   "loss_pct": 0.0,
+   "direct_fraction": 0.0,
+   "upload_mbps": 35.602,
+   "download_mbps": 35.449,
+   "concurrency_mbps": 75.915,
+   "loaded_rtt_ms_p50": 80.509,
+   "transfer_relay_capped": true,
+   "run_duration_s": {
+    "p50": 17.8,
+    "p95": 17.8,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 160.963,
+    "connect": 242.463,
+    "latency": 12001.576,
+    "upload": 898.841,
+    "download": 902.727,
+    "concurrency": 414.4
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 378,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/126",
+     "0/126",
+     "0/126"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 45,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 3207.074,
+    "p95": 3207.528,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 608.807,
+    "p95": 609.443,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 160.952,
+     "p95": 161.056,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "false": 3
+    },
+    "public_v4_sample": null,
+    "behind_nat_v4": {
+     "none": 3
+    },
+    "port_preserved_v4": {
+     "none": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": null,
+    "relay_tls_ms_p50": 40.415,
+    "relay_https_latency_ms_p50": 201.691,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "4": 3
+   },
+   "statuses": {
+    "relay_only": 3
+   },
+   "issues": {
+    "udp_blocked": 3
+   },
+   "hints": {},
+   "verdict_sample": "Connected to 0x3b65...5218, but only through a relay (https://198.18.0.1/): 81 ms round trip, 35.4 Mbps up, 35.6 Mbps down. No relay answered QUIC address discovery (UDP port 7842, as configured), although they answer over HTTPS, and no direct path to the peer was found: outgoing UDP is probably blocked on your network, so all traffic goes through a relay; ask your network admin to allow outgoing UDP. (Or the relay does not serve address discovery on port 7842: check ,quic=PORT.)",
+   "notes": "UDP-blocked bench: relay only, bind 3.2 s, udp_blocked 'outgoing UDP is probably blocked' (port 7842 as configured).",
+   "run_dirs": [
+    "lab/lab-easy-udpb/run1",
+    "lab/lab-easy-udpb/run2",
+    "lab/lab-easy-udpb/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "udp_blocked",
+     "runs": 3,
+     "detail": "udp_blocked issue on the UDP-blocked side"
+    }
+   ]
+  },
+  {
+   "id": "lab-udpb-easy",
+   "group": "lab",
+   "title": "udp-blocked (listener) <- easy (bench)",
+   "a": {
+    "role": "bench",
+    "node": "easy1",
+    "profile": "easy",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "udpb1",
+    "profile": "udp-blocked",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 0,
+    "relay": 3,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 0,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 216.741,
+    "p95": 242.699,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.377,
+    "p95": 40.426,
+    "n": 3
+   },
+   "time_to_direct_ms": null,
+   "rtt_ms": {
+    "p50": 80.595,
+    "p95": 80.864,
+    "n": 180
+   },
+   "jitter_ms": 0.122,
+   "loss_pct": 0.0,
+   "direct_fraction": 0.0,
+   "upload_mbps": 35.68,
+   "download_mbps": 35.294,
+   "concurrency_mbps": 76.18,
+   "loaded_rtt_ms_p50": 80.479,
+   "transfer_relay_capped": true,
+   "run_duration_s": {
+    "p50": 15.2,
+    "p95": 15.2,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 161.06,
+    "connect": 216.753,
+    "latency": 12001.313,
+    "upload": 896.87,
+    "download": 906.679,
+    "concurrency": 412.956
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 375,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/125",
+     "0/125",
+     "0/125"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 45,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 607.674,
+    "p95": 608.063,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 3206.979,
+    "p95": 3207.555,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 161.052,
+     "p95": 161.13,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.2.2:45845",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.625,
+    "relay_tls_ms_p50": 40.451,
+    "relay_https_latency_ms_p50": 201.028,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "4": 3
+   },
+   "statuses": {
+    "relay_only": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Connected to 0xc18c...5143, but only through a relay (https://198.18.0.1/): 81 ms round trip, 35.7 Mbps up, 35.6 Mbps down. UDP works on your side; the peer's network may block UDP, or one of the two NATs prevents hole punching.",
+   "notes": "UDP-blocked listener: relay only; the verdict points at the peer's network (right).",
+   "run_dirs": [
+    "lab/lab-udpb-easy/run1",
+    "lab/lab-udpb-easy/run2",
+    "lab/lab-udpb-easy/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the easy profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    },
+    {
+     "kind": "right",
+     "code": "relay_reason",
+     "runs": 3,
+     "detail": "relay-only blamed on the peer side (udp-blocked)"
+    }
+   ]
+  },
+  {
+   "id": "lab-pr-sym",
+   "group": "lab",
+   "title": "port-restricted (listener) <- symmetric (bench)",
+   "a": {
+    "role": "bench",
+    "node": "sym1",
+    "profile": "symmetric",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "pr1",
+    "profile": "port-restricted",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 0,
+    "relay": 3,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 0,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 242.416,
+    "p95": 242.466,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.419,
+    "p95": 40.419,
+    "n": 3
+   },
+   "time_to_direct_ms": null,
+   "rtt_ms": {
+    "p50": 80.602,
+    "p95": 81.241,
+    "n": 180
+   },
+   "jitter_ms": 0.102,
+   "loss_pct": 0.0,
+   "direct_fraction": 0.0,
+   "upload_mbps": 35.665,
+   "download_mbps": 35.308,
+   "concurrency_mbps": 80.57,
+   "loaded_rtt_ms_p50": 80.656,
+   "transfer_relay_capped": true,
+   "run_duration_s": {
+    "p50": 15.2,
+    "p95": 15.2,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 161.099,
+    "connect": 242.426,
+    "latency": 12001.563,
+    "upload": 897.258,
+    "download": 906.34,
+    "concurrency": 390.449
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 378,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/126",
+     "0/126",
+     "0/126"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 45,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 608.033,
+    "p95": 608.699,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 608.719,
+    "p95": 609.159,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 161.087,
+     "p95": 161.128,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.7.2:48414",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "false": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.601,
+    "relay_tls_ms_p50": 40.461,
+    "relay_https_latency_ms_p50": 201.141,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "4": 3
+   },
+   "statuses": {
+    "relay_only": 3
+   },
+   "issues": {},
+   "hints": {
+    "hard_nat_likely": 3
+   },
+   "verdict_sample": "Connected to 0x5b64...e020, but only through a relay (https://198.18.0.1/): 81 ms round trip, 35.7 Mbps up, 35.0 Mbps down. Your NAT gave this node another public UDP port: 198.18.7.2:48414 (local port 52572). NATs that do that usually take a new port for every destination (symmetric or hard NAT), and then hole punching fails when the peer is behind a NAT too. (Whether the port really changes per destination needs answers from two relays; one answered.)",
+   "notes": "Relay only; hard_nat_likely names the bench's symmetric NAT (right).",
+   "run_dirs": [
+    "lab/lab-pr-sym/run1",
+    "lab/lab-pr-sym/run2",
+    "lab/lab-pr-sym/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the symmetric profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    },
+    {
+     "kind": "right",
+     "code": "relay_reason",
+     "runs": 3,
+     "detail": "relay-only blamed on the (likely) hard NAT on this side"
+    }
+   ]
+  },
+  {
+   "id": "lab-rc-sym",
+   "group": "lab",
+   "title": "restricted (listener) <- symmetric (bench)",
+   "a": {
+    "role": "bench",
+    "node": "sym1",
+    "profile": "symmetric",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "rc1",
+    "profile": "restricted",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 242.462,
+    "p95": 242.562,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.373,
+    "p95": 40.378,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 289.853,
+    "p95": 290.056,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 40.416,
+    "p95": 40.984,
+    "n": 180
+   },
+   "jitter_ms": 0.776,
+   "loss_pct": 0.015,
+   "direct_fraction": 1.0,
+   "upload_mbps": 122.623,
+   "download_mbps": 123.33,
+   "concurrency_mbps": 201.58,
+   "loaded_rtt_ms_p50": 40.3,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 14.6,
+    "p95": 14.6,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 161.195,
+    "connect": 242.474,
+    "latency": 12001.298,
+    "upload": 652.421,
+    "download": 648.688,
+    "concurrency": 312.13
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 339,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/113",
+     "0/112",
+     "0/114"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 1242.228,
+    "from_ms_max": 1242.236
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 608.317,
+    "p95": 608.882,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 608.845,
+    "p95": 608.858,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 161.188,
+     "p95": 161.246,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.7.2:26327",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "false": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.558,
+    "relay_tls_ms_p50": 40.648,
+    "relay_https_latency_ms_p50": 201.062,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Good: direct connection to 0x23fa...b96b (hole punching took 290 ms): 40 ms round trip, 124 Mbps up, 121 Mbps down.",
+   "notes": "Direct after ~290 ms; settled 0/112-114; no false positive.",
+   "run_dirs": [
+    "lab/lab-rc-sym/run1",
+    "lab/lab-rc-sym/run2",
+    "lab/lab-rc-sym/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the symmetric profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "lab-netem-pr",
+   "group": "lab",
+   "title": "port-restricted <- port-restricted on a bad link (50 ms, 1 % loss each way)",
+   "a": {
+    "role": "bench",
+    "node": "lossy1",
+    "profile": "port-restricted",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=50ms loss=1% each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "pr2",
+    "profile": "port-restricted",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": "delay=50ms loss=1% each way on the bench node's access link",
+   "args": "--compare-relay",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 562.807,
+    "p95": 562.986,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 120.442,
+    "p95": 120.495,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 696.897,
+    "p95": 803.292,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 120.413,
+    "p95": 160.422,
+    "n": 179
+   },
+   "jitter_ms": 20.714,
+   "loss_pct": 1.34,
+   "direct_fraction": 1.0,
+   "upload_mbps": 2.072,
+   "download_mbps": 4.273,
+   "concurrency_mbps": 0.934,
+   "loaded_rtt_ms_p50": 198.416,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 61.6,
+    "p95": 72.7,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 481.33,
+    "connect": 562.82,
+    "latency": 12001.027,
+    "upload": 8129.281,
+    "download": 8000.243,
+    "concurrency": 8001.407,
+    "relay_compare": 27801.133
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 358,
+    "lost_packets": 3,
+    "lost_pct": 0.838,
+    "runs_with_loss": 2,
+    "runs_at_threshold": 2,
+    "per_run": [
+     "0/118",
+     "2/121",
+     "1/119"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 1321.19,
+    "from_ms_max": 1321.534
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 24,
+    "requests": 85,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 3,
+    "request_bytes": [
+     23552,
+     38912,
+     47104
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:time": 3,
+    "download:time": 2,
+    "concurrency:time": 3,
+    "download:size": 1
+   },
+   "transfer_second_half_mbps": {
+    "upload": 1.262,
+    "download": 2.482
+   },
+   "relay_compare": {
+    "rtt_ms_p50": 160.547,
+    "upload_mbps": 4.256,
+    "download_mbps": 1.412,
+    "connect_ms_p50": 682.821,
+    "ok": 3,
+    "runs": 3,
+    "reachable": 3
+   },
+   "idle": null,
+   "bind_ms": {
+    "p50": 1328.524,
+    "p95": 1329.304,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 608.732,
+    "p95": 610.82,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 481.322,
+     "p95": 481.386,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.12.2:33203",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 120.634,
+    "relay_tls_ms_p50": 120.519,
+    "relay_https_latency_ms_p50": 521.121,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {
+    "relay_fallback": 3,
+    "packet_loss": 2
+   },
+   "verdict_sample": "Good: direct connection to 0xd6ca...6b6e (hole punching took 803 ms): 120 ms round trip, 760 kbps up, 4.3 Mbps down.",
+   "notes": "Bad link on the bench side (50 ms + 1 % loss each way). packet_loss hint in 2 of 3 runs (2/121 and 1/119 counted from 1.14/1.32 s); run 1 lost 0 of 118 (at 1 % about one window in three shows no loss): the one misleading verdict, as in campaign 3. Status healthy, exit 0, relay_compare ok and reachable in 3/3. Uploads all ok (stopped at 8 s, counted at 8.13 s), concurrency measured in 3/3: requests sized for 0.76/1.52/1.26 Mbps (23-46 KiB; campaign 3's rule, the slower average, would have given 0.76/2.07/4.02 Mbps), 0.85/1.18/0.93 Mbps, no restart. Throughput per run up 0.8/2.1/5.9, down 4.3/24.5/4.0 Mbps (bimodal on this link in every campaign), runs 60.6-72.7 s (campaign 3: 58-70.5 s). 10 more runs in debug/lossy-extra: packet_loss 7/10, settled 10/10, healthy/exit 0 10/10, no transfer failure, relay_compare ok 10/10, concurrency throughput 10/10 (2 restarts); see observations.",
+   "run_dirs": [
+    "lab/lab-netem-pr/run1",
+    "lab/lab-netem-pr/run2",
+    "lab/lab-netem-pr/run3"
+   ],
+   "verdict_runs": {
+    "misleading": 1,
+    "right": 2
+   },
+   "verdict_checks": [
+    {
+     "kind": "misleading",
+     "code": "packet_loss_missed",
+     "runs": 1,
+     "detail": "1 % loss each way on the link, no packet_loss hint: 0 of 118 latency-phase packets lost (0.0 %), counted from 1321 ms when the path had settled, threshold 0.5 % of >= 50 (at 1 % random loss, 31% of 118-packet windows see no loss)"
+    },
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the port-restricted profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    },
+    {
+     "kind": "right",
+     "code": "packet_loss",
+     "runs": 2,
+     "detail": "packet_loss hint: 2 of 121 latency-phase packets lost (1.653 %), counted from 1141 ms when the path had settled"
+    }
+   ]
+  },
+  {
+   "id": "lab-idle30-pr",
+   "group": "lab",
+   "title": "port-restricted <- port-restricted, NAT mapping timeout 30 s, 60 s idle",
+   "a": {
+    "role": "bench",
+    "node": "idle2",
+    "profile": "port-restricted",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 30
+   },
+   "b": {
+    "role": "listener",
+    "node": "idle1",
+    "profile": "port-restricted",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 30
+   },
+   "netem": null,
+   "args": "--idle 60s",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 242.444,
+    "p95": 242.632,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.41,
+    "p95": 40.423,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 290.018,
+    "p95": 290.24,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 40.404,
+    "p95": 40.567,
+    "n": 180
+   },
+   "jitter_ms": 0.762,
+   "loss_pct": 0.044,
+   "direct_fraction": 1.0,
+   "upload_mbps": 123.338,
+   "download_mbps": 123.934,
+   "concurrency_mbps": 223.284,
+   "loaded_rtt_ms_p50": 40.313,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 74.6,
+    "p95": 74.6,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 161.046,
+    "connect": 242.454,
+    "latency": 12001.166,
+    "upload": 648.642,
+    "download": 645.521,
+    "concurrency": 281.787,
+    "idle": 60041.245
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 340,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/113",
+     "0/114",
+     "0/113"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 1241.759,
+    "from_ms_max": 1242.057
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": {
+    "survived": 3,
+    "ok": 3,
+    "runs": 3,
+    "recovery_ms": 40.686,
+    "path_after": {
+     "direct": 3
+    },
+    "idle_ms": 60000.0
+   },
+   "bind_ms": {
+    "p50": 608.205,
+    "p95": 608.935,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 610.228,
+    "p95": 610.282,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 161.04,
+     "p95": 161.221,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.14.2:51288",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.615,
+    "relay_tls_ms_p50": 40.519,
+    "relay_https_latency_ms_p50": 201.455,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Good: direct connection to 0x71c2...6cf8 (hole punching took 290 ms): 40 ms round trip, 122 Mbps up, 125 Mbps down.",
+   "notes": "Survived 60 s idle in 3/3 runs, recovery 41 ms; settled loss 0/113-114; no false positive.",
+   "run_dirs": [
+    "lab/lab-idle30-pr/run1",
+    "lab/lab-idle30-pr/run2",
+    "lab/lab-idle30-pr/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "idle",
+     "runs": 3,
+     "detail": "idle: survived, no idle finding"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the port-restricted profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "lab-idle5-pr",
+   "group": "lab",
+   "title": "port-restricted <- port-restricted, NAT mapping timeout 5 s, 60 s idle",
+   "a": {
+    "role": "bench",
+    "node": "idle4",
+    "profile": "port-restricted",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 5
+   },
+   "b": {
+    "role": "listener",
+    "node": "idle3",
+    "profile": "port-restricted",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 5
+   },
+   "netem": null,
+   "args": "--idle 60s",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 216.715,
+    "p95": 216.944,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.355,
+    "p95": 40.386,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 289.965,
+    "p95": 290.024,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 40.445,
+    "p95": 40.608,
+    "n": 180
+   },
+   "jitter_ms": 0.749,
+   "loss_pct": 0.044,
+   "direct_fraction": 1.0,
+   "upload_mbps": 122.865,
+   "download_mbps": 123.411,
+   "concurrency_mbps": 219.07,
+   "loaded_rtt_ms_p50": 40.374,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 74.6,
+    "p95": 74.7,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 161.057,
+    "connect": 216.725,
+    "latency": 12000.949,
+    "upload": 651.149,
+    "download": 648.26,
+    "concurrency": 287.206,
+    "idle": 60042.319
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 341,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/113",
+     "0/113",
+     "0/115"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 1241.748,
+    "from_ms_max": 1242.134
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": {
+    "survived": 3,
+    "ok": 3,
+    "runs": 3,
+    "recovery_ms": 40.619,
+    "path_after": {
+     "direct": 3
+    },
+    "idle_ms": 60000.0
+   },
+   "bind_ms": {
+    "p50": 608.54,
+    "p95": 608.611,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 609.176,
+    "p95": 609.479,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 161.049,
+     "p95": 161.085,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.16.2:55817",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.57,
+    "relay_tls_ms_p50": 40.468,
+    "relay_https_latency_ms_p50": 201.463,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Good: direct connection to 0x9113...1fb1 (hole punching took 290 ms): 40 ms round trip, 123 Mbps up, 122 Mbps down.",
+   "notes": "Survived 60 s idle in 3/3 runs; settled loss 0; no false positive.",
+   "run_dirs": [
+    "lab/lab-idle5-pr/run1",
+    "lab/lab-idle5-pr/run2",
+    "lab/lab-idle5-pr/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "idle",
+     "runs": 3,
+     "detail": "idle: survived, no idle finding"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the port-restricted profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "lab-natflush-pr",
+   "group": "lab",
+   "title": "port-restricted <- port-restricted, NAT state of both routers flushed 20 s into a 60 s idle",
+   "a": {
+    "role": "bench",
+    "node": "pr2",
+    "profile": "port-restricted",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "b": {
+    "role": "listener",
+    "node": "pr1",
+    "profile": "port-restricted",
+    "location": "lab (emulated NAT, local relay)",
+    "link": "delay=10ms each way",
+    "udp_timeout_s": 120
+   },
+   "netem": "conntrack -F on both NAT routers 20 s into the idle phase",
+   "args": "--idle 60s",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 242.532,
+    "p95": 242.542,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 40.355,
+    "p95": 40.372,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 290.064,
+    "p95": 290.09,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 40.423,
+    "p95": 40.682,
+    "n": 180
+   },
+   "jitter_ms": 0.76,
+   "loss_pct": 0.03,
+   "direct_fraction": 1.0,
+   "upload_mbps": 122.047,
+   "download_mbps": 123.587,
+   "concurrency_mbps": 240.787,
+   "loaded_rtt_ms_p50": 40.42,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 74.6,
+    "p95": 74.6,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 160.961,
+    "connect": 242.546,
+    "latency": 12001.138,
+    "upload": 655.511,
+    "download": 647.341,
+    "concurrency": 261.305,
+    "idle": 60041.883
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 341,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/113",
+     "0/113",
+     "0/115"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 1241.026,
+    "from_ms_max": 1241.726
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": {
+    "survived": 3,
+    "ok": 3,
+    "runs": 3,
+    "recovery_ms": 40.658,
+    "path_after": {
+     "direct": 3
+    },
+    "idle_ms": 60000.0
+   },
+   "bind_ms": {
+    "p50": 608.515,
+    "p95": 609.124,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 609.145,
+    "p95": 610.964,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 160.955,
+     "p95": 161.023,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "198.18.6.2:48152",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 40.596,
+    "relay_tls_ms_p50": 40.387,
+    "relay_https_latency_ms_p50": 201.371,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Good: direct connection to 0x5b64...e020 (hole punching took 290 ms): 40 ms round trip, 122 Mbps up, 122 Mbps down.",
+   "notes": "conntrack -F on both NAT routers 20 s into the idle phase (run*/flush.txt): survived on the same direct path in 3/3; settled loss 0; no false positive.",
+   "run_dirs": [
+    "lab/lab-natflush-pr/run1",
+    "lab/lab-natflush-pr/run2",
+    "lab/lab-natflush-pr/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "idle",
+     "runs": 3,
+     "detail": "idle: survived, no idle finding"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the port-restricted profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "rw-easy-to-ufw",
+   "group": "realworld",
+   "title": "lab easy (real uplink) -> Hetzner listener on a random UDP port behind ufw",
+   "a": {
+    "role": "bench",
+    "node": "real1",
+    "profile": "easy",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "b": {
+    "role": "listener",
+    "node": "hetzner",
+    "profile": "public IP, ufw default-deny inbound (random UDP port)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 84.977,
+    "p95": 85.727,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 0.253,
+    "p95": 0.268,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 147.882,
+    "p95": 153.87,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 34.322,
+    "p95": 37.229,
+    "n": 180
+   },
+   "jitter_ms": 0.227,
+   "loss_pct": 0.0,
+   "direct_fraction": 0.983,
+   "upload_mbps": 144.115,
+   "download_mbps": 15.611,
+   "concurrency_mbps": 15.237,
+   "loaded_rtt_ms_p50": 40.27,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 22.3,
+    "p95": 22.9,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 0.806,
+    "connect": 84.984,
+    "latency": 12001.39,
+    "upload": 555.128,
+    "download": 5124.52,
+    "concurrency": 4129.079
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 338,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/112",
+     "0/113",
+     "0/113"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 1235.867,
+    "from_ms_max": 1238.546
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": 21.183
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 249.323,
+    "p95": 250.443,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 610.592,
+    "p95": 612.901,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 0.801,
+     "p95": 0.871,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "213.163.75.157:35967",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 0.735,
+    "relay_tls_ms_p50": 0.387,
+    "relay_https_latency_ms_p50": 42.142,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Good: direct connection to 0x667b...c2b0 (hole punching took 154 ms): 37 ms round trip, 132 Mbps up, 13.7 Mbps down.",
+   "notes": "Direct in 3/3 (relay first, direct after ~148 ms). Runs 1 and 2 (01:33:59 and 01:35:58 UTC) got only 13.7 and 15.6 Mbps down (Hetzner -> lab, 5.1-5.9 s for 10 MB, second half 20-22 Mbps), and their concurrency (256 KiB echo requests, whose replies take the same direction) 15.2/14.6 Mbps in 4.1-4.3 s with request RTTs of ~1 s while the small loaded-RTT probes stayed at 40-46 ms; run 3 (01:37:50) 145 Mbps down, 303 Mbps concurrency. Hence the compare flags (download 134.5 -> 15.6, concurrency 279.6 -> 15.2, run 13.8 -> 22.3 s). The verdicts report the measured numbers (right). Not reproduced in debug/rw-recheck (3 runs at 01:57-01:59: 133-148 Mbps down, conc 235-310 Mbps); see observations.",
+   "run_dirs": [
+    "realworld/rw-easy-to-ufw/run1",
+    "realworld/rw-easy-to-ufw/run2",
+    "realworld/rw-easy-to-ufw/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the easy profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "rw-easy-to-open",
+   "group": "realworld",
+   "title": "lab easy (real uplink) -> Hetzner listener on UDP 8000 (allowed by ufw)",
+   "a": {
+    "role": "bench",
+    "node": "real1",
+    "profile": "easy",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "b": {
+    "role": "listener",
+    "node": "hetzner",
+    "profile": "public IP, UDP 8000 allowed by ufw",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "netem": null,
+   "args": "--compare-relay",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "direct": 3
+   },
+   "connect_ms": {
+    "p50": 84.049,
+    "p95": 84.796,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 0.265,
+    "p95": 0.277,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 84.081,
+    "p95": 84.835,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 37.195,
+    "p95": 37.434,
+    "n": 180
+   },
+   "jitter_ms": 0.123,
+   "loss_pct": 0.0,
+   "direct_fraction": 1.0,
+   "upload_mbps": 134.124,
+   "download_mbps": 133.172,
+   "concurrency_mbps": 295.167,
+   "loaded_rtt_ms_p50": 38.576,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 20.0,
+    "p95": 20.0,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 0.932,
+    "connect": 84.06,
+    "latency": 12001.481,
+    "upload": 596.481,
+    "download": 600.746,
+    "concurrency": 213.177,
+    "relay_compare": 6203.282
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 425,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/138",
+     "0/143",
+     "0/144"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": {
+    "rtt_ms_p50": 37.556,
+    "upload_mbps": 77.32,
+    "download_mbps": 76.276,
+    "connect_ms_p50": 84.988,
+    "ok": 3,
+    "runs": 3,
+    "reachable": 3
+   },
+   "idle": null,
+   "bind_ms": {
+    "p50": 248.307,
+    "p95": 249.44,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 624.769,
+    "p95": 629.89,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 0.926,
+     "p95": 1.044,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "213.163.75.157:59592",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 0.736,
+    "relay_tls_ms_p50": 0.392,
+    "relay_https_latency_ms_p50": 41.617,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {
+    "relay_fallback": 3
+   },
+   "verdict_sample": "Good: direct connection to 0xc8bf...ea70: 34 ms round trip, 149 Mbps up, 146 Mbps down.",
+   "notes": "Direct from the first packet in 3/3; 131-146 Mbps both ways, concurrency 279-310 Mbps; relay_compare ok 3/3 (37.6 ms, 77/76 Mbps).",
+   "run_dirs": [
+    "realworld/rw-easy-to-open/run1",
+    "realworld/rw-easy-to-open/run2",
+    "realworld/rw-easy-to-open/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the easy profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "rw-symmetric-to-ufw",
+   "group": "realworld",
+   "title": "lab symmetric (real uplink) -> Hetzner listener on a random UDP port behind ufw",
+   "a": {
+    "role": "bench",
+    "node": "real2",
+    "profile": "symmetric",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "b": {
+    "role": "listener",
+    "node": "hetzner",
+    "profile": "public IP, ufw default-deny inbound (random UDP port)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 0,
+    "relay": 3,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 0,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 84.206,
+    "p95": 85.756,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 0.281,
+    "p95": 0.308,
+    "n": 3
+   },
+   "time_to_direct_ms": null,
+   "rtt_ms": {
+    "p50": 37.222,
+    "p95": 38.712,
+    "n": 180
+   },
+   "jitter_ms": 0.196,
+   "loss_pct": 0.0,
+   "direct_fraction": 0.0,
+   "upload_mbps": 77.269,
+   "download_mbps": 76.761,
+   "concurrency_mbps": 177.011,
+   "loaded_rtt_ms_p50": 37.995,
+   "transfer_relay_capped": true,
+   "run_duration_s": {
+    "p50": 13.3,
+    "p95": 13.4,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 0.851,
+    "connect": 84.217,
+    "latency": 12001.047,
+    "upload": 414.168,
+    "download": 416.897,
+    "concurrency": 177.728
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 376,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/125",
+     "0/126",
+     "0/125"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 45,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 250.121,
+    "p95": 252.622,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 624.758,
+    "p95": 635.584,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 0.845,
+     "p95": 1.302,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "213.163.75.157:33977",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "false": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 0.774,
+    "relay_tls_ms_p50": 0.388,
+    "relay_https_latency_ms_p50": 41.518,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "4": 3
+   },
+   "statuses": {
+    "relay_only": 3
+   },
+   "issues": {},
+   "hints": {
+    "hard_nat_likely": 3
+   },
+   "verdict_sample": "Connected to 0x667b...c2b0, but only through a relay (https://213.163.75.157:56000/): 34 ms round trip, 85.6 Mbps up, 84.7 Mbps down. Your NAT gave this node another public UDP port: 213.163.75.157:33977 (local port 59683). NATs that do that usually take a new port for every destination (symmetric or hard NAT), and then hole punching fails when the peer is behind a NAT too. (Whether the port really changes per destination needs answers from two relays; one answered.)",
+   "notes": "Relay only; hard_nat_likely names the symmetric NAT (right).",
+   "run_dirs": [
+    "realworld/rw-symmetric-to-ufw/run1",
+    "realworld/rw-symmetric-to-ufw/run2",
+    "realworld/rw-symmetric-to-ufw/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the symmetric profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    },
+    {
+     "kind": "right",
+     "code": "relay_reason",
+     "runs": 3,
+     "detail": "relay-only blamed on the (likely) hard NAT on this side"
+    }
+   ]
+  },
+  {
+   "id": "rw-symmetric-to-open",
+   "group": "realworld",
+   "title": "lab symmetric (real uplink) -> Hetzner listener on UDP 8000 (allowed by ufw)",
+   "a": {
+    "role": "bench",
+    "node": "real2",
+    "profile": "symmetric",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "b": {
+    "role": "listener",
+    "node": "hetzner",
+    "profile": "public IP, UDP 8000 allowed by ufw",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "direct": 3
+   },
+   "connect_ms": {
+    "p50": 78.25,
+    "p95": 84.025,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 0.293,
+    "p95": 0.296,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 78.287,
+    "p95": 84.061,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 34.249,
+    "p95": 37.096,
+    "n": 180
+   },
+   "jitter_ms": 0.143,
+   "loss_pct": 0.007,
+   "direct_fraction": 1.0,
+   "upload_mbps": 141.111,
+   "download_mbps": 131.874,
+   "concurrency_mbps": 276.572,
+   "loaded_rtt_ms_p50": 37.096,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 13.8,
+    "p95": 20.9,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 1.109,
+    "connect": 78.262,
+    "latency": 12001.512,
+    "upload": 566.957,
+    "download": 606.654,
+    "concurrency": 227.501
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 420,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/141",
+     "0/138",
+     "0/141"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": 22.007
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 249.004,
+    "p95": 249.363,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 640.137,
+    "p95": 651.931,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 1.088,
+     "p95": 1.103,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "213.163.75.157:43665",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "false": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 0.792,
+    "relay_tls_ms_p50": 0.48,
+    "relay_https_latency_ms_p50": 41.668,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Good: direct connection to 0xc8bf...ea70: 34 ms round trip, 141 Mbps up, 15.5 Mbps down.",
+   "notes": "Direct from the first packet in 3/3. Run 1 (01:35:18 UTC) had the same slow Hetzner -> lab direction as rw-easy-to-ufw runs 1-2: 15.5 Mbps down, concurrency 22.4 Mbps in 2.8 s; runs 2-3 132-145 Mbps, concurrency 277-330 Mbps.",
+   "run_dirs": [
+    "realworld/rw-symmetric-to-open/run1",
+    "realworld/rw-symmetric-to-open/run2",
+    "realworld/rw-symmetric-to-open/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the symmetric profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "rw-udp-blocked-to-ufw",
+   "group": "realworld",
+   "title": "lab udp-blocked (real uplink) -> Hetzner listener on a random UDP port behind ufw",
+   "a": {
+    "role": "bench",
+    "node": "real3",
+    "profile": "udp-blocked",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "b": {
+    "role": "listener",
+    "node": "hetzner",
+    "profile": "public IP, ufw default-deny inbound (random UDP port)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 0,
+    "relay": 3,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 0,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 79.243,
+    "p95": 85.253,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 0.261,
+    "p95": 0.269,
+    "n": 3
+   },
+   "time_to_direct_ms": null,
+   "rtt_ms": {
+    "p50": 34.737,
+    "p95": 37.732,
+    "n": 180
+   },
+   "jitter_ms": 0.207,
+   "loss_pct": 0.0,
+   "direct_fraction": 0.0,
+   "upload_mbps": 83.239,
+   "download_mbps": 82.382,
+   "concurrency_mbps": 168.918,
+   "loaded_rtt_ms_p50": 37.501,
+   "transfer_relay_capped": true,
+   "run_duration_s": {
+    "p50": 16.1,
+    "p95": 16.1,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 0.99,
+    "connect": 79.269,
+    "latency": 12001.129,
+    "upload": 384.467,
+    "download": 388.452,
+    "concurrency": 186.242
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 378,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/126",
+     "0/126",
+     "0/126"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 45,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 3007.356,
+    "p95": 3007.888,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 605.324,
+    "p95": 626.708,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 0.985,
+     "p95": 1.931,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "false": 3
+    },
+    "public_v4_sample": null,
+    "behind_nat_v4": {
+     "none": 3
+    },
+    "port_preserved_v4": {
+     "none": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": null,
+    "relay_tls_ms_p50": 0.479,
+    "relay_https_latency_ms_p50": 41.858,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "4": 3
+   },
+   "statuses": {
+    "relay_only": 3
+   },
+   "issues": {
+    "udp_blocked": 3
+   },
+   "hints": {},
+   "verdict_sample": "Connected to 0x667b...c2b0, but only through a relay (https://213.163.75.157:56000/): 38 ms round trip, 77.7 Mbps up, 77.5 Mbps down. No relay answered QUIC address discovery (UDP port 56001, as configured), although they answer over HTTPS, and no direct path to the peer was found: outgoing UDP is probably blocked on your network, so all traffic goes through a relay; ask your network admin to allow outgoing UDP. (Or the relay does not serve address discovery on port 56001: check ,quic=PORT.)",
+   "notes": "Relay only, bind 3.0 s, udp_blocked (right). 77-85 Mbps through the relay (campaign 3 run 1: 8.8 Mbps down in its slow minute).",
+   "run_dirs": [
+    "realworld/rw-udp-blocked-to-ufw/run1",
+    "realworld/rw-udp-blocked-to-ufw/run2",
+    "realworld/rw-udp-blocked-to-ufw/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "udp_blocked",
+     "runs": 3,
+     "detail": "udp_blocked issue on the UDP-blocked side"
+    }
+   ]
+  },
+  {
+   "id": "rw-udp-blocked-to-open",
+   "group": "realworld",
+   "title": "lab udp-blocked (real uplink) -> Hetzner listener on UDP 8000 (allowed by ufw)",
+   "a": {
+    "role": "bench",
+    "node": "real3",
+    "profile": "udp-blocked",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "b": {
+    "role": "listener",
+    "node": "hetzner",
+    "profile": "public IP, UDP 8000 allowed by ufw",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 0,
+    "relay": 3,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 0,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 78.008,
+    "p95": 79.184,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 0.274,
+    "p95": 0.338,
+    "n": 3
+   },
+   "time_to_direct_ms": null,
+   "rtt_ms": {
+    "p50": 34.247,
+    "p95": 36.089,
+    "n": 180
+   },
+   "jitter_ms": 0.19,
+   "loss_pct": 0.033,
+   "direct_fraction": 0.0,
+   "upload_mbps": 84.268,
+   "download_mbps": 84.061,
+   "concurrency_mbps": 155.142,
+   "loaded_rtt_ms_p50": 34.397,
+   "transfer_relay_capped": true,
+   "run_duration_s": {
+    "p50": 16.0,
+    "p95": 16.1,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 0.97,
+    "connect": 78.015,
+    "latency": 12001.285,
+    "upload": 379.76,
+    "download": 380.697,
+    "concurrency": 202.786
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 378,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/127",
+     "0/125",
+     "0/126"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 45,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 3007.462,
+    "p95": 3007.767,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 621.616,
+    "p95": 670.021,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 0.964,
+     "p95": 1.61,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "false": 3
+    },
+    "public_v4_sample": null,
+    "behind_nat_v4": {
+     "none": 3
+    },
+    "port_preserved_v4": {
+     "none": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": null,
+    "relay_tls_ms_p50": 0.438,
+    "relay_https_latency_ms_p50": 42.149,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "4": 3
+   },
+   "statuses": {
+    "relay_only": 3
+   },
+   "issues": {
+    "udp_blocked": 3
+   },
+   "hints": {},
+   "verdict_sample": "Connected to 0xc8bf...ea70, but only through a relay (https://213.163.75.157:56000/): 35 ms round trip, 84.3 Mbps up, 84.1 Mbps down. No relay answered QUIC address discovery (UDP port 56001, as configured), although they answer over HTTPS, and no direct path to the peer was found: outgoing UDP is probably blocked on your network, so all traffic goes through a relay; ask your network admin to allow outgoing UDP. (Or the relay does not serve address discovery on port 56001: check ,quic=PORT.)",
+   "notes": "Relay only, bind 3.0 s, udp_blocked (right).",
+   "run_dirs": [
+    "realworld/rw-udp-blocked-to-open/run1",
+    "realworld/rw-udp-blocked-to-open/run2",
+    "realworld/rw-udp-blocked-to-open/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "udp_blocked",
+     "runs": 3,
+     "detail": "udp_blocked issue on the UDP-blocked side"
+    }
+   ]
+  },
+  {
+   "id": "rw-ufw-to-easy",
+   "group": "realworld",
+   "title": "Hetzner bench (random UDP port behind ufw) -> lab easy listener (real uplink)",
+   "a": {
+    "role": "bench",
+    "node": "hetzner",
+    "profile": "public IP, ufw default-deny inbound (random UDP port)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "b": {
+    "role": "listener",
+    "node": "real1",
+    "profile": "easy",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 0,
+    "relay": 3,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 0,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 131.876,
+    "p95": 133.053,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 34.597,
+    "p95": 37.789,
+    "n": 3
+   },
+   "time_to_direct_ms": null,
+   "rtt_ms": {
+    "p50": 34.324,
+    "p95": 34.847,
+    "n": 180
+   },
+   "jitter_ms": 0.144,
+   "loss_pct": 0.0,
+   "direct_fraction": 0.0,
+   "upload_mbps": 82.384,
+   "download_mbps": 83.856,
+   "concurrency_mbps": 188.502,
+   "loaded_rtt_ms_p50": 35.105,
+   "transfer_relay_capped": true,
+   "run_duration_s": {
+    "p50": 13.8,
+    "p95": 13.8,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 136.07,
+    "connect": 131.901,
+    "latency": 12001.143,
+    "upload": 388.488,
+    "download": 381.665,
+    "concurrency": 166.932
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 378,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/125",
+     "0/128",
+     "0/125"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 45,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 602.084,
+    "p95": 622.601,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 248.749,
+    "p95": 248.961,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 136.045,
+     "p95": 146.379,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "65.109.154.126:48823",
+    "behind_nat_v4": {
+     "false": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 36.996,
+    "relay_tls_ms_p50": 34.508,
+    "relay_https_latency_ms_p50": 189.743,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "4": 3
+   },
+   "statuses": {
+    "relay_only": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Connected to 0x5ffc...6bca, but only through a relay (https://213.163.75.157:56000/): 34 ms round trip, 85.0 Mbps up, 84.2 Mbps down. UDP works, and this machine is not behind a NAT (65.109.154.126:48823), so probably the peer's network prevents a direct path (it blocks UDP or uses a hard NAT), or a firewall in front of this machine drops incoming UDP from the peer (bench cannot see firewalls).",
+   "notes": "Relay only (the i3D host's NAT moves the lab node's port, ufw drops it); the verdict names the peer's network or a firewall here (right).",
+   "run_dirs": [
+    "realworld/rw-ufw-to-easy/run1",
+    "realworld/rw-ufw-to-easy/run2",
+    "realworld/rw-ufw-to-easy/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the public profile"
+    },
+    {
+     "kind": "right",
+     "code": "relay_reason_no_nat",
+     "runs": 3,
+     "detail": "relay-only without a NAT on this side (behind_nat_v4=false): the verdict names the peer's network or a firewall in front of this machine (here ufw)"
+    }
+   ]
+  },
+  {
+   "id": "rw-open-to-easy",
+   "group": "realworld",
+   "title": "Hetzner bench (UDP 8000, allowed by ufw) -> lab easy listener (real uplink)",
+   "a": {
+    "role": "bench",
+    "node": "hetzner",
+    "profile": "public IP, UDP 8000 allowed by ufw",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "b": {
+    "role": "listener",
+    "node": "real1",
+    "profile": "easy",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 131.152,
+    "p95": 136.974,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 34.456,
+    "p95": 34.503,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 209.848,
+    "p95": 221.962,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 33.841,
+    "p95": 37.438,
+    "n": 180
+   },
+   "jitter_ms": 0.126,
+   "loss_pct": 4.772,
+   "direct_fraction": 0.983,
+   "upload_mbps": 144.168,
+   "download_mbps": 147.062,
+   "concurrency_mbps": 300.427,
+   "loaded_rtt_ms_p50": 36.261,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 14.2,
+    "p95": 14.4,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 147.846,
+    "connect": 131.182,
+    "latency": 12001.372,
+    "upload": 554.982,
+    "download": 544.051,
+    "concurrency": 209.518
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 343,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/114",
+     "0/113",
+     "0/116"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 1235.779,
+    "from_ms_max": 1238.323
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 610.729,
+    "p95": 613.837,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 248.88,
+    "p95": 249.357,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 147.833,
+     "p95": 149.335,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "65.109.154.126:8000",
+    "behind_nat_v4": {
+     "false": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 33.811,
+    "relay_tls_ms_p50": 37.381,
+    "relay_https_latency_ms_p50": 187.574,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Good: direct connection to 0x5ffc...6bca (hole punching took 207 ms): 34 ms round trip, 144 Mbps up, 147 Mbps down.",
+   "notes": "Direct after ~210 ms; settled loss 0/113-116. Whole-connection loss 4.8 % (congestion losses of the bulk phases, not judged; campaign 3: 4.6 %).",
+   "run_dirs": [
+    "realworld/rw-open-to-easy/run1",
+    "realworld/rw-open-to-easy/run2",
+    "realworld/rw-open-to-easy/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the public profile"
+    }
+   ]
+  },
+  {
+   "id": "rw-ufw-to-symmetric",
+   "group": "realworld",
+   "title": "Hetzner bench (random UDP port behind ufw) -> lab symmetric listener (real uplink)",
+   "a": {
+    "role": "bench",
+    "node": "hetzner",
+    "profile": "public IP, ufw default-deny inbound (random UDP port)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "b": {
+    "role": "listener",
+    "node": "real2",
+    "profile": "symmetric",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 0,
+    "relay": 3,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 0,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 141.155,
+    "p95": 142.006,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 37.823,
+    "p95": 37.932,
+    "n": 3
+   },
+   "time_to_direct_ms": null,
+   "rtt_ms": {
+    "p50": 37.533,
+    "p95": 38.096,
+    "n": 180
+   },
+   "jitter_ms": 0.133,
+   "loss_pct": 0.0,
+   "direct_fraction": 0.0,
+   "upload_mbps": 76.794,
+   "download_mbps": 76.978,
+   "concurrency_mbps": 160.08,
+   "loaded_rtt_ms_p50": 38.377,
+   "transfer_relay_capped": true,
+   "run_duration_s": {
+    "p50": 13.9,
+    "p95": 14.0,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 148.937,
+    "connect": 141.186,
+    "latency": 12001.046,
+    "upload": 416.747,
+    "download": 415.751,
+    "concurrency": 196.555
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 378,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/125",
+     "0/126",
+     "0/127"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 45,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 624.485,
+    "p95": 630.768,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 248.895,
+    "p95": 248.906,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 148.918,
+     "p95": 149.454,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "65.109.154.126:59473",
+    "behind_nat_v4": {
+     "false": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 36.987,
+    "relay_tls_ms_p50": 37.676,
+    "relay_https_latency_ms_p50": 189.667,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "4": 3
+   },
+   "statuses": {
+    "relay_only": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Connected to 0x4d93...4358, but only through a relay (https://213.163.75.157:56000/): 38 ms round trip, 75.6 Mbps up, 77.1 Mbps down. UDP works, and this machine is not behind a NAT (65.109.154.126:59473), so probably the peer's network prevents a direct path (it blocks UDP or uses a hard NAT), or a firewall in front of this machine drops incoming UDP from the peer (bench cannot see firewalls).",
+   "notes": "Relay only; verdict names the peer's network or a firewall here (right).",
+   "run_dirs": [
+    "realworld/rw-ufw-to-symmetric/run1",
+    "realworld/rw-ufw-to-symmetric/run2",
+    "realworld/rw-ufw-to-symmetric/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the public profile"
+    },
+    {
+     "kind": "right",
+     "code": "relay_reason",
+     "runs": 3,
+     "detail": "relay-only blamed on the peer side (symmetric)"
+    },
+    {
+     "kind": "right",
+     "code": "relay_reason_no_nat",
+     "runs": 3,
+     "detail": "relay-only without a NAT on this side (behind_nat_v4=false): the verdict names the peer's network or a firewall in front of this machine (here ufw)"
+    }
+   ]
+  },
+  {
+   "id": "rw-open-to-symmetric",
+   "group": "realworld",
+   "title": "Hetzner bench (UDP 8000, allowed by ufw) -> lab symmetric listener (real uplink)",
+   "a": {
+    "role": "bench",
+    "node": "hetzner",
+    "profile": "public IP, UDP 8000 allowed by ufw",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "b": {
+    "role": "listener",
+    "node": "real2",
+    "profile": "symmetric",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "netem": null,
+   "args": "",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 3,
+    "relay": 0,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 3,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 130.404,
+    "p95": 137.238,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 34.39,
+    "p95": 34.616,
+    "n": 3
+   },
+   "time_to_direct_ms": {
+    "p50": 214.263,
+    "p95": 215.089,
+    "n": 3
+   },
+   "rtt_ms": {
+    "p50": 34.455,
+    "p95": 37.448,
+    "n": 180
+   },
+   "jitter_ms": 0.196,
+   "loss_pct": 2.886,
+   "direct_fraction": 0.983,
+   "upload_mbps": 142.794,
+   "download_mbps": 145.228,
+   "concurrency_mbps": 295.438,
+   "loaded_rtt_ms_p50": 36.03,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 14.3,
+    "p95": 14.3,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 136.424,
+    "connect": 130.431,
+    "latency": 12001.255,
+    "upload": 560.324,
+    "download": 550.934,
+    "concurrency": 213.018
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 353,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/113",
+     "0/113",
+     "0/127"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 1235.971,
+    "from_ms_max": 1238.144
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 90,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 611.226,
+    "p95": 619.321,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 248.897,
+    "p95": 249.063,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 136.387,
+     "p95": 146.596,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "65.109.154.126:8000",
+    "behind_nat_v4": {
+     "false": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 33.646,
+    "relay_tls_ms_p50": 34.455,
+    "relay_https_latency_ms_p50": 175.367,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Good: direct connection to 0x4d93...4358 (hole punching took 215 ms): 34 ms round trip, 146 Mbps up, 147 Mbps down.",
+   "notes": "Direct after ~214 ms; settled loss 0/113-127; no packet_loss hint. Whole-connection loss 2.9 % (congestion, not judged).",
+   "run_dirs": [
+    "realworld/rw-open-to-symmetric/run1",
+    "realworld/rw-open-to-symmetric/run2",
+    "realworld/rw-open-to-symmetric/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "healthy_direct",
+     "runs": 3,
+     "detail": "healthy with a direct path"
+    },
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the public profile"
+    }
+   ]
+  },
+  {
+   "id": "startup-hetzner-qad-56001",
+   "group": "startup",
+   "title": "local check only on Hetzner, relay QAD port 56001",
+   "a": {
+    "role": "bench",
+    "node": "hetzner",
+    "profile": "public IP, ufw default-deny inbound (random UDP port)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "b": null,
+   "netem": null,
+   "args": "--relay https://213.163.75.157:56000,quic=56001",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": null,
+   "path_final_unknown": null,
+   "direct_seen": null,
+   "first_path": null,
+   "connect_ms": null,
+   "lookup_ms": null,
+   "time_to_direct_ms": null,
+   "rtt_ms": null,
+   "jitter_ms": null,
+   "loss_pct": null,
+   "direct_fraction": null,
+   "upload_mbps": null,
+   "download_mbps": null,
+   "concurrency_mbps": null,
+   "loaded_rtt_ms_p50": null,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 0.8,
+    "p95": 0.8,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 151.113
+   },
+   "disconnect_runs": null,
+   "connection_lost": null,
+   "quic_counters_runs": null,
+   "latency_loss": null,
+   "concurrency": null,
+   "transfer_limited_by": null,
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 666.576,
+    "p95": 674.898,
+    "n": 3
+   },
+   "listener_bind_ms": null,
+   "local": {
+    "duration_ms": {
+     "p50": 151.073,
+     "p95": 153.102,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "65.109.154.126:56788",
+    "behind_nat_v4": {
+     "false": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 37.385,
+    "relay_tls_ms_p50": 38.005,
+    "relay_https_latency_ms_p50": 178.375,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Your network looks fine for golem-p2p: UDP works, public address 65.109.154.126:56788, 1 relay reachable, your record is published.",
+   "notes": "bind ~0.67 s (campaign 3: 0.61 s; this machine's load was 27-35), local check 0.13 s.",
+   "run_dirs": [
+    "startup/startup-hetzner-qad-56001/run1",
+    "startup/startup-hetzner-qad-56001/run2",
+    "startup/startup-hetzner-qad-56001/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the public profile"
+    }
+   ]
+  },
+  {
+   "id": "startup-lab-easy-qad-56001",
+   "group": "startup",
+   "title": "local check only in lab easy node (real uplink), relay QAD port 56001",
+   "a": {
+    "role": "bench",
+    "node": "real1",
+    "profile": "easy",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "b": null,
+   "netem": null,
+   "args": "--relay https://213.163.75.157:56000,quic=56001",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": null,
+   "path_final_unknown": null,
+   "direct_seen": null,
+   "first_path": null,
+   "connect_ms": null,
+   "lookup_ms": null,
+   "time_to_direct_ms": null,
+   "rtt_ms": null,
+   "jitter_ms": null,
+   "loss_pct": null,
+   "direct_fraction": null,
+   "upload_mbps": null,
+   "download_mbps": null,
+   "concurrency_mbps": null,
+   "loaded_rtt_ms_p50": null,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 0.2,
+    "p95": 0.3,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 0.832
+   },
+   "disconnect_runs": null,
+   "connection_lost": null,
+   "quic_counters_runs": null,
+   "latency_loss": null,
+   "concurrency": null,
+   "transfer_limited_by": null,
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 248.048,
+    "p95": 250.352,
+    "n": 3
+   },
+   "listener_bind_ms": null,
+   "local": {
+    "duration_ms": {
+     "p50": 0.827,
+     "p95": 0.864,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "true": 3
+    },
+    "public_v4_sample": "213.163.75.157:35746",
+    "behind_nat_v4": {
+     "true": 3
+    },
+    "port_preserved_v4": {
+     "true": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": 0.737,
+    "relay_tls_ms_p50": 0.364,
+    "relay_https_latency_ms_p50": 41.774,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Your network looks fine for golem-p2p: UDP works, public address 213.163.75.157:35746, 1 relay reachable, your record is published.",
+   "notes": "bind ~0.25 s.",
+   "run_dirs": [
+    "startup/startup-lab-easy-qad-56001/run1",
+    "startup/startup-lab-easy-qad-56001/run2",
+    "startup/startup-lab-easy-qad-56001/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "nat_facts",
+     "runs": 3,
+     "detail": "behind_nat/port_preserved match the easy profile"
+    },
+    {
+     "kind": "right",
+     "code": "nat_mapping_unknown",
+     "runs": 3,
+     "detail": "nat_mapping listed as unknown (one relay)"
+    }
+   ]
+  },
+  {
+   "id": "startup-hetzner-qad-7842",
+   "group": "startup",
+   "title": "local check only on Hetzner, relay QAD port 7842 (default, unanswered)",
+   "a": {
+    "role": "bench",
+    "node": "hetzner",
+    "profile": "public IP, ufw default-deny inbound (random UDP port)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "b": null,
+   "netem": null,
+   "args": "--relay https://213.163.75.157:56000",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": null,
+   "path_final_unknown": null,
+   "direct_seen": null,
+   "first_path": null,
+   "connect_ms": null,
+   "lookup_ms": null,
+   "time_to_direct_ms": null,
+   "rtt_ms": null,
+   "jitter_ms": null,
+   "loss_pct": null,
+   "direct_fraction": null,
+   "upload_mbps": null,
+   "download_mbps": null,
+   "concurrency_mbps": null,
+   "loaded_rtt_ms_p50": null,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 3.4,
+    "p95": 3.4,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 134.733
+   },
+   "disconnect_runs": null,
+   "connection_lost": null,
+   "quic_counters_runs": null,
+   "latency_loss": null,
+   "concurrency": null,
+   "transfer_limited_by": null,
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 3247.617,
+    "p95": 3277.915,
+    "n": 3
+   },
+   "listener_bind_ms": null,
+   "local": {
+    "duration_ms": {
+     "p50": 134.682,
+     "p95": 141.877,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "false": 3
+    },
+    "public_v4_sample": null,
+    "behind_nat_v4": {
+     "none": 3
+    },
+    "port_preserved_v4": {
+     "none": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": null,
+    "relay_tls_ms_p50": 34.41,
+    "relay_https_latency_ms_p50": 177.216,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "5": 3
+   },
+   "statuses": {
+    "degraded": 3
+   },
+   "issues": {
+    "udp_blocked": 3
+   },
+   "hints": {},
+   "verdict_sample": "Problems found on your network, see below.",
+   "notes": "Relay URL without ,quic=: bind 3.2 s; udp_blocked names both causes (blocked UDP, or no QAD on port 7842; right). Status degraded/exit 5, as in campaigns 2-3.",
+   "run_dirs": [
+    "startup/startup-hetzner-qad-7842/run1",
+    "startup/startup-hetzner-qad-7842/run2",
+    "startup/startup-hetzner-qad-7842/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "udp_blocked_or_qad_port",
+     "runs": 3,
+     "detail": "udp_blocked on an unanswered QAD port (7842, iroh's default; quic_port_explicit=false): the message names both causes as equally likely, blocked UDP or a relay that does not serve QAD on port 7842, and says how to give the port (,quic=PORT)"
+    }
+   ]
+  },
+  {
+   "id": "startup-lab-easy-qad-7842",
+   "group": "startup",
+   "title": "local check only in lab easy node (real uplink), relay QAD port 7842 (default, unanswered)",
+   "a": {
+    "role": "bench",
+    "node": "real1",
+    "profile": "easy",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "b": null,
+   "netem": null,
+   "args": "--relay https://213.163.75.157:56000",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": null,
+   "path_final_unknown": null,
+   "direct_seen": null,
+   "first_path": null,
+   "connect_ms": null,
+   "lookup_ms": null,
+   "time_to_direct_ms": null,
+   "rtt_ms": null,
+   "jitter_ms": null,
+   "loss_pct": null,
+   "direct_fraction": null,
+   "upload_mbps": null,
+   "download_mbps": null,
+   "concurrency_mbps": null,
+   "loaded_rtt_ms_p50": null,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 3.0,
+    "p95": 3.0,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 0.917
+   },
+   "disconnect_runs": null,
+   "connection_lost": null,
+   "quic_counters_runs": null,
+   "latency_loss": null,
+   "concurrency": null,
+   "transfer_limited_by": null,
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 3007.931,
+    "p95": 3010.681,
+    "n": 3
+   },
+   "listener_bind_ms": null,
+   "local": {
+    "duration_ms": {
+     "p50": 0.912,
+     "p95": 1.002,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "false": 3
+    },
+    "public_v4_sample": null,
+    "behind_nat_v4": {
+     "none": 3
+    },
+    "port_preserved_v4": {
+     "none": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": null,
+    "relay_tls_ms_p50": 0.426,
+    "relay_https_latency_ms_p50": 42.035,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "5": 3
+   },
+   "statuses": {
+    "degraded": 3
+   },
+   "issues": {
+    "udp_blocked": 3
+   },
+   "hints": {},
+   "verdict_sample": "Problems found on your network, see below.",
+   "notes": "Same in the lab node: bind 3.0 s, the 'either ... or port 7842' wording.",
+   "run_dirs": [
+    "startup/startup-lab-easy-qad-7842/run1",
+    "startup/startup-lab-easy-qad-7842/run2",
+    "startup/startup-lab-easy-qad-7842/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "udp_blocked_or_qad_port",
+     "runs": 3,
+     "detail": "udp_blocked on an unanswered QAD port (7842, iroh's default; quic_port_explicit=false): the message names both causes as equally likely, blocked UDP or a relay that does not serve QAD on port 7842, and says how to give the port (,quic=PORT)"
+    }
+   ]
+  },
+  {
+   "id": "startup-hetzner-qad-off",
+   "group": "startup",
+   "title": "local check only on Hetzner, relay QAD port off",
+   "a": {
+    "role": "bench",
+    "node": "hetzner",
+    "profile": "public IP, ufw default-deny inbound (random UDP port)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "b": null,
+   "netem": null,
+   "args": "--relay https://213.163.75.157:56000,quic=off",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": null,
+   "path_final_unknown": null,
+   "direct_seen": null,
+   "first_path": null,
+   "connect_ms": null,
+   "lookup_ms": null,
+   "time_to_direct_ms": null,
+   "rtt_ms": null,
+   "jitter_ms": null,
+   "loss_pct": null,
+   "direct_fraction": null,
+   "upload_mbps": null,
+   "download_mbps": null,
+   "concurrency_mbps": null,
+   "loaded_rtt_ms_p50": null,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 0.8,
+    "p95": 0.8,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 137.285
+   },
+   "disconnect_runs": null,
+   "connection_lost": null,
+   "quic_counters_runs": null,
+   "latency_loss": null,
+   "concurrency": null,
+   "transfer_limited_by": null,
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 665.777,
+    "p95": 682.967,
+    "n": 3
+   },
+   "listener_bind_ms": null,
+   "local": {
+    "duration_ms": {
+     "p50": 137.231,
+     "p95": 137.58,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "false": 3
+    },
+    "public_v4_sample": null,
+    "behind_nat_v4": {
+     "none": 3
+    },
+    "port_preserved_v4": {
+     "none": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": null,
+    "relay_tls_ms_p50": 34.815,
+    "relay_https_latency_ms_p50": 177.702,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Your network looks fine for golem-p2p: 1 relay reachable, your record is published.",
+   "notes": "QAD off: bind ~0.67 s, UDP/NAT listed as unknown.",
+   "run_dirs": [
+    "startup/startup-hetzner-qad-off/run1",
+    "startup/startup-hetzner-qad-off/run2",
+    "startup/startup-hetzner-qad-off/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "qad_off_unknown",
+     "runs": 3,
+     "detail": "QAD off: UDP, public address and NAT listed as unknown"
+    }
+   ]
+  },
+  {
+   "id": "startup-lab-easy-qad-off",
+   "group": "startup",
+   "title": "local check only in lab easy node (real uplink), relay QAD port off",
+   "a": {
+    "role": "bench",
+    "node": "real1",
+    "profile": "easy",
+    "location": "lab VM via real uplink (emulated NAT + VM masquerade + i3D host masquerade, 213.163.75.157)"
+   },
+   "b": null,
+   "netem": null,
+   "args": "--relay https://213.163.75.157:56000,quic=off",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": null,
+   "path_final_unknown": null,
+   "direct_seen": null,
+   "first_path": null,
+   "connect_ms": null,
+   "lookup_ms": null,
+   "time_to_direct_ms": null,
+   "rtt_ms": null,
+   "jitter_ms": null,
+   "loss_pct": null,
+   "direct_fraction": null,
+   "upload_mbps": null,
+   "download_mbps": null,
+   "concurrency_mbps": null,
+   "loaded_rtt_ms_p50": null,
+   "transfer_relay_capped": null,
+   "run_duration_s": {
+    "p50": 0.2,
+    "p95": 0.3,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 0.827
+   },
+   "disconnect_runs": null,
+   "connection_lost": null,
+   "quic_counters_runs": null,
+   "latency_loss": null,
+   "concurrency": null,
+   "transfer_limited_by": null,
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 248.433,
+    "p95": 249.499,
+    "n": 3
+   },
+   "listener_bind_ms": null,
+   "local": {
+    "duration_ms": {
+     "p50": 0.806,
+     "p95": 2.549,
+     "n": 3
+    },
+    "net_report_runs": 3,
+    "udp_v4": {
+     "false": 3
+    },
+    "public_v4_sample": null,
+    "behind_nat_v4": {
+     "none": 3
+    },
+    "port_preserved_v4": {
+     "none": 3
+    },
+    "mapping_varies_by_dest": {
+     "none": 3
+    },
+    "qad_v4_ms_p50": null,
+    "relay_tls_ms_p50": 0.397,
+    "relay_https_latency_ms_p50": 41.532,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "0": 3
+   },
+   "statuses": {
+    "healthy": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Your network looks fine for golem-p2p: 1 relay reachable, your record is published.",
+   "notes": "QAD off in the NAT'd lab node: bind 0.25 s, UDP/NAT unknown.",
+   "run_dirs": [
+    "startup/startup-lab-easy-qad-off/run1",
+    "startup/startup-lab-easy-qad-off/run2",
+    "startup/startup-lab-easy-qad-off/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "qad_off_unknown",
+     "runs": 3,
+     "detail": "QAD off: UDP, public address and NAT listed as unknown"
+    }
+   ]
+  },
+  {
+   "id": "relay-single",
+   "group": "relay",
+   "title": "Hetzner -> Hetzner, relay only through p2p-relay1 (one bench at a time)",
+   "a": {
+    "role": "bench",
+    "node": "hetzner-b",
+    "profile": "relay only (--relay-only)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "b": {
+    "role": "listener",
+    "node": "hetzner-l",
+    "profile": "relay only (--relay-only)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "netem": null,
+   "args": "--relay-only (both sides)",
+   "runs": 3,
+   "ok_runs": 3,
+   "path_final": {
+    "direct": 0,
+    "relay": 3,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 0,
+   "first_path": {
+    "relay": 3
+   },
+   "connect_ms": {
+    "p50": 166.688,
+    "p95": 189.954,
+    "n": 3
+   },
+   "lookup_ms": {
+    "p50": 2.378,
+    "p95": 2.709,
+    "n": 3
+   },
+   "time_to_direct_ms": null,
+   "rtt_ms": {
+    "p50": 74.149,
+    "p95": 75.893,
+    "n": 180
+   },
+   "jitter_ms": 1.372,
+   "loss_pct": 0.314,
+   "direct_fraction": 0.0,
+   "upload_mbps": 38.249,
+   "download_mbps": 38.308,
+   "concurrency_mbps": 70.471,
+   "loaded_rtt_ms_p50": 76.404,
+   "transfer_relay_capped": true,
+   "run_duration_s": {
+    "p50": 15.0,
+    "p95": 15.1,
+    "n": 3
+   },
+   "phase_ms_p50": {
+    "local": 136.986,
+    "connect": 166.745,
+    "latency": 12001.096,
+    "upload": 836.686,
+    "download": 835.436,
+    "concurrency": 446.452
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 3,
+   "latency_loss": {
+    "runs": 3,
+    "sent_packets": 410,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/143",
+     "0/139",
+     "0/128"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": {
+    "ok": 3,
+    "runs": 3,
+    "failed": 0,
+    "unfinished": 0,
+    "requests": 45,
+    "throughput_null_but_ok": 0,
+    "sized_runs": 0,
+    "request_bytes": [
+     262144
+    ],
+    "restarts": 0,
+    "first_request_bytes": []
+   },
+   "transfer_limited_by": {
+    "upload:size": 3,
+    "download:size": 3,
+    "concurrency:size": 3
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 584.475,
+    "p95": 641.737,
+    "n": 3
+   },
+   "listener_bind_ms": {
+    "p50": 552.475,
+    "p95": 565.275,
+    "n": 3
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 136.947,
+     "p95": 152.526,
+     "n": 3
+    },
+    "net_report_runs": 0,
+    "udp_v4": {},
+    "public_v4_sample": null,
+    "behind_nat_v4": {},
+    "port_preserved_v4": {},
+    "mapping_varies_by_dest": {},
+    "qad_v4_ms_p50": null,
+    "relay_tls_ms_p50": 35.151,
+    "relay_https_latency_ms_p50": 190.614,
+    "relay_ok": 3,
+    "relay_checks": 3,
+    "home_relay_connected": 3,
+    "record_published": 3
+   },
+   "exit_codes": {
+    "4": 3
+   },
+   "statuses": {
+    "relay_only": 3
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Connected to 0xb8c1...4bc1, but only through a relay (https://213.163.75.157:56000/): 73 ms round trip, 36.6 Mbps up, 38.1 Mbps down. This run used --relay-only.",
+   "notes": "Relay only through p2p-relay1: RTT 74.1 ms (campaign 3: 71.1, the two route clusters), 37-41 Mbps per 4 MB transfer, concurrency 65-87 Mbps in 360-486 ms (campaign 3: 78 Mbps, the 403 ms tick).",
+   "run_dirs": [
+    "relay/relay-single/run1",
+    "relay/relay-single/run2",
+    "relay/relay-single/run3"
+   ],
+   "verdict_runs": {
+    "right": 3
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "relay_only_mode",
+     "runs": 3,
+     "detail": "verdict names --relay-only as the reason"
+    }
+   ]
+  },
+  {
+   "id": "relay-parallel2",
+   "group": "relay",
+   "title": "Hetzner -> Hetzner, relay only through p2p-relay1, 2 benches in parallel (separate listeners), no concurrency phase",
+   "a": {
+    "role": "bench",
+    "node": "hetzner-b",
+    "profile": "relay only (--relay-only)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "b": {
+    "role": "listener",
+    "node": "hetzner-l",
+    "profile": "relay only (--relay-only)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "netem": null,
+   "args": "--relay-only (both sides) --skip concurrency; 2 at once",
+   "runs": 4,
+   "ok_runs": 4,
+   "path_final": {
+    "direct": 0,
+    "relay": 4,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 0,
+   "first_path": {
+    "relay": 4
+   },
+   "connect_ms": {
+    "p50": 162.883,
+    "p95": 181.003,
+    "n": 4
+   },
+   "lookup_ms": {
+    "p50": 0.837,
+    "p95": 0.891,
+    "n": 4
+   },
+   "time_to_direct_ms": null,
+   "rtt_ms": {
+    "p50": 71.587,
+    "p95": 75.492,
+    "n": 240
+   },
+   "jitter_ms": 0.216,
+   "loss_pct": 0.0,
+   "direct_fraction": 0.0,
+   "upload_mbps": 40.467,
+   "download_mbps": 39.954,
+   "concurrency_mbps": null,
+   "loaded_rtt_ms_p50": null,
+   "transfer_relay_capped": true,
+   "run_duration_s": {
+    "p50": 14.4,
+    "p95": 14.5,
+    "n": 4
+   },
+   "phase_ms_p50": {
+    "local": 135.677,
+    "connect": 165.221,
+    "latency": 12000.675,
+    "upload": 790.879,
+    "download": 801.014
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 4,
+   "latency_loss": {
+    "runs": 4,
+    "sent_packets": 516,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/132",
+     "0/127",
+     "0/130",
+     "0/127"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": null,
+   "transfer_limited_by": {
+    "upload:size": 4,
+    "download:size": 4
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 532.104,
+    "p95": 552.036,
+    "n": 4
+   },
+   "listener_bind_ms": {
+    "p50": 527.647,
+    "p95": 556.299,
+    "n": 4
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 134.111,
+     "p95": 146.664,
+     "n": 4
+    },
+    "net_report_runs": 0,
+    "udp_v4": {},
+    "public_v4_sample": null,
+    "behind_nat_v4": {},
+    "port_preserved_v4": {},
+    "mapping_varies_by_dest": {},
+    "qad_v4_ms_p50": null,
+    "relay_tls_ms_p50": 34.45,
+    "relay_https_latency_ms_p50": 188.772,
+    "relay_ok": 4,
+    "relay_checks": 4,
+    "home_relay_connected": 4,
+    "record_published": 4
+   },
+   "exit_codes": {
+    "4": 4
+   },
+   "statuses": {
+    "relay_only": 4
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Connected to 0xb8c1...4bc1, but only through a relay (https://213.163.75.157:56000/): 75 ms round trip, 38.2 Mbps up, 38.2 Mbps down. This run used --relay-only.",
+   "notes": "2 benches at once: 40.5 Mbps median each, 78-82 Mbps aggregate.",
+   "run_dirs": [
+    "relay/relay-parallel2/run1-1",
+    "relay/relay-parallel2/run1-2",
+    "relay/relay-parallel2/run2-1",
+    "relay/relay-parallel2/run2-2"
+   ],
+   "parallel_aggregate": {
+    "rounds": 2,
+    "upload_mbps_sum_per_round": [
+     79.049,
+     82.179
+    ],
+    "download_mbps_sum_per_round": [
+     78.405,
+     81.309
+    ]
+   },
+   "verdict_runs": {
+    "right": 4
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "relay_only_mode",
+     "runs": 4,
+     "detail": "verdict names --relay-only as the reason"
+    }
+   ]
+  },
+  {
+   "id": "relay-parallel4",
+   "group": "relay",
+   "title": "Hetzner -> Hetzner, relay only through p2p-relay1, 4 benches in parallel (separate listeners), no concurrency phase",
+   "a": {
+    "role": "bench",
+    "node": "hetzner-b",
+    "profile": "relay only (--relay-only)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "b": {
+    "role": "listener",
+    "node": "hetzner-l",
+    "profile": "relay only (--relay-only)",
+    "location": "Hetzner Helsinki 65.109.154.126"
+   },
+   "netem": null,
+   "args": "--relay-only (both sides) --skip concurrency; 4 at once",
+   "runs": 8,
+   "ok_runs": 8,
+   "path_final": {
+    "direct": 0,
+    "relay": 8,
+    "failed": 0
+   },
+   "path_final_unknown": 0,
+   "direct_seen": 0,
+   "first_path": {
+    "relay": 8
+   },
+   "connect_ms": {
+    "p50": 160.334,
+    "p95": 181.328,
+    "n": 8
+   },
+   "lookup_ms": {
+    "p50": 0.857,
+    "p95": 1.132,
+    "n": 8
+   },
+   "time_to_direct_ms": null,
+   "rtt_ms": {
+    "p50": 71.493,
+    "p95": 74.297,
+    "n": 480
+   },
+   "jitter_ms": 0.321,
+   "loss_pct": 0.0,
+   "direct_fraction": 0.0,
+   "upload_mbps": 40.49,
+   "download_mbps": 39.733,
+   "concurrency_mbps": null,
+   "loaded_rtt_ms_p50": null,
+   "transfer_relay_capped": true,
+   "run_duration_s": {
+    "p50": 14.4,
+    "p95": 14.5,
+    "n": 8
+   },
+   "phase_ms_p50": {
+    "local": 141.961,
+    "connect": 162.077,
+    "latency": 12001.223,
+    "upload": 790.407,
+    "download": 805.436
+   },
+   "disconnect_runs": 0,
+   "connection_lost": null,
+   "quic_counters_runs": 8,
+   "latency_loss": {
+    "runs": 8,
+    "sent_packets": 1052,
+    "lost_packets": 0,
+    "lost_pct": 0.0,
+    "runs_with_loss": 0,
+    "runs_at_threshold": 0,
+    "per_run": [
+     "0/135",
+     "0/133",
+     "0/133",
+     "0/132",
+     "0/127",
+     "0/131",
+     "0/128",
+     "0/133"
+    ],
+    "runs_unsettled": 0,
+    "from_ms_p50": 0.0,
+    "from_ms_max": 0.0
+   },
+   "concurrency": null,
+   "transfer_limited_by": {
+    "upload:size": 8,
+    "download:size": 8
+   },
+   "transfer_second_half_mbps": {
+    "upload": null,
+    "download": null
+   },
+   "relay_compare": null,
+   "idle": null,
+   "bind_ms": {
+    "p50": 524.749,
+    "p95": 541.144,
+    "n": 8
+   },
+   "listener_bind_ms": {
+    "p50": 518.955,
+    "p95": 575.194,
+    "n": 8
+   },
+   "local": {
+    "duration_ms": {
+     "p50": 136.347,
+     "p95": 149.551,
+     "n": 8
+    },
+    "net_report_runs": 0,
+    "udp_v4": {},
+    "public_v4_sample": null,
+    "behind_nat_v4": {},
+    "port_preserved_v4": {},
+    "mapping_varies_by_dest": {},
+    "qad_v4_ms_p50": null,
+    "relay_tls_ms_p50": 35.994,
+    "relay_https_latency_ms_p50": 183.062,
+    "relay_ok": 8,
+    "relay_checks": 8,
+    "home_relay_connected": 8,
+    "record_published": 8
+   },
+   "exit_codes": {
+    "4": 8
+   },
+   "statuses": {
+    "relay_only": 8
+   },
+   "issues": {},
+   "hints": {},
+   "verdict_sample": "Connected to 0xb8c1...4bc1, but only through a relay (https://213.163.75.157:56000/): 69 ms round trip, 41.7 Mbps up, 41.5 Mbps down. This run used --relay-only.",
+   "notes": "4 benches at once: 40.5 Mbps median each, 160-163 Mbps aggregate; the relay dropped nothing.",
+   "run_dirs": [
+    "relay/relay-parallel4/run1-1",
+    "relay/relay-parallel4/run1-2",
+    "relay/relay-parallel4/run1-3",
+    "relay/relay-parallel4/run1-4",
+    "relay/relay-parallel4/run2-1",
+    "relay/relay-parallel4/run2-2",
+    "relay/relay-parallel4/run2-3",
+    "relay/relay-parallel4/run2-4"
+   ],
+   "parallel_aggregate": {
+    "rounds": 2,
+    "upload_mbps_sum_per_round": [
+     161.217,
+     162.853
+    ],
+    "download_mbps_sum_per_round": [
+     160.224,
+     160.344
+    ]
+   },
+   "verdict_runs": {
+    "right": 8
+   },
+   "verdict_checks": [
+    {
+     "kind": "right",
+     "code": "relay_only_mode",
+     "runs": 8,
+     "detail": "verdict names --relay-only as the reason"
+    }
+   ]
+  }
+ ],
+ "observations": [
+  {
+   "title": "The upload count race is fixed: no 'closed stream', no transfer_failed in 124 runs",
+   "detail": "No bench.jsonl of the 111 campaign runs or the 13 lossy-link runs (3 campaign + 10 debug/lossy-extra) contains 'closed stream'; every upload and download succeeded (no error_kind), and no run has a transfer_failed issue. On the lossy link 10 uploads were stopped at 8 s and their counts arrived 8.12-8.15 s after their start, 3 were written completely: two fast ones (10 MB in 2.6 and 3.2 s) and debug/lossy-extra run9, written completely before 8 s but counted only at 11.0 s (7.3 Mbps): the case that failed with 'read error: closed stream' in campaign 3 (lossy-extra run10) now waits past the time limit for the count (limited_by size, ok). Campaign 3: 1 failure in 13 lossy runs.",
+   "severity": "info"
+  },
+  {
+   "title": "Fast-path concurrency throughput is measured now (no 200 ms quantization)",
+   "detail": "The phase now ends when its workers do. Lab direct: 185-252 Mbps (33 runs, 33 distinct values, 250-340 ms for 7.5 MiB; campaign 3: 155.7-156.4 Mbps in all 33, 402-404 ms); lab relayed: 74-81 Mbps (386-424 ms; campaign 3 snapped to 74.2 or 78.1); real world direct 213-330 Mbps (191-295 ms) apart from the three slow runs below; real-world relayed 138-208 Mbps; relay-only through p2p-relay1 65-87 Mbps. The parallel requests run at 1.5-2.3x the single 10 MB / 4 MB transfers, which start from a cold congestion window while the concurrency phase runs on the one the transfers opened. The compare flags 'concurrency 156 -> 190-241 Mbps' in 10 lab scenarios and on rw-easy-to-open / rw-open-to-symmetric are this fix, not a speed-up.",
+   "severity": "info"
+  },
+  {
+   "title": "Lossy link: loss detected in 9 of 13 runs (sampling), the count always settled",
+   "detail": "lab-netem-pr (1 % loss each way): packet_loss hint in 2 of 3 campaign runs and 7 of 10 extra runs, 9/13 (campaign 3: 11/13). latency.loss was never null: counting started 1.14-1.32 s into the phase, windows of 114-121 packets, 1-3 lost where detected. The four misses lost 0 of 117-118 packets; at 1 % random loss 0.99^117 = 31 % of such windows show no loss, so ~4 misses in 13 runs is the expected rate (campaigns 3+4: 6 misses in 26 runs, 23 %). No miss was at or above the threshold (no 'wrong' check).",
+   "severity": "info"
+  },
+  {
+   "title": "Lossy link: concurrency throughput in 13 of 13 runs; 2 restarts",
+   "detail": "The second-half rule lowered the request sizing in 11 of 13 runs (by 1.1-3.5x against campaign 3's slower-average rule: e.g. 4.02 -> 1.26, 3.30 -> 0.94, 8.00 -> 4.32, 5.51 -> 2.08 Mbps); requests were sized for 0.70-4.32 Mbps (21-131 KiB) and every run measured 0.46-3.64 Mbps (median 0.95; campaign 3: 11/13). In the 11 runs without a restart the size was within 0.3-2.0x of what the phase then measured. Restarts: debug/lossy-extra run8 (sized for 4.32 Mbps from the upload's second half, 131 KiB; none of the 8 had finished at 4.0 s; started over with 8 KiB, 28 finished, 0.46 Mbps) and run9 (sized for 2.08 Mbps from the download's second half, 63 KiB; restarted at 4.0 s with 4 KiB, 139 finished, 1.14 Mbps). Run8 needed it (its 1.07 MB of first requests reached the listener only after 9.6 s). Run9's link was over-estimated only ~2x (download second half 2.08 Mbps, the echoes then came back at ~1 Mbps): its 8 requests had reached the listener within 1 s and ~80 % of their echoes (412 of 516 KB) were back when the restart cut them off at 4.0 s, so they would have finished shortly after; sized for four requests per stream in 8 s, a ~2x over-estimate in the slower direction puts the first replies at about the 4 s restart point. In the 11 runs without a restart the fastest requests took 0.16-2.0 s. No restart in the 90 clean-link peer runs (fast paths finish their first request in milliseconds).",
+   "severity": "info"
+  },
+  {
+   "title": "New bug: cut-off concurrency requests are not cancelled on the wire",
+   "detail": "Requests cut off by a restart or by the 8 s limit keep sending. Endpoint::request_from (crates/golem-p2p/src/endpoint.rs) resets the stream when its future is dropped only while `complete` is false, i.e. before write_all + finish returned; write_all returns as soon as the payload is in the stream's send buffer, which for requests up to the stream window (1.25 MB) is at once, so the workers' dropped futures leave fully buffered requests that QUIC still delivers (and retransmits). Seen in the listener logs: debug/lossy-extra run8's 8 cut-off 134,144-byte requests reached the listener 5.6-5.8 s after the restart (1.6-1.8 s after the phase ended): of the 1.17 MB the bench sent in the 8 s phase only 0.23 MB were the counted 8 KiB requests, the rest mostly the cut-off 131 KiB requests, so the restart's 0.46 Mbps understates a link that carried ~1.2 Mbps up in that phase. In 7 of 13 lossy runs requests cut off at the time limit still arrived at the listener after the phase had ended (up to 3.9 s later, debug/lossy-extra run7 with 105 KiB requests), i.e. during relay_compare's latency measurement on the same access link. (The listener's echoes stop: the dropped RecvStream sends STOP_SENDING.) Fix: reset the send stream on drop unless the response was read (track completion of the whole exchange, not just of the write); request_from's own timeout path already resets after finish.",
+   "severity": "bug"
+  },
+  {
+   "title": "Slow Hetzner -> lab direction in 3 real-world runs (environment; seen in campaigns 1 and 3 too)",
+   "detail": "rw-easy-to-ufw runs 1-2 and rw-symmetric-to-open run 1 (01:34:00-01:36:20 UTC, lab bench, Hetzner listener, direct) downloaded at 13.7-15.6 Mbps (second half 20-22 Mbps) while uploads in the same runs ran at 132-144 Mbps; their concurrency took 2.8-4.3 s (14.6-22.4 Mbps, request RTT ~0.7-1 s) while the small loaded-RTT probes stayed at 37-46 ms (no queue building up), and the bench counted no loss (it counts only its own packets). Relayed runs in the same minutes (Hetzner -> relay over TCP) ran at 73-85 Mbps, and rw-easy-to-open run 1 at 01:34:56 at 146 Mbps. This machine's load average was 36-45 then (24-49 over the step, other sessions). Not reproduced: 9 re-runs right after a fresh lab.sh up campaign-real at 01:57-02:00 (debug/rw-recheck, load 23-24) all ran at 131-148 Mbps both ways (concurrency 235-313 Mbps). The same symptom hit 1 run in campaign 1 (rw-symmetric-to-open run 3, 14.5 Mbps) and 2 in campaign 3 (8.8 and 13.8 Mbps), with older code; the listener's sending side is unchanged since campaign 3 and the bench's download now only records progress, so this is the environment (the internet path toward the i3D host, or CPU contention on this machine), not a regression. The verdicts report the measured numbers.",
+   "severity": "info"
+  },
+  {
+   "title": "Outcomes, RTT and throughput unchanged otherwise",
+   "detail": "All 35 scenarios keep their direct/relay outcome; final paths 51 direct / 42 relay / 0 failed in the 93 peer runs, no connection lost, QUIC counters in all 93 (as in campaigns 2-3). Issue, hint, status and exit-code counts are identical to campaign 3 in every scenario. Lab RTT (40.4 ms direct, 80.6 ms relayed), throughput (122-124 / 35-36 Mbps), bind and connect times match campaign 3 within noise. Real-world RTT and throughput moved with the two route clusters (~34 / ~37.5 ms). Benches on this machine bound 50-60 ms slower (load, see build_machine_load). Clean-link peer runs are ~0.1 s shorter (the concurrency phase ends with its workers); lossy runs 60.6-72.7 s (campaign 3: 58-70.5 s), extra runs 63.0-74.0 s.",
+   "severity": "info"
+  },
+  {
+   "title": "Verdicts: 110 runs right, 1 misleading, 0 wrong (as in campaign 3)",
+   "detail": "Checks 254 / 1 / 0. The misleading run is lab-netem-pr run 1: 1 % loss on the link, but 0 of the 118 packets in the settled window were lost, so no packet_loss hint (sampling, as campaign 3's run 3). No false positives: 0 of 11,335 settled latency-phase packets lost in the 90 clean-link peer runs, no packet_loss hint on any of them. Not counted (debug runs): 3 more sampling misses among the 10 extra lossy runs; no misleading transfer_failed any more.",
+   "severity": "info"
+  },
+  {
+   "title": "The real relay is not a bottleneck at the tested load (unchanged)",
+   "detail": "Relay-only Hetzner -> p2p-relay1 -> Hetzner: 37-41 Mbps per 4 MB transfer alone, ~40.5 Mbps each with 2 and with 4 at once (160-163 Mbps aggregate), no packets dropped by the relay; 418.3 MB through the relay in total, as in campaigns 1-3.",
+   "severity": "info"
+  }
+ ],
+ "limitations": [
+  "3 runs per scenario (4-8 for the parallel relay runs): percentiles over runs are rough; RTT percentiles pool the ~60 latency samples of each run. The lossy-link medians say little; its detection rate and restart counts come from 13 runs (3 campaign runs + 10 extra in debug/lossy-extra, which are not in summary.json).",
+  "The verdict classification is ours (summarize.py), per run by its worst finding; a 'right' run can still have imperfect wording. A packet_loss hint on an unshaped path counts as misleading, also in the real world where one lost packet may be real. A transfer_failed issue is not checked against what the listener received (none occurred).",
+  "The packet_loss window holds 112-145 packets: at 1 % random loss about one window in three shows no loss, so a single run cannot tell 1 % loss from none.",
+  "The build machine was shared with other sessions (load average 24-49 on 32 vCPU during the steps that run there, hetzner-load.txt); bind times there are ~50-60 ms higher than in campaign 3, and CPU contention cannot be ruled out for the three slow Hetzner -> lab downloads.",
+  "The lab NATs are Linux conntrack + nftables with port preservation, one host per router, silent drops of unsolicited packets and one mapping timeout; the 'inbound packet steals the port' behaviour of the i3D host's NAT is not reproduced, and a NAT reboot keeps the same ports.",
+  "One relay per scenario: mapping_varies_by_dest cannot be measured, so hard_nat (two relays) was never exercised; hard_nat_likely (one relay, port not preserved) was.",
+  "No rate limits in the lab and fixed transfer sizes (10 MB direct, 4 MB relayed): throughput numbers show slow start for those sizes, not capacity; the concurrency phase runs on the congestion window the transfers opened and is 1.5-2.3x faster on fast paths.",
+  "Real world: one location (Helsinki) and one firewall type (ufw); per-flow routes of ~34 or ~37.5 ms between the i3D host and Hetzner shift RTT and throughput by ~8 % between runs and campaigns.",
+  "Concurrency requests cut off by a restart or the time limit keep sending (bug above), so after a restart the counted throughput can understate the link, and leftovers of the last requests overlap the start of relay_compare on lossy links.",
+  "The relay load test is bounded (at most 4 parallel 4 MB transfers, ~150 MB through the relay) and does not find the relay's capacity.",
+  "--idle cannot show NAT mapping expiry: iroh keeps every path alive every 5 s and the lab's shortest mapping timeout is 5 s.",
+  "QUIC loss is counted only for packets the bench node sent; IPv4 only inside the lab.",
+  "Runs were sequential, but the i3D host also carries other services; their load was not controlled."
+ ]
+}
