@@ -23,7 +23,11 @@ use anyhow::{Context, anyhow, bail};
 use clap::Args;
 use golem_p2p::{Endpoint, NodeId, PathKind, RecordStore};
 use serde_json::{Value, json};
-use tokio::{sync::mpsc, task::JoinHandle, time::MissedTickBehavior};
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinHandle,
+    time::MissedTickBehavior,
+};
 
 use crate::{
     Node, NodeArgs,
@@ -317,6 +321,7 @@ async fn requester(
     interval: Duration,
     payload_size: usize,
     tx: mpsc::Sender<EchoResult>,
+    mut stop: watch::Receiver<bool>,
 ) {
     // Spread the requests of many clients over the interval.
     let offset = interval.mul_f64(f64::from(ep.instance_id()[0]) / 256.0);
@@ -324,7 +329,12 @@ async fn requester(
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut seq = 0u64;
     loop {
-        tick.tick().await;
+        // A stop ends the series between requests, never during one: a
+        // request dropped halfway is a refused stream for the listener.
+        tokio::select! {
+            _ = tick.tick() => {}
+            _ = stop.wait_for(|s| *s) => break,
+        }
         seq += 1;
         let data = payload(seq, payload_size);
         let new_conn = connection_to(&ep, to).is_none();
@@ -343,7 +353,7 @@ async fn requester(
             path: path_to(&ep, to),
             result,
         };
-        if tx.send(r).await.is_err() {
+        if tx.send(r).await.is_err() || *stop.borrow() {
             break;
         }
     }
@@ -351,6 +361,13 @@ async fn requester(
 
 /// Aborts a task when dropped.
 pub struct AbortOnDrop(JoinHandle<()>);
+
+impl AbortOnDrop {
+    /// Waits for the task to end, at most `timeout`; then aborts it.
+    async fn finish(mut self, timeout: Duration) {
+        let _ = tokio::time::timeout(timeout, &mut self.0).await;
+    }
+}
 
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
@@ -384,12 +401,14 @@ pub async fn run(args: SoakArgs, out: &Out) -> anyhow::Result<ExitCode> {
         )));
 
     let (echo_tx, mut echo_rx) = mpsc::channel(16);
+    let (stop_requests, stop_rx) = watch::channel(false);
     let requests = AbortOnDrop(tokio::spawn(requester(
         ep.clone(),
         to,
         args.interval,
         payload_size,
         echo_tx,
+        stop_rx,
     )));
     let (bulk_tx, mut bulk_rx) = mpsc::channel::<BulkResult>(1);
     let mut bulk_task: Option<AbortOnDrop> = None;
@@ -449,7 +468,12 @@ pub async fn run(args: SoakArgs, out: &Out) -> anyhow::Result<ExitCode> {
             }
         }
     }
-    drop(requests);
+    // The request in flight finishes (within its timeout) and is counted.
+    let _ = stop_requests.send(true);
+    requests.finish(args.timeout + Duration::from_secs(1)).await;
+    while let Ok(r) = echo_rx.try_recv() {
+        window.echo(&r, out);
+    }
     drop(bulk_task);
     report.emit(&window, true, interrupted);
     let totals = &report.totals;
