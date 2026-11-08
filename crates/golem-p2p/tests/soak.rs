@@ -671,3 +671,69 @@ async fn soak_idle_nodes_qad() {
 async fn soak_idle_nodes_no_qad() {
     with_timeout(7200, soak_idle(false)).await;
 }
+
+/// Large requests on one long-lived connection: each is 1 MB to the server
+/// and 1 MB back, as the uploads of the soak clients. Memory must not grow
+/// with the number of transfers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "soak test, minutes; run with --ignored"]
+async fn soak_large_requests_one_connection() {
+    with_timeout(3600, async {
+        // GOLEM_P2P_SOAK_TRANSPORT: `direct` (default, no relay), `relay`
+        // (relay only) or `both` (direct with a relay path, as in production).
+        let (relays, opts) = match std::env::var("GOLEM_P2P_SOAK_TRANSPORT").as_deref() {
+            Ok("relay") => (1, NodeOpts::relays(&[0], TransportMode::RelayOnly)),
+            Ok("both") => (1, NodeOpts::relays(&[0], TransportMode::DirectAndRelay)),
+            _ => (0, NodeOpts::default()),
+        };
+        let net = TestNet::new(relays).await;
+        let transfers = soak_cycles(2000);
+        let (server, _s) = node(&net, opts.clone()).await;
+        let _echo = spawn_echo(&server);
+        let (client, _c) = node(&net, opts).await;
+        let to = server.node_id();
+        let data = "x".repeat(1_000_000);
+        let start = Instant::now();
+        for _ in 0..20 {
+            echo(&client, to, &data).await.expect("echo");
+        }
+        let base = Checkpoint::take(0, start, &server);
+        let mut points = vec![];
+        let step = (transfers / 10).max(1);
+        let mut done = 0;
+        while done < transfers {
+            for _ in 0..step.min(transfers - done) {
+                let e = echo(&client, to, &data).await.expect("echo");
+                assert_eq!(e.data.len(), data.len());
+            }
+            done += step.min(transfers - done);
+            points.push(Checkpoint::take(done, start, &server));
+        }
+        let tail: Vec<(f64, f64)> = points
+            .iter()
+            .skip(points.len() / 5)
+            .map(|c| (c.cycles as f64, c.mem_kb() as f64))
+            .collect();
+        let per_transfer = slope(&tail) * 1024.0;
+        let last = points.last().expect("checkpoints");
+        println!(
+            "baseline: heap={:?} anon_kb={} tasks={}; after {transfers} transfers of 2 x 1 MB: \
+             heap={:?} anon_kb={} tasks={}; memory (heap in use, or anon) per transfer after \
+             warm-up {per_transfer:.1} B",
+            base.heap, base.anon_kb, base.tasks, last.heap, last.anon_kb, last.tasks
+        );
+        assert!(
+            last.tasks <= base.tasks + 4,
+            "{} -> {}",
+            base.tasks,
+            last.tasks
+        );
+        assert!(
+            per_transfer < 256.0,
+            "memory grows by {per_transfer:.1} B per transfer"
+        );
+        client.close().await;
+        server.close().await;
+    })
+    .await;
+}
