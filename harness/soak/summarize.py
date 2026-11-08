@@ -174,12 +174,19 @@ def analyze(points, ph, kind):
         hours = (ph.load_end - ph.fit_start) / 3600
         growth = slope_h * hours
         thr = thresholds(kind, res["start"] if res["start"] is not None else window[0][1])
+        # The second half of the window tells growth that goes on from
+        # growth that levels off (caches filling, allocator warm-up).
+        mid = (ph.load_end - ph.fit_start) / 2
+        late = fit([(t, v) for t, v in window if t >= mid])
+        late_growth = late[0] * 3600 * hours / 2 if late else None
         res.update(
             {
                 "slope_per_h": r(slope_h),
                 "r2": r(f[2]),
                 "fit_hours": r(hours),
                 "growth_in_fit": r(growth),
+                "slope_second_half_per_h": r(late[0] * 3600) if late else None,
+                "growth_second_half": r(late_growth),
                 "threshold": r(thr),
                 # The fit, and the values themselves, must both show growth.
                 "growing": bool(
@@ -191,7 +198,18 @@ def analyze(points, ph, kind):
                 ),
             }
         )
+        # Still growing in the second half (at least half the threshold
+        # there), as opposed to leveling off.
+        res["still_growing"] = bool(res["growing"] and late_growth is not None and late_growth > thr / 2)
     return res
+
+
+def growth_flag(name, a):
+    """The flag text of a growing series, saying whether it levels off."""
+    trend = (f"still growing in the second half ({a.get('slope_second_half_per_h')}/h)"
+             if a.get("still_growing") else "levels off in the second half")
+    return (f"{name} grows {a['slope_per_h']}/h (R2 {a['r2']}, {a['start']} -> {a['load_end']}, "
+            f"peak {a['peak']}; {trend})")
 
 
 def per_unit(points_y, points_x, ph):
@@ -315,8 +333,7 @@ def summarize(d):
                 # files the run writes.
                 flaggable = not role.startswith(("churn", "cgroup")) and m != "n"
                 if a.get("growing") and flaggable:
-                    flags.append(f"{role} {m} grows {a['slope_per_h']}/h (R2 {a['r2']}, "
-                                 f"{a['start']} -> {a['load_end']}, peak {a['peak']})")
+                    flags.append(growth_flag(f"{role} {m}", a))
         if role in cpu and ph.ok():
             c = sorted((t, v) for t, v in cpu[role] if v is not None)
             during = [(t, v) for t, v in c if ph.load_start <= t <= ph.load_end]
@@ -407,7 +424,7 @@ def summarize(d):
     for g in ("tokio.alive_tasks", "ep.connections", "proc.fds", "proc.heap_used_kb"):
         a = lst.get(g)
         if a and a.get("growing"):
-            flags.append(f"listener {g} grows {a['slope_per_h']}/h (R2 {a['r2']}, {a['start']} -> {a['load_end']})")
+            flags.append(growth_flag(f"listener {g}", a))
     # Gauges that should return to their idle value once the load is gone.
     for g, slack in (("ep.connections", 0), ("ep.handshakes", 0), ("ep.queued_streams", 0),
                      ("tokio.alive_tasks", 5), ("proc.fds", 2)):
@@ -445,7 +462,7 @@ def summarize(d):
     for g in ("proc.heap_used_kb", "tokio.alive_tasks"):
         a = dst.get(g)
         if a and a.get("growing"):
-            flags.append(f"directory {g} grows {a['slope_per_h']}/h (R2 {a['r2']}, {a['start']} -> {a['load_end']})")
+            flags.append(growth_flag(f"directory {g}", a))
     summary["directory"] = dst
     errors = defaultdict(int)
     for e in load_jsonl(os.path.join(d, "listener.jsonl")):
