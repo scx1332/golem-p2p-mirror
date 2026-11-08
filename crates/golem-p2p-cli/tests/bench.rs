@@ -78,8 +78,27 @@ fn check_transfer(t: &Value, bytes: u64, path: &str) {
     assert_eq!(t["path"], path, "{t:#}");
     assert_eq!(t["limited_by"], "size", "{t:#}");
     assert!(num(t, "throughput_mbps") > 0.0 && num(t, "duration_ms") > 0.0);
+    // Null for transfers under a second.
+    let half = &t["second_half_mbps"];
+    assert!(
+        half.is_null() || (num(t, "duration_ms") >= 1000.0 && half.as_f64().unwrap() >= 0.0),
+        "{t:#}"
+    );
     assert!(t["error"].is_null());
     check_quic(&t["quic"]);
+}
+
+/// What the concurrency phase sizes its requests for: the slower transfer,
+/// each by the lower of its throughput and that of its second half.
+fn sustained(p: &Value) -> f64 {
+    ["upload", "download"]
+        .iter()
+        .map(|dir| {
+            let t = &p[dir];
+            let m = num(t, "throughput_mbps");
+            t["second_half_mbps"].as_f64().map_or(m, |h| m.min(h))
+        })
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// Checks the QUIC counters of a phase: present, and loss consistent.
@@ -213,6 +232,7 @@ async fn bench_relay_only() {
     // Fast enough for full-size requests.
     assert_eq!(cc["request_bytes"], 262_144);
     assert!(cc["sized_for_mbps"].is_null(), "{cc:#}");
+    assert!(cc["restart"].is_null(), "{cc:#}");
     // The relay cap (1M) limits the phase to 3 requests of 256 KiB.
     assert_eq!(cc["requests"], 3, "{cc:#}");
     assert_eq!(cc["total_bytes"], 3 * 262_144);
@@ -456,15 +476,15 @@ async fn phases_end_at_the_time_limit() {
     assert_eq!(c["limited_by"], "time", "{c:#}");
     assert!(c["unfinished"].as_u64().unwrap() <= 16, "{c:#}");
     // Requests are 256 KiB, or smaller (at least 4 KiB) if the transfers
-    // were too slow for that within the time limit.
+    // were too slow for that within the time limit. (If none of them
+    // finished in 100 ms, the phase started over with smaller ones.)
     let size = c["request_bytes"].as_u64().unwrap();
+    let first = c["restart"]["request_bytes"].as_u64().unwrap_or(size);
     if c["sized_for_mbps"].is_null() {
-        assert_eq!(size, 262_144, "{c:#}");
+        assert_eq!(first, 262_144, "{c:#}");
     } else {
-        assert!((4096..262_144).contains(&size), "{c:#}");
-        let slower =
-            num(&p["upload"], "throughput_mbps").min(num(&p["download"], "throughput_mbps"));
-        assert_eq!(num(c, "sized_for_mbps"), slower, "{c:#}");
+        assert!((4096..262_144).contains(&first), "{c:#}");
+        assert_eq!(num(c, "sized_for_mbps"), sustained(p), "{c:#}");
     }
     assert!(r["issues"].as_array().unwrap().is_empty(), "{r:#}");
 
@@ -475,6 +495,46 @@ async fn phases_end_at_the_time_limit() {
             assert!(num(e, "duration_ms") < 3000.0, "{e}");
         }
     }
+}
+
+/// The concurrency phase lasts until its workers are done, not until the
+/// small requests sent meanwhile (every `--interval`) next notice: on fast
+/// paths every duration was a multiple of the 200 ms interval (campaign 3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrency_ends_with_its_workers() {
+    let infra = Infra::start("bench-conc-end").await;
+    let (_lis, lis_id) = listener(&infra, "lis", &[]).await;
+    let a = strs([
+        "--to",
+        &lis_id,
+        "--skip",
+        "local,latency,upload,download",
+        "--interval",
+        "5s",
+        "--streams",
+        "4",
+        "--concurrency-size",
+        "1M",
+    ]);
+    let (code, r, evs) = bench(&bench_args(&infra, &a)).await;
+    assert_eq!(code, Some(0), "{r:#}");
+    let c = &r["peer"]["concurrency"];
+    assert_eq!(
+        (&c["ok"], &c["limited_by"]),
+        (&true.into(), &"size".into()),
+        "{c:#}"
+    );
+    // 1M allows 3 requests of 256 KiB; on loopback they take milliseconds.
+    assert_eq!(c["requests"], 3, "{c:#}");
+    assert!(c["restart"].is_null(), "{c:#}");
+    assert!(num(c, "duration_ms") < 2500.0, "{c:#}");
+    let phase = events(&evs, "bench_phase")
+        .into_iter()
+        .find(|e| e["phase"] == "concurrency")
+        .unwrap();
+    assert!(num(phase, "duration_ms") < 2500.0, "{phase}");
+    // The small request sent at the start of the phase.
+    assert!(c["loaded_samples"].as_u64().unwrap() <= 1, "{c:#}");
 }
 
 /// After transfers that measured a link too slow for 256 KiB requests within
@@ -502,9 +562,8 @@ async fn concurrency_requests_fit_a_slow_link() {
     let (code, r, _) = bench(&bench_args(&infra, &a)).await;
     assert_eq!(code, Some(0), "{r:#}");
     let p = &r["peer"];
-    let slower = num(&p["upload"], "throughput_mbps").min(num(&p["download"], "throughput_mbps"));
     let c = &p["concurrency"];
-    assert_eq!(num(c, "sized_for_mbps"), slower, "{c:#}");
+    assert_eq!(num(c, "sized_for_mbps"), sustained(p), "{c:#}");
     let size = c["request_bytes"].as_u64().unwrap();
     assert!((4096..262_144).contains(&size) && size % 1024 == 0, "{c:#}");
     assert_eq!(r["settings"]["concurrency_request_bytes"], 262_144);

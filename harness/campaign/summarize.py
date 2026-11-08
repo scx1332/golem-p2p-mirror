@@ -25,7 +25,13 @@ counters only for the whole connection, `peer.quic`), campaign 2's (per-phase
 `peer.latency.loss` (latency-phase loss counted once the path had settled;
 the packet_loss hint judges that instead of `peer.latency.quic`),
 `relay_compare.reachable` (with the `relay_fallback_degraded` hint) and
-`concurrency.sized_for_mbps`. The verdict checks judge each format by the
+`concurrency.sized_for_mbps`, and the one after campaign 3, which adds
+`upload/download.second_half_mbps` (the requests of the concurrency phase are
+sized for the lowest of the transfers' throughput and second-half
+throughput; `transfer_second_half_mbps` in the summary) and
+`concurrency.restart` (the phase started over with smaller requests because
+none had finished by half the time limit; `concurrency.restarts` and
+`first_request_bytes`). The verdict checks judge each format by the
 rules of its bench (e.g. the packet_loss threshold: 2 % of the whole
 connection in campaign 1, 0.5 % of at least 50 latency-phase packets after,
 counted from when the path had settled once `latency.loss` exists).
@@ -499,10 +505,23 @@ def summarize_scenario(sc, runs, notes):
                 "request_bytes": sorted({get(p, "concurrency", "request_bytes") for p in peers
                                          if get(p, "concurrency", "request_bytes") is not None})}
                if any("sized_for_mbps" in (p.get("concurrency") or {}) for p in peers) else {}),
+            # After campaign 3: the phase started over with smaller requests
+            # (request_bytes above are then the smaller ones).
+            **({"restarts": sum(1 for p in peers if get(p, "concurrency", "restart")),
+                "first_request_bytes": sorted({get(p, "concurrency", "restart", "request_bytes") for p in peers
+                                               if get(p, "concurrency", "restart")})}
+               if any("restart" in (p.get("concurrency") or {}) for p in peers) else {}),
         } if any(p.get("concurrency") for p in peers) else None,
         "transfer_limited_by": dict(Counter(f"{sec}:{get(p, sec, 'limited_by')}" for p in peers
                                             for sec in ("upload", "download", "concurrency")
                                             if get(p, sec, "limited_by"))) or None,
+        # After campaign 3: medians of the transfers' second-half throughput
+        # (null for transfers under 1 s), next to upload_mbps/download_mbps.
+        **({"transfer_second_half_mbps": {
+                sec: med([get(p, sec, "second_half_mbps") for p in peers if get(p, sec, "ok")])
+                for sec in ("upload", "download")}}
+           if any("second_half_mbps" in (p.get(sec) or {}) for p in peers for sec in ("upload", "download"))
+           else {}),
         "relay_compare": None,
         "idle": None,
         "bind_ms": p50_p95([get(r["ready"], "bind_ms") for r in runs if r["ready"]]),

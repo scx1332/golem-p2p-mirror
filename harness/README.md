@@ -377,7 +377,15 @@ which the packet_loss hint judges; `latency_loss` then pools it instead of
 `relay_fallback_failed` only if nothing got through; otherwise the hint
 `relay_fallback_degraded`, judged right) and `concurrency.sized_for_mbps`
 (smaller parallel requests on a slow link; `concurrency.sized_runs` and
-`request_bytes` in the summary).
+`request_bytes` in the summary). Benches after campaign 3 add
+`upload/download.second_half_mbps` (the requests are sized for the lowest of
+the transfers' throughput and second-half throughput;
+`transfer_second_half_mbps` in the summary) and `concurrency.restart` (the
+phase started over with smaller requests because none had finished by half
+the time limit; `concurrency.restarts` and `first_request_bytes`); these keys
+appear only for runs that report the fields, so campaigns 1-3 summarize as
+before. The benchsum line shows `up=AVG/HALF` when the second half was under
+half the average, and `conc=...:restart`.
 
 `campaign/campaign3.sh` is `campaign2.sh` with campaign 2's scenarios, run
 counts and checks (default output `results/<date>-campaign3`); only its

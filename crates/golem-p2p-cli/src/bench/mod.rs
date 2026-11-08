@@ -31,7 +31,7 @@ use serde::Serialize;
 
 use self::report::{
     Concurrency, Connect, ConnectionLost, Idle, Latency, LatencyLoss, PathPoint, PathReport, Peer,
-    QuicStats, RelayCompare, Report, Settings, Status, TransferReport,
+    QuicStats, RelayCompare, Report, Restart, Settings, Status, TransferReport,
 };
 use crate::{
     Node, NodeArgs, listen,
@@ -51,6 +51,11 @@ const MIN_CONCURRENCY_REQUEST: usize = 4 * 1024;
 /// On a slow link the concurrency phase's requests are made smaller, so that
 /// every stream can finish about this many within `--transfer-time`.
 const REQUESTS_PER_STREAM: f64 = 4.0;
+
+/// If none of the concurrency phase's requests has finished by half of
+/// `--transfer-time`, it starts over with requests this many times smaller
+/// (see [`Workers`]).
+const RESTART_SHRINK: usize = 16;
 
 /// The relay-only comparison measures latency for at most this long.
 const RELAY_LATENCY_MAX: Duration = Duration::from_secs(5);
@@ -521,12 +526,12 @@ impl PeerBench<'_> {
         if args.runs(Phase::Concurrency) && args.streams > 0 && args.concurrency_size > 0 {
             self.enter("concurrency");
             let t = Instant::now();
-            // The slower direction of the transfers just measured.
+            // The slower direction of the transfers just measured, each by
+            // what it sustained.
             let link_mbps = [&peer.upload, &peer.download]
                 .into_iter()
                 .flatten()
-                .filter(|t| t.ok)
-                .filter_map(|t| t.throughput_mbps)
+                .filter_map(sustained_mbps)
                 .reduce(f64::min);
             let Some(c) = unless_stopped(self.concurrency(link_mbps), stop).await else {
                 return true;
@@ -600,8 +605,9 @@ impl PeerBench<'_> {
     /// `--streams` parallel workers sending echo requests of 256 KiB (less
     /// on a link measured at under `link_mbps`, see
     /// [`concurrency_request_size`]) until `--concurrency-size` bytes or
-    /// `--transfer-time`, while small requests measure the round-trip time
-    /// under load.
+    /// `--transfer-time` (starting over with smaller requests if none has
+    /// finished by half of it, see [`Workers`]), while small requests measure
+    /// the round-trip time under load.
     async fn concurrency(&self, link_mbps: Option<f64>) -> Concurrency {
         let args = self.args;
         let (ep, to) = (self.ep, self.to);
@@ -624,101 +630,68 @@ impl PeerBench<'_> {
             fmt_dur(args.transfer_time)
         ));
         let before = QuicSnapshot::to(ep, to);
-        let start = Instant::now();
-        let deadline = tokio::time::Instant::from_std(start + args.transfer_time);
-        let reserved = AtomicU64::new(0);
-        let seq = AtomicU64::new(0);
-        let done = AtomicBool::new(false);
-        let by_time = AtomicBool::new(false);
-        let results = Mutex::new(Requests::default());
-        let worker = || async {
-            loop {
-                if tokio::time::Instant::now() >= deadline {
-                    by_time.store(true, Ordering::Relaxed);
-                    break;
-                }
-                if reserved.fetch_add(size as u64, Ordering::Relaxed) + size as u64 > budget {
-                    break;
-                }
-                let payload = probe::payload(seq.fetch_add(1, Ordering::Relaxed) + 1, size);
-                let t = Instant::now();
-                // A request still running at the time limit is cut off: the
-                // phase ends there, and that is not a failure.
-                let r = tokio::time::timeout_at(deadline, ep.request(to, &payload)).await;
-                let mut res = results.lock().expect("poisoned");
-                match r {
-                    Err(_) => {
-                        res.unfinished += 1;
-                        by_time.store(true, Ordering::Relaxed);
-                        break;
-                    }
-                    Ok(Ok(reply)) if reply.ends_with(&payload) => res.rtts.push(t.elapsed()),
-                    Ok(Ok(_)) => {
-                        res.failed += 1;
-                        res.error
-                            .get_or_insert_with(|| anyhow::anyhow!("unexpected reply"));
-                    }
-                    Ok(Err(e)) => {
-                        res.failed += 1;
-                        res.error.get_or_insert(e.into());
-                    }
-                }
+        let workers = Workers {
+            streams: args.streams,
+            budget,
+            size,
+            time: args.transfer_time,
+        };
+        let request = |payload: Vec<u8>| async move {
+            let reply = ep.request(to, &payload).await?;
+            if !reply.ends_with(&payload) {
+                bail!("unexpected reply");
             }
+            Ok(())
         };
-        let workers = async {
-            n0_future::join_all((0..args.streams).map(|_| worker())).await;
-            done.store(true, Ordering::Relaxed);
-        };
-        let small = async {
-            let mut rtts = Vec::new();
+        // The phase ends when the last worker does: its duration is taken
+        // then (by `Workers::run`), not when the small requests below notice
+        // (campaign 3: on fast paths every duration snapped to their 200 ms
+        // ticks).
+        let workers = workers.run(request);
+        // Small requests every --interval while the workers run; the one in
+        // flight when they are done is dropped.
+        let mut small = Vec::new();
+        let small_requests = async {
             let mut tick = tokio::time::interval(args.interval);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut n = 0;
-            while !done.load(Ordering::Relaxed) {
+            for n in 1.. {
                 tick.tick().await;
-                if done.load(Ordering::Relaxed) {
-                    break;
-                }
-                n += 1;
                 let payload = probe::payload(n, self.payload_size);
                 let t = Instant::now();
-                let r = tokio::select! {
-                    r = ep.request(to, &payload) => Some(r),
-                    _ = wait_flag(&done) => None,
-                };
-                match r {
-                    Some(Ok(reply)) if reply.ends_with(&payload) => rtts.push(t.elapsed()),
-                    _ => {}
+                if let Ok(reply) = ep.request(to, &payload).await
+                    && reply.ends_with(&payload)
+                {
+                    small.push(t.elapsed());
                 }
             }
-            rtts
         };
-        let ((), small) = tokio::join!(workers, small);
-        let elapsed = start.elapsed();
-        let Requests {
-            rtts,
-            failed,
-            unfinished,
-            error,
-        } = results.into_inner().expect("poisoned");
-        let total = rtts.len() as u64 * size as u64;
+        let r = tokio::select! {
+            r = workers => r,
+            () = small_requests => unreachable!("the small requests go on until the workers end"),
+        };
+        let total = r.rtts.len() as u64 * r.size as u64;
         Concurrency {
-            ok: failed == 0,
+            ok: r.failed == 0,
             streams: args.streams,
-            request_bytes: size,
+            request_bytes: r.size,
             sized_for_mbps: link_mbps.filter(|_| size < args.request_size()),
-            requests: rtts.len() as u64,
-            failed,
-            unfinished,
-            limited_by: if by_time.into_inner() { "time" } else { "size" },
+            restart: r.restart.map(|(at, cut_off)| Restart {
+                at_ms: ms(at),
+                cut_off,
+                request_bytes: size,
+            }),
+            requests: r.rtts.len() as u64,
+            failed: r.failed,
+            unfinished: r.unfinished,
+            limited_by: if r.by_time { "time" } else { "size" },
             total_bytes: total,
-            duration_ms: ms(elapsed),
-            throughput_mbps: (!rtts.is_empty()).then(|| round3(probe::mbps(total, elapsed))),
-            rtt_ms: Stats::of(&rtts),
+            duration_ms: ms(r.elapsed),
+            throughput_mbps: (!r.rtts.is_empty()).then(|| round3(probe::mbps(total, r.elapsed))),
+            rtt_ms: Stats::of(&r.rtts),
             loaded_rtt_ms: Stats::of(&small),
             loaded_samples: small.len(),
-            error_kind: error.as_ref().map(|e| anyhow_kind(e, "request")),
-            error: error.map(|e| format!("{e:#}")),
+            error_kind: r.error.as_ref().map(|e| anyhow_kind(e, "request")),
+            error: r.error.map(|e| format!("{e:#}")),
             quic: phase_quic(ep, to, before.as_ref()),
         }
     }
@@ -978,9 +951,31 @@ impl LossCount {
     }
 }
 
-/// The outcome of the concurrency phase's requests.
+/// The concurrency phase's workers: `streams` of them send echo requests of
+/// `size` one after another, until they have started `budget` bytes of
+/// requests or for `time`; a request still running then is cut off (that is
+/// not a failure).
+///
+/// If none of the requests has finished by half of `time`, the size was too
+/// large for the link (sized for transfers that overstated it, or the link
+/// slowed down): the workers cut off their requests and start over with
+/// requests [`RESTART_SHRINK`] times smaller (whole KiB, at least
+/// [`MIN_CONCURRENCY_REQUEST`]), and only those are counted. From 256 KiB
+/// that is 16 KiB, of which 8 streams finish a round trip in the remaining
+/// 4 s (with the defaults) down to about 0.5 Mbps.
+struct Workers {
+    streams: usize,
+    budget: u64,
+    size: usize,
+    time: Duration,
+}
+
+/// What the concurrency phase's workers did. After a restart, all but
+/// `restart` are of the requests since.
 #[derive(Default)]
 struct Requests {
+    /// Size of the counted requests.
+    size: usize,
     /// Round-trip times of the correct replies.
     rtts: Vec<Duration>,
     failed: u64,
@@ -988,13 +983,136 @@ struct Requests {
     unfinished: u64,
     /// The first error.
     error: Option<anyhow::Error>,
+    /// Ended by the time limit (else by the budget).
+    by_time: bool,
+    /// From the start, or the restart, until the last worker ended.
+    elapsed: Duration,
+    /// When the workers started over (since the start), and how many requests
+    /// they cut off then.
+    restart: Option<(Duration, u64)>,
+}
+
+impl Workers {
+    /// The size of the requests after a restart.
+    fn restart_size(&self) -> usize {
+        (self.size / RESTART_SHRINK / 1024 * 1024)
+            .max(MIN_CONCURRENCY_REQUEST)
+            .min(self.size)
+    }
+
+    /// Runs the workers. `request` sends one echo request and checks the
+    /// reply.
+    async fn run<F, Fut>(&self, request: F) -> Requests
+    where
+        F: Fn(Vec<u8>) -> Fut,
+        Fut: Future<Output = anyhow::Result<()>>,
+    {
+        let start = Instant::now();
+        let deadline = tokio::time::Instant::from_std(start + self.time);
+        let restart_at = tokio::time::Instant::from_std(start + self.time / 2);
+        let small = self.restart_size();
+        let reserved = AtomicU64::new(0);
+        let seq = AtomicU64::new(0);
+        let by_time = AtomicBool::new(false);
+        let cut_off = AtomicU64::new(0);
+        // A request has finished (replied or failed, not cut off).
+        let finished = AtomicBool::new(false);
+        // Taken once, at `restart_at`: when the workers started over, or
+        // `None` if they go on.
+        let restart = OnceLock::<Option<Instant>>::new();
+        let restarted = || matches!(restart.get(), Some(Some(_)));
+        let results = Mutex::new(Requests::default());
+        let worker = || async {
+            loop {
+                if tokio::time::Instant::now() >= deadline {
+                    by_time.store(true, Ordering::Relaxed);
+                    break;
+                }
+                // Started before the decision: a restart cuts it off.
+                let first_try = restart.get().is_none();
+                let size = if restarted() { small } else { self.size };
+                if reserved.fetch_add(size as u64, Ordering::Relaxed) + size as u64 > self.budget {
+                    break;
+                }
+                let payload = probe::payload(seq.fetch_add(1, Ordering::Relaxed) + 1, size);
+                let t = Instant::now();
+                let req = tokio::time::timeout_at(deadline, request(payload));
+                tokio::pin!(req);
+                let r = if first_try && small < self.size {
+                    // A request that ended (also by the time limit) counts
+                    // first.
+                    tokio::select! {
+                        biased;
+                        r = &mut req => r,
+                        () = tokio::time::sleep_until(restart_at) => {
+                            let decided = restart.get_or_init(|| {
+                                (!finished.load(Ordering::Relaxed)).then(Instant::now)
+                            });
+                            if decided.is_some() {
+                                cut_off.fetch_add(1, Ordering::Relaxed);
+                                continue;
+                            }
+                            req.await
+                        }
+                    }
+                } else {
+                    req.await
+                };
+                let Ok(r) = r else {
+                    // Cut off by the time limit.
+                    results.lock().expect("poisoned").unfinished += 1;
+                    by_time.store(true, Ordering::Relaxed);
+                    break;
+                };
+                finished.store(true, Ordering::Relaxed);
+                if first_try && restarted() {
+                    // Finished just as the others started over.
+                    cut_off.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                let mut res = results.lock().expect("poisoned");
+                match r {
+                    Ok(()) => res.rtts.push(t.elapsed()),
+                    Err(e) => {
+                        res.failed += 1;
+                        res.error.get_or_insert(e);
+                    }
+                }
+            }
+        };
+        n0_future::join_all((0..self.streams).map(|_| worker())).await;
+        let end = Instant::now();
+        let restarted_at = restart.get().copied().flatten();
+        Requests {
+            size: if restarted_at.is_some() {
+                small
+            } else {
+                self.size
+            },
+            by_time: by_time.into_inner(),
+            elapsed: end - restarted_at.unwrap_or(start),
+            restart: restarted_at.map(|at| (at - start, cut_off.into_inner())),
+            ..results.into_inner().expect("poisoned")
+        }
+    }
+}
+
+/// What a successful transfer says the link sustains: the lower of its
+/// throughput and that of its second half. On a lossy link a transfer can
+/// start fast and settle far lower, and its average then overstates the link
+/// (campaign 3, 1 % loss each way: in one run requests sized for an upload's
+/// 4.7 Mbps, in another for a download's 6.7 Mbps, and none of them finished
+/// in 8 s at the 1-2 Mbps the link then carried).
+fn sustained_mbps(t: &TransferReport) -> Option<f64> {
+    let m = t.throughput_mbps.filter(|_| t.ok)?;
+    Some(t.second_half_mbps.map_or(m, |h| m.min(h)))
 }
 
 /// The size of the concurrency phase's requests: `max` (256 KiB, or
 /// `--concurrency-size` if smaller), or less on a link measured at
-/// `link_mbps`, so that each of the `streams` can finish about
-/// [`REQUESTS_PER_STREAM`] echo requests within `time` (in whole KiB, at
-/// least [`MIN_CONCURRENCY_REQUEST`]). Requests still running at the time
+/// `link_mbps` (see [`sustained_mbps`]), so that each of the `streams` can
+/// finish about [`REQUESTS_PER_STREAM`] echo requests within `time` (in
+/// whole KiB, at least [`MIN_CONCURRENCY_REQUEST`]). Requests still running at the time
 /// limit are cut off and not counted, so on a slow link 256 KiB requests
 /// gave no throughput at all (campaign 2: 8 x 256 KiB at ~1-4 Mbps).
 fn concurrency_request_size(
@@ -1086,6 +1204,7 @@ fn transfer_report(
             bytes: Some(t.bytes),
             duration_ms: Some(ms(t.elapsed)),
             throughput_mbps: Some(round3(t.mbps)),
+            second_half_mbps: t.second_half_mbps.map(round3),
             path: Some(path_name(t.path)),
             limited_by: Some(if t.by_time { "time" } else { "size" }),
             error_kind: None,
@@ -1189,12 +1308,6 @@ fn path_report(ep: &Endpoint, to: NodeId, log: &PathLog, t0: Instant) -> PathRep
     }
 }
 
-async fn wait_flag(flag: &AtomicBool) {
-    while !flag.load(Ordering::Relaxed) {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-}
-
 /// `10 s`, `200 ms`.
 fn fmt_dur(d: Duration) -> String {
     report::fmt_ms(ms(d))
@@ -1252,6 +1365,116 @@ mod tests {
         assert_eq!(c.settle(), Duration::from_millis(1800));
         c.min_rtt = Some(Duration::from_secs(30));
         assert_eq!(c.settle(), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn sustained_rates() {
+        let t = |mbps: f64, half: Option<f64>| TransferReport {
+            ok: true,
+            throughput_mbps: Some(mbps),
+            second_half_mbps: half,
+            ..Default::default()
+        };
+        // Fast or short: the average.
+        assert_eq!(sustained_mbps(&t(123.0, None)), Some(123.0));
+        assert_eq!(sustained_mbps(&t(30.0, Some(45.0))), Some(30.0));
+        // A fast start that settled lower: the second half.
+        assert_eq!(sustained_mbps(&t(4.7, Some(1.1))), Some(1.1));
+        // Failed: nothing.
+        let failed = TransferReport {
+            ok: false,
+            ..t(4.7, None)
+        };
+        assert_eq!(sustained_mbps(&failed), None);
+    }
+
+    /// Workers for 600 ms, without a budget to speak of.
+    fn workers(streams: usize, size: usize) -> Workers {
+        Workers {
+            streams,
+            budget: 1 << 40,
+            size,
+            time: Duration::from_millis(600),
+        }
+    }
+
+    /// A link on which requests of at most `max` bytes take 10 ms, and larger
+    /// ones never finish.
+    async fn link(payload: Vec<u8>, max: usize) -> anyhow::Result<()> {
+        if payload.len() > max {
+            std::future::pending::<()>().await;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        Ok(())
+    }
+
+    #[test]
+    fn restart_sizes() {
+        let size = |s| workers(8, s).restart_size();
+        assert_eq!(size(256 * 1024), 16 * 1024);
+        // Campaign 3, debug/lossy-extra run 10: 204 KiB -> 12 KiB.
+        assert_eq!(size(208_896), 12 * 1024);
+        assert_eq!(size(40 * 1024), 4 * 1024);
+        // Nothing smaller to start over with.
+        assert_eq!(size(4 * 1024), 4 * 1024);
+        assert_eq!(size(1000), 1000);
+    }
+
+    /// None of the first requests finished by half the time: the workers cut
+    /// them off and start over with smaller ones, which are counted from then.
+    #[tokio::test]
+    async fn workers_start_over_with_smaller_requests() {
+        let ms = Duration::from_millis;
+        let r = workers(4, 256 * 1024).run(|p| link(p, 16 * 1024)).await;
+        let (at, cut_off) = r.restart.unwrap();
+        // At half the time (give or take a busy test machine).
+        assert!(at >= ms(300) && at < ms(500), "{at:?}");
+        assert_eq!(cut_off, 4);
+        assert_eq!(r.size, 16 * 1024);
+        assert!(r.rtts.len() >= 8, "{}", r.rtts.len());
+        assert_eq!(r.failed, 0);
+        assert!(r.by_time && r.unfinished <= 4);
+        // Counted from the restart to the end (600 ms).
+        let rest = r.elapsed + at;
+        assert!(rest >= ms(600) && rest < ms(800), "{:?}", r.elapsed);
+    }
+
+    /// One request finished in the first half: no restart, also if all
+    /// others hang until the time limit.
+    #[tokio::test]
+    async fn workers_go_on_after_a_finished_request() {
+        let first = AtomicBool::new(true);
+        let r = workers(4, 256 * 1024)
+            .run(|p| {
+                let max = if first.swap(false, Ordering::Relaxed) {
+                    usize::MAX
+                } else {
+                    0
+                };
+                link(p, max)
+            })
+            .await;
+        assert!(r.restart.is_none());
+        assert_eq!((r.size, r.rtts.len(), r.unfinished), (256 * 1024, 1, 4));
+        assert!(r.by_time);
+        assert!(r.elapsed >= Duration::from_millis(600), "{:?}", r.elapsed);
+    }
+
+    /// Requests that cannot get smaller are not restarted; fast requests end
+    /// with the budget.
+    #[tokio::test]
+    async fn workers_without_restart() {
+        let r = workers(2, 4096).run(|p| link(p, 0)).await;
+        assert!(r.restart.is_none());
+        assert_eq!((r.rtts.len(), r.unfinished), (0, 2));
+        let w = Workers {
+            budget: 10 * 4096,
+            ..workers(2, 4096)
+        };
+        let r = w.run(|p| link(p, 4096)).await;
+        assert!(r.restart.is_none() && !r.by_time);
+        assert_eq!((r.rtts.len(), r.unfinished), (10, 0));
+        assert!(r.elapsed < Duration::from_millis(300), "{:?}", r.elapsed);
     }
 
     #[test]
