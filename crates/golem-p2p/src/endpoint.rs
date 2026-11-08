@@ -151,6 +151,64 @@ pub enum Event {
     },
 }
 
+/// A snapshot of an endpoint's internal state and counters, see
+/// [`Endpoint::stats`].
+///
+/// Meant for monitoring and soak tests: in a healthy endpoint the sizes follow
+/// the current load and return to their idle values when the load ends,
+/// while the totals only grow.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct EndpointStats {
+    /// Entries in the connection table: open connections, and closed ones
+    /// whose close was not processed yet.
+    pub connections: usize,
+    /// Targets (node IDs) with connect state: connects in progress, and the
+    /// last finished one (removed lazily, on the next connect).
+    pub connect_slots: usize,
+    /// Remote endpoints with a dial lock: dials in progress, and the last
+    /// finished one (removed lazily, on the next dial).
+    pub dial_locks: usize,
+    /// Incoming handshakes in progress.
+    pub handshakes: usize,
+    /// Incoming application streams waiting for [`Endpoint::accept`].
+    pub queued_streams: usize,
+    /// Identities in the peer record cache.
+    pub cached_identities: usize,
+    /// Endpoints in the peer record cache.
+    pub cached_endpoints: usize,
+    /// Connections we dialed that completed the handshake, since bind.
+    pub connections_outgoing: u64,
+    /// Connections the peer dialed that completed the handshake, since bind.
+    pub connections_incoming: u64,
+    /// Connections that completed the handshake and have closed since.
+    pub connections_closed: u64,
+    /// Incoming connections refused or failed before or during the handshake.
+    pub handshakes_failed: u64,
+    /// Application streams handed to the application ([`Endpoint::accept`]).
+    pub streams_accepted: u64,
+    /// Application streams reset before reaching the application: invalid
+    /// header, unknown identity, sender not bound, queue full.
+    pub streams_refused: u64,
+}
+
+/// Totals since bind, see [`EndpointStats`].
+#[derive(Debug, Default)]
+struct Counters {
+    connections_outgoing: AtomicU64,
+    connections_incoming: AtomicU64,
+    connections_closed: AtomicU64,
+    handshakes_failed: AtomicU64,
+    streams_accepted: AtomicU64,
+    streams_refused: AtomicU64,
+}
+
+impl Counters {
+    fn add(counter: &AtomicU64) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Config {
     record_ttl: Duration,
@@ -478,6 +536,7 @@ impl Builder {
             handshakes: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_HANDSHAKES)),
             relay_map,
             config: self.config,
+            counters: Counters::default(),
         });
         info!(
             node_id = %initial.default_id(),
@@ -550,6 +609,7 @@ struct Inner {
     handshakes: Arc<tokio::sync::Semaphore>,
     relay_map: RelayMap,
     config: Config,
+    counters: Counters,
 }
 
 /// Our current relay URLs and the direct addresses to publish: iroh's
@@ -873,14 +933,22 @@ impl Inner {
     }
 
     async fn handle_incoming(self: Arc<Self>, incoming: iroh::endpoint::Incoming) {
+        if !self.accept_incoming(incoming).await {
+            Counters::add(&self.counters.handshakes_failed);
+        }
+    }
+
+    /// Runs the handshake of an incoming connection. Returns `true` if the
+    /// connection was registered.
+    async fn accept_incoming(self: &Arc<Self>, incoming: iroh::endpoint::Incoming) -> bool {
         let open = self.conns.lock().expect("poisoned").len();
         let Ok(_permit) = self.handshakes.clone().try_acquire_owned() else {
             incoming.refuse();
-            return;
+            return false;
         };
         if open >= self.config.max_connections {
             incoming.refuse();
-            return;
+            return false;
         }
         let res = tokio::time::timeout(self.config.handshake_timeout, async {
             let conn = incoming
@@ -904,16 +972,16 @@ impl Inner {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
                 debug!("incoming handshake failed: {e}");
-                return;
+                return false;
             }
             Err(_) => {
                 debug!("incoming handshake timed out");
-                return;
+                return false;
             }
         };
         let Control::Hello { record, target } = hello else {
             conn.close(codes::PROTOCOL, b"expected hello");
-            return;
+            return false;
         };
         let peer = match VerifiedRecord::verify(&record) {
             Ok(p) if p.endpoint_id() == conn.remote_id() => p,
@@ -925,7 +993,7 @@ impl Inner {
                     codes::IDENTITY_MISMATCH,
                 )
                 .await;
-                return;
+                return false;
             }
             Err(e) => {
                 debug!("rejecting connection with invalid record: {e}");
@@ -936,7 +1004,7 @@ impl Inner {
                     codes::HANDSHAKE_FAILED,
                 )
                 .await;
-                return;
+                return false;
             }
         };
         let mut local_rx = self.record_tx.subscribe();
@@ -951,7 +1019,7 @@ impl Inner {
                 codes::UNKNOWN_IDENTITY,
             )
             .await;
-            return;
+            return false;
         }
         if self.is_superseded(&peer) {
             debug!("rejecting connection from a superseded instance");
@@ -962,7 +1030,7 @@ impl Inner {
                 codes::SUPERSEDED,
             )
             .await;
-            return;
+            return false;
         }
         self.store.insert(&peer);
         if let Err(e) = wire::write_frame(
@@ -975,9 +1043,10 @@ impl Inner {
         {
             debug!("writing welcome failed: {e}");
             conn.close(codes::HANDSHAKE_FAILED, b"handshake failed");
-            return;
+            return false;
         }
         self.register(conn, peer, send, recv, local_rx, Direction::Incoming);
+        true
     }
 
     /// Registers a connection that completed the handshake and starts its tasks.
@@ -1026,6 +1095,10 @@ impl Inner {
             }
             conns.insert(c.stable_id(), c.clone());
         }
+        Counters::add(match direction {
+            Direction::Outgoing => &self.counters.connections_outgoing,
+            Direction::Incoming => &self.counters.connections_incoming,
+        });
         debug!(peer = %peer.default_id(), ?direction, "connection established");
         self.emit(Event::Connected {
             peer: peer.clone(),
@@ -1399,6 +1472,7 @@ async fn handle_app_stream(
         _ => {
             let _ = send.reset(codes::PROTOCOL);
             let _ = recv.stop(codes::PROTOCOL);
+            Counters::add(&inner.counters.streams_refused);
             return;
         }
     };
@@ -1415,6 +1489,7 @@ async fn handle_app_stream(
         debug!(from = %header.from, to = %header.to, "rejecting application stream");
         let _ = send.reset(code);
         let _ = recv.stop(code);
+        Counters::add(&inner.counters.streams_refused);
         return;
     }
     let incoming = IncomingStream {
@@ -1425,16 +1500,21 @@ async fn handle_app_stream(
         streams: Some((send, recv)),
         raw_access: false,
     };
-    if let Err(e) = inner.incoming_tx.try_send(incoming) {
-        let (mut send, mut recv) = e.into_inner().into_streams();
-        let _ = send.reset(codes::BUSY);
-        let _ = recv.stop(codes::BUSY);
+    match inner.incoming_tx.try_send(incoming) {
+        Ok(()) => Counters::add(&inner.counters.streams_accepted),
+        Err(e) => {
+            let (mut send, mut recv) = e.into_inner().into_streams();
+            let _ = send.reset(codes::BUSY);
+            let _ = recv.stop(codes::BUSY);
+            Counters::add(&inner.counters.streams_refused);
+        }
     }
 }
 
 async fn close_watcher(inner: Arc<Inner>, c: Connection) {
     let reason = c.inner.conn.closed().await;
     inner.conns.lock().expect("poisoned").remove(&c.stable_id());
+    Counters::add(&inner.counters.connections_closed);
     inner.emit(Event::Disconnected {
         peer: c.peer(),
         reason: reason.to_string(),
@@ -1525,6 +1605,29 @@ impl Endpoint {
     /// Subscribes to endpoint events.
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.inner.events.subscribe()
+    }
+
+    /// Returns a snapshot of the endpoint's internal state and counters, for
+    /// monitoring and soak tests (see [`EndpointStats`]).
+    pub fn stats(&self) -> EndpointStats {
+        let inner = &self.inner;
+        let (cached_identities, cached_endpoints) = inner.store.len();
+        let c = &inner.counters;
+        EndpointStats {
+            connections: inner.conns.lock().expect("poisoned").len(),
+            connect_slots: inner.connect_slots.lock().expect("poisoned").len(),
+            dial_locks: inner.dial_locks.lock().expect("poisoned").len(),
+            handshakes: MAX_PENDING_HANDSHAKES - inner.handshakes.available_permits(),
+            queued_streams: inner.incoming_tx.max_capacity() - inner.incoming_tx.capacity(),
+            cached_identities,
+            cached_endpoints,
+            connections_outgoing: c.connections_outgoing.load(Ordering::Relaxed),
+            connections_incoming: c.connections_incoming.load(Ordering::Relaxed),
+            connections_closed: c.connections_closed.load(Ordering::Relaxed),
+            handshakes_failed: c.handshakes_failed.load(Ordering::Relaxed),
+            streams_accepted: c.streams_accepted.load(Ordering::Relaxed),
+            streams_refused: c.streams_refused.load(Ordering::Relaxed),
+        }
     }
 
     /// Returns all open connections.

@@ -67,8 +67,8 @@ pub use iroh::endpoint::{RecvStream, SendStream};
 pub use crate::{
     discovery::{Discovery, DiscoveryError, MemoryDiscovery, MultiDiscovery},
     endpoint::{
-        Builder, Connection, Direction, Endpoint, Event, Identities, IncomingStream, PathKind,
-        TransportMode,
+        Builder, Connection, Direction, Endpoint, EndpointStats, Event, Identities, IncomingStream,
+        PathKind, TransportMode,
     },
     error::{Error, Result},
     identity::{NodeId, Signature},
