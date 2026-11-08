@@ -116,11 +116,12 @@ pub mod codes {
     /// Stream reset: the receiving application dropped the stream without
     /// answering it.
     pub const NOT_ANSWERED: VarInt = VarInt::from_u32(9);
-    /// Stream reset: the requester gave up waiting for the response (request
-    /// timeout).
+    /// Stream reset and stopped: the requester gave up waiting for the
+    /// response (request timeout).
     pub const TIMED_OUT: VarInt = VarInt::from_u32(10);
-    /// Stream reset: the requester abandoned the request before it had sent
-    /// all of it (the request's future was dropped).
+    /// Stream reset and stopped: the requester abandoned the request before
+    /// it had read the whole response (the request's future was dropped, or
+    /// the request failed), whether or not it had sent all of the request.
     pub const CANCELLED: VarInt = VarInt::from_u32(11);
 }
 

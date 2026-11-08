@@ -1095,19 +1095,39 @@ impl Inner {
     }
 }
 
-/// The sending side of a request in [`Endpoint::request_from`]. Dropped
-/// before the request was sent completely (the caller gave up on it), it
-/// resets the stream: a dropped [`SendStream`] would finish it, and the peer
-/// would take the part that arrived for the whole request.
-struct RequestSend {
+/// The streams of a request in [`Endpoint::request_from`]. Dropped before
+/// the whole response was read (the caller gave up on the request, or it
+/// failed), it abandons the request with
+/// [`codes::CANCELLED`](crate::wire::codes::CANCELLED). Dropping the plain
+/// streams would finish the sending side instead: QUIC would go on
+/// delivering (and retransmitting) whatever of the request it still holds,
+/// so the peer would take a truncated request for the whole one, or handle a
+/// complete one that nobody waits for. `write_all` and `finish` return as
+/// soon as QUIC has buffered the request, which for a request within the
+/// stream's flow-control window is at once.
+struct RequestStreams {
     send: SendStream,
-    complete: bool,
+    recv: RecvStream,
+    /// The whole response was read: nothing left to abandon.
+    done: bool,
 }
 
-impl Drop for RequestSend {
+impl RequestStreams {
+    /// Gives up on the request: resets the sending side (QUIC drops what it
+    /// has not delivered yet, and the peer's read fails unless it had
+    /// received the whole request) and stops the receiving side (the peer's
+    /// writes of the response fail).
+    fn abandon(&mut self, code: VarInt) {
+        self.done = true;
+        let _ = self.send.reset(code);
+        let _ = self.recv.stop(code);
+    }
+}
+
+impl Drop for RequestStreams {
     fn drop(&mut self) {
-        if !self.complete {
-            let _ = self.send.reset(codes::CANCELLED);
+        if !self.done {
+            self.abandon(codes::CANCELLED);
         }
     }
 }
@@ -1560,21 +1580,28 @@ impl Endpoint {
     /// while waiting for a stream leaves the connection open: the peer is
     /// busy, not gone.)
     ///
-    /// Dropping the returned future before the whole request was sent resets
-    /// the stream with [`codes::CANCELLED`](crate::wire::codes::CANCELLED),
-    /// so the peer never takes a truncated request for a complete one.
+    /// Dropping the returned future before the whole response was read
+    /// (a caller's timeout, `select!`) abandons the request: its stream is
+    /// reset and stopped with
+    /// [`codes::CANCELLED`](crate::wire::codes::CANCELLED), also when the
+    /// request had been sent completely. QUIC then stops (re)transmitting
+    /// it, and the peer gets an error instead of the request (never a
+    /// truncated one) unless it had received all of it already; then it
+    /// cannot send the response ([`IncomingStream::respond`] fails). A
+    /// request failing with an error is abandoned the same way.
     pub async fn request_from(&self, from: NodeId, to: NodeId, data: &[u8]) -> Result<Vec<u8>> {
         let timeout = self.inner.config.request_timeout;
         let OpenStream {
             conn,
             send,
-            mut recv,
+            recv,
             deadline,
             received,
         } = self.inner.open_bi(from, to, Some(timeout)).await?;
-        let mut req = RequestSend {
+        let mut req = RequestStreams {
             send,
-            complete: false,
+            recv,
+            done: false,
         };
         let deadline = deadline.unwrap_or_else(|| tokio::time::Instant::now() + timeout);
         let max = self.inner.config.max_response_size;
@@ -1583,8 +1610,9 @@ impl Endpoint {
             req.send
                 .finish()
                 .map_err(|e| Error::Connection(e.to_string()))?;
-            req.complete = true;
-            recv.read_to_end(max).await.map_err(map_read_err)
+            let response = req.recv.read_to_end(max).await.map_err(map_read_err)?;
+            req.done = true;
+            Ok(response)
         };
         match tokio::time::timeout_at(deadline, exchange).await {
             Ok(Ok(v)) => Ok(v),
@@ -1596,8 +1624,7 @@ impl Endpoint {
             }
             Err(_) => {
                 // Give up on this request only, and tell the peer so.
-                let _ = req.send.reset(codes::TIMED_OUT);
-                let _ = recv.stop(codes::TIMED_OUT);
+                req.abandon(codes::TIMED_OUT);
                 if conn.datagrams_received() == received {
                     debug!(
                         peer = %to,
@@ -1902,6 +1929,12 @@ impl IncomingStream {
     /// Returns once the peer has read the whole response (or after at most
     /// 10 s), so handle each stream in its own task rather than one after
     /// another in the accept loop.
+    ///
+    /// Fails with [`Error::StreamRejected`] if the requester stopped the
+    /// stream before it had read the whole response: it gave up on the
+    /// request ([`codes::CANCELLED`](crate::wire::codes::CANCELLED),
+    /// [`codes::TIMED_OUT`](crate::wire::codes::TIMED_OUT)) or the response
+    /// was too large for it.
     pub async fn respond(mut self, data: &[u8]) -> Result<()> {
         let (mut send, _recv) = self
             .streams
@@ -1912,7 +1945,9 @@ impl IncomingStream {
             .map_err(|e| Error::Connection(e.to_string()))?;
         // Wait until the peer has read everything, so dropping does not race
         // with delivery.
-        let _ = tokio::time::timeout(Duration::from_secs(10), send.stopped()).await;
-        Ok(())
+        match tokio::time::timeout(Duration::from_secs(10), send.stopped()).await {
+            Ok(Ok(Some(code))) => Err(Error::StreamRejected(code.into_inner())),
+            _ => Ok(()),
+        }
     }
 }
