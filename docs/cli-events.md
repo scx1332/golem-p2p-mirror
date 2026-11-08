@@ -314,7 +314,7 @@ discovery (QAD) over UDP, and with HTTPS):
 | `connect` | object | `ok`, `lookup_ms` (directory lookup), `connect_ms` (lookup and both handshakes), `handshake_ms` (`connect_ms - lookup_ms`), `path` and `remote_addr` right after connecting, `peer_endpoint`, `error_kind`, `error` |
 | `latency` | object or null | `duration_ms`, `sent`, `ok`, `failed`, `failed_pct`, `rtt_ms` {`min`, `p50`, `p95`, `max`, `mean`}, `rtt_samples`, `jitter_ms`, `direct_fraction`, `final_path` (as in `summary`), `quic` (below, during this phase), `loss` (packet loss once the path had settled: `from_ms` (when counting started, from the start of the phase), `sent_packets`, `lost_packets`, `lost_pct`, counted like `quic`; null if the selected path changed until the end of the phase, or the connection changed; see **Packet loss**) |
 | `upload`, `download` | object or null | `ok`, `requested_bytes` (after the relay cap), `relay_capped`, `bytes`, `duration_ms`, `throughput_mbps`, `second_half_mbps` (throughput in the second half of the transfer; of an upload: of writing, see **Bench phases**; null if it took less than 1 s), `path` (at the end), `limited_by` (`size` or `time`), `error_kind` (`refused` for a listener limit; `no_count`: an upload whose count did not come back in time, see **Bench phases**), `error`, `quic` (during this phase) |
-| `concurrency` | object or null | `ok`, `streams`, `request_bytes` (256 KiB, smaller on a slow link), `sized_for_mbps` (the requests were made smaller for a slow link: the rate they were sized for, the lowest `throughput_mbps` or `second_half_mbps` of the upload and download; null if not), `requests` (correct replies), `failed`, `unfinished` (still running at `--transfer-time`, cut off; not failures), `limited_by` (`size` or `time`), `total_bytes` (payload, each way), `duration_ms` (until the last worker ended), `throughput_mbps` (payload, each way), `rtt_ms` (of these requests), `loaded_rtt_ms` and `loaded_samples` (small requests sent meanwhile), `error_kind`, `error`, `quic` (during this phase) |
+| `concurrency` | object or null | `ok`, `streams`, `request_bytes` (of the counted requests: 256 KiB, smaller on a slow link or after a restart), `sized_for_mbps` (the requests were made smaller for a slow link: the rate they were sized for, the lowest `throughput_mbps` or `second_half_mbps` of the upload and download; null if not; after a restart it applies to the first requests), `restart` (null, or the phase started over with smaller requests because none had finished by half of `--transfer-time`: `at_ms` (from the start of the phase), `cut_off` (first requests cut off then), `request_bytes` (their size); all other counts, times and the throughput are then of the requests since the restart), `requests` (correct replies), `failed`, `unfinished` (still running at `--transfer-time`, cut off; not failures), `limited_by` (`size` or `time`), `total_bytes` (payload, each way), `duration_ms` (until the last worker ended, from the start of the phase or the restart), `throughput_mbps` (payload, each way), `rtt_ms` (of these requests), `loaded_rtt_ms` and `loaded_samples` (small requests sent meanwhile), `error_kind`, `error`, `quic` (during this phase) |
 | `idle` | object or null | `idle_ms`, `ok` (a request succeeded afterwards), `survived` (the same connection was still open), `path_before`, `path_after`, `attempts` (at most 3), `recovery_ms` (first request to first reply), `rtt_ms`, `error` |
 | `path` | object | `time_to_direct_ms` (from the start of connecting), `changes`, `final_path` (`unknown` if there was no connection at the end), `final_remote_addr`, `timeline` [{`t_ms`, `path`, `remote_addr`}] (at most 64 entries) |
 | `connection_lost` | object or null | the connection made in the `connect` phase closed before the end of the run: `t_ms` (from the start of connecting), `phase` (the phase running then), `cause` (`closed_here`: this node closed it, usually because a request got no answer and nothing at all arrived from the peer during the request timeout (golem-p2p also closes a connection after a connection error, or when the peer restarted); `idle_timeout`: nothing arrived for QUIC's idle timeout; `closed_by_peer`; `reset`: the peer no longer knew the connection, e.g. it restarted; `error`), `reason` (QUIC's close reason). Null if it stayed open. A loss during the `idle` phase is reported by `idle` instead of the `connection_lost` issue |
@@ -536,13 +536,21 @@ brackets):
    slow start) and settle at 1-2 Mbps, and its average (4.7 and 6.7 Mbps)
    overstated the link (campaign 3). Transfers under 1 s (10 MB at over
    80 Mbps) are judged by their average, so fast paths keep 256 KiB.
-   Meanwhile small
-   requests every `--interval` measure the round trip under load. The phase
-   ends when the last worker does (a small request still running then is
-   dropped); its duration is taken then. (Up to campaign 3 it ended only
-   when the small requests next noticed, so on fast paths its duration
-   snapped to their 200 ms ticks: every lab direct run reported 7.5 MiB in
-   about 403 ms, 156 Mbps.)
+   If none of the requests has finished by half of `--transfer-time` (they
+   were still too large: the transfers overstated the link, or it slowed
+   down), the phase starts over (`restart`): the requests in flight are cut
+   off, and for the rest of the time the workers send requests a sixteenth
+   of the size (whole KiB, at least 4 KiB; from 256 KiB that is 16 KiB, of
+   which 8 streams finish a round trip in the remaining 4 s down to about
+   0.5 Mbps). Only those are counted, from the restart on. The budget
+   (`--concurrency-size`) includes the cut-off requests. On fast paths the
+   first request finishes in milliseconds, so this does not happen there.
+   Meanwhile small requests every `--interval` measure the round trip under
+   load (over the whole phase). The phase ends when the last worker does (a
+   small request still running then is dropped); its duration is taken
+   then. (Up to campaign 3 it ended only when the small requests next
+   noticed, so on fast paths its duration snapped to their 200 ms ticks:
+   every lab direct run reported 7.5 MiB in about 403 ms, 156 Mbps.)
 6. `relay_compare` (`--compare-relay`): a second endpoint with a temporary
    identity, relay only (no UDP sockets) and not published to the
    directories, connects to the same peer and repeats latency (at most 5 s),

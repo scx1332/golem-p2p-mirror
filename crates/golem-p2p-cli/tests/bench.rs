@@ -232,6 +232,7 @@ async fn bench_relay_only() {
     // Fast enough for full-size requests.
     assert_eq!(cc["request_bytes"], 262_144);
     assert!(cc["sized_for_mbps"].is_null(), "{cc:#}");
+    assert!(cc["restart"].is_null(), "{cc:#}");
     // The relay cap (1M) limits the phase to 3 requests of 256 KiB.
     assert_eq!(cc["requests"], 3, "{cc:#}");
     assert_eq!(cc["total_bytes"], 3 * 262_144);
@@ -475,12 +476,14 @@ async fn phases_end_at_the_time_limit() {
     assert_eq!(c["limited_by"], "time", "{c:#}");
     assert!(c["unfinished"].as_u64().unwrap() <= 16, "{c:#}");
     // Requests are 256 KiB, or smaller (at least 4 KiB) if the transfers
-    // were too slow for that within the time limit.
+    // were too slow for that within the time limit. (If none of them
+    // finished in 100 ms, the phase started over with smaller ones.)
     let size = c["request_bytes"].as_u64().unwrap();
+    let first = c["restart"]["request_bytes"].as_u64().unwrap_or(size);
     if c["sized_for_mbps"].is_null() {
-        assert_eq!(size, 262_144, "{c:#}");
+        assert_eq!(first, 262_144, "{c:#}");
     } else {
-        assert!((4096..262_144).contains(&size), "{c:#}");
+        assert!((4096..262_144).contains(&first), "{c:#}");
         assert_eq!(num(c, "sized_for_mbps"), sustained(p), "{c:#}");
     }
     assert!(r["issues"].as_array().unwrap().is_empty(), "{r:#}");
@@ -523,6 +526,7 @@ async fn concurrency_ends_with_its_workers() {
     );
     // 1M allows 3 requests of 256 KiB; on loopback they take milliseconds.
     assert_eq!(c["requests"], 3, "{c:#}");
+    assert!(c["restart"].is_null(), "{c:#}");
     assert!(num(c, "duration_ms") < 2500.0, "{c:#}");
     let phase = events(&evs, "bench_phase")
         .into_iter()

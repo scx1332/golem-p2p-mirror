@@ -311,11 +311,16 @@ pub struct TransferReport {
 pub struct Concurrency {
     pub ok: bool,
     pub streams: usize,
+    /// Size of the counted requests (after a restart: the smaller ones).
     pub request_bytes: usize,
     /// The requests were made smaller for a slow link: what the upload and
     /// download sustained (the lowest of their throughputs over the whole
     /// transfer and its second half); null if not.
     pub sized_for_mbps: Option<f64>,
+    /// None of the first requests finished by half the time limit, so the
+    /// phase started over with smaller ones; null if not. The counts, times
+    /// and throughput are of the requests since.
+    pub restart: Option<Restart>,
     pub requests: u64,
     pub failed: u64,
     /// Requests still running at the time limit, cut off (not failures).
@@ -325,6 +330,8 @@ pub struct Concurrency {
     pub limited_by: &'static str,
     /// Payload bytes of the correct replies; each went both ways.
     pub total_bytes: u64,
+    /// Until the last worker ended, from the start of the phase or the
+    /// restart.
     pub duration_ms: f64,
     /// Payload throughput in each direction.
     pub throughput_mbps: Option<f64>,
@@ -336,6 +343,17 @@ pub struct Concurrency {
     pub error: Option<String>,
     /// QUIC counters of the connection during this phase.
     pub quic: Option<QuicStats>,
+}
+
+/// The concurrency phase started over with smaller requests.
+#[derive(Debug, Clone, Serialize)]
+pub struct Restart {
+    /// When, from the start of the phase.
+    pub at_ms: f64,
+    /// Requests of the first try cut off then.
+    pub cut_off: u64,
+    /// Size of the first try's requests.
+    pub request_bytes: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -665,44 +683,7 @@ impl Report {
                 line(s, "download", transfer_line(t));
             }
             if let Some(c) = &p.concurrency {
-                let v = if c.requests == 0 && !c.ok {
-                    format!("FAILED: {}", c.error.as_deref().unwrap_or("?"))
-                } else if c.requests == 0 {
-                    format!(
-                        "{} streams: none of the requests of {}{} finished within {} (the time \
-                         limit)",
-                        c.streams,
-                        fmt_bytes(c.request_bytes as u64),
-                        c.sized_for_mbps
-                            .map(|m| format!(" (sized for {})", fmt_mbps(m)))
-                            .unwrap_or_default(),
-                        fmt_ms(c.duration_ms)
-                    )
-                } else {
-                    let mut v = format!(
-                        "{} streams: {} requests of {} ({}{} each way) in {}: {}",
-                        c.streams,
-                        c.requests,
-                        fmt_bytes(c.request_bytes as u64),
-                        c.sized_for_mbps
-                            .map(|m| format!("sized for {}; ", fmt_mbps(m)))
-                            .unwrap_or_default(),
-                        fmt_bytes(c.total_bytes),
-                        fmt_ms(c.duration_ms),
-                        c.throughput_mbps.map_or("-".into(), fmt_mbps)
-                    );
-                    if c.failed > 0 {
-                        let _ = write!(v, ", {} FAILED", c.failed);
-                    }
-                    if c.unfinished > 0 {
-                        let _ = write!(v, ", {} cut off at the time limit", c.unfinished);
-                    }
-                    if let Some(m) = c.loaded_rtt_ms.p50 {
-                        let _ = write!(v, "; small requests meanwhile: median {}", fmt_ms(m));
-                    }
-                    v
-                };
-                line(s, "parallel", v);
+                line(s, "parallel", concurrency_line(c));
             }
             if let Some(v) = loss_line(p) {
                 line(s, "packet loss", v);
@@ -937,6 +918,61 @@ fn transfer_line(t: &TransferReport) -> String {
     }
 }
 
+/// The `parallel` line of the human-readable report.
+fn concurrency_line(c: &Concurrency) -> String {
+    use std::fmt::Write;
+    // After a restart the sizing belongs to the first requests.
+    let sized = c
+        .sized_for_mbps
+        .map(|m| format!("sized for {}", fmt_mbps(m)));
+    let (sized, first) = match &c.restart {
+        None => (sized, String::new()),
+        Some(r) => (
+            None,
+            format!(
+                "none of the first requests of {}{} finished in {}, so it started \
+                 over with smaller ones; ",
+                fmt_bytes(r.request_bytes as u64),
+                sized.map(|s| format!(" ({s})")).unwrap_or_default(),
+                fmt_ms(r.at_ms)
+            ),
+        ),
+    };
+    if c.requests == 0 && !c.ok {
+        format!("FAILED: {}", c.error.as_deref().unwrap_or("?"))
+    } else if c.requests == 0 {
+        format!(
+            "{} streams: {first}none of the requests of {}{} finished within {} (the \
+             time limit)",
+            c.streams,
+            fmt_bytes(c.request_bytes as u64),
+            sized.map(|s| format!(" ({s})")).unwrap_or_default(),
+            fmt_ms(c.duration_ms)
+        )
+    } else {
+        let mut v = format!(
+            "{} streams: {first}{} requests of {} ({}{} each way) in {}: {}",
+            c.streams,
+            c.requests,
+            fmt_bytes(c.request_bytes as u64),
+            sized.map(|s| format!("{s}; ")).unwrap_or_default(),
+            fmt_bytes(c.total_bytes),
+            fmt_ms(c.duration_ms),
+            c.throughput_mbps.map_or("-".into(), fmt_mbps)
+        );
+        if c.failed > 0 {
+            let _ = write!(v, ", {} FAILED", c.failed);
+        }
+        if c.unfinished > 0 {
+            let _ = write!(v, ", {} cut off at the time limit", c.unfinished);
+        }
+        if let Some(m) = c.loaded_rtt_ms.p50 {
+            let _ = write!(v, "; small requests meanwhile: median {}", fmt_ms(m));
+        }
+        v
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -952,6 +988,83 @@ mod tests {
         assert!(lines[0].starts_with("  Hint: word"));
         assert!(lines[1].starts_with("    word"));
         assert_eq!(s.matches("word").count(), 30);
+    }
+
+    #[test]
+    fn concurrency_lines() {
+        let c = Concurrency {
+            streams: 8,
+            request_bytes: 12 * 1024,
+            sized_for_mbps: Some(6.7),
+            ok: true,
+            requests: 40,
+            total_bytes: 40 * 12 * 1024,
+            duration_ms: 4000.0,
+            throughput_mbps: Some(0.98),
+            ..Default::default()
+        };
+        let l = concurrency_line(&c);
+        assert!(
+            l.starts_with("8 streams: 40 requests of 12 kB (sized for 6.7 Mbps;"),
+            "{l}"
+        );
+        let c = Concurrency {
+            restart: Some(Restart {
+                at_ms: 4000.0,
+                cut_off: 8,
+                request_bytes: 208_896,
+            }),
+            ..c
+        };
+        assert_eq!(
+            concurrency_line(&c),
+            "8 streams: none of the first requests of 209 kB (sized for 6.7 Mbps) finished in \
+             4.0 s, so it started over with smaller ones; 40 requests of 12 kB (492 kB each \
+             way) in 4.0 s: 980 kbps"
+        );
+    }
+
+    #[test]
+    fn restart_json() {
+        let c = Concurrency {
+            restart: Some(Restart {
+                at_ms: 4000.5,
+                cut_off: 8,
+                request_bytes: 208_896,
+            }),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(
+            v["restart"],
+            serde_json::json!({"at_ms": 4000.5, "cut_off": 8, "request_bytes": 208_896})
+        );
+        let v = serde_json::to_value(Concurrency::default()).unwrap();
+        assert!(v["restart"].is_null() && v.get("restart").is_some(), "{v}");
+    }
+
+    #[test]
+    fn transfer_lines() {
+        let t = TransferReport {
+            ok: true,
+            bytes: Some(6_700_000),
+            duration_ms: Some(8000.0),
+            throughput_mbps: Some(6.7),
+            second_half_mbps: Some(1.5),
+            path: Some("direct"),
+            limited_by: Some("time"),
+            ..Default::default()
+        };
+        assert_eq!(
+            transfer_line(&t),
+            "6.7 MB in 8.0 s: 6.7 Mbps (direct, stopped at the time limit; 1.5 Mbps in the \
+             second half)"
+        );
+        let t = TransferReport {
+            second_half_mbps: Some(5.0),
+            ..t
+        };
+        assert!(!transfer_line(&t).contains("second half"));
     }
 
     #[test]
