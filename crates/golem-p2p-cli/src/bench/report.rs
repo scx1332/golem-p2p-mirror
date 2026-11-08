@@ -295,6 +295,9 @@ pub struct TransferReport {
     pub bytes: Option<u64>,
     pub duration_ms: Option<f64>,
     pub throughput_mbps: Option<f64>,
+    /// Throughput in the second half of the transfer (of an upload: of
+    /// writing); null if it took less than a second.
+    pub second_half_mbps: Option<f64>,
     pub path: Option<&'static str>,
     /// `size` (all bytes) or `time` (`--transfer-time` reached first).
     pub limited_by: Option<&'static str>,
@@ -309,8 +312,9 @@ pub struct Concurrency {
     pub ok: bool,
     pub streams: usize,
     pub request_bytes: usize,
-    /// The requests were made smaller for a slow link: its throughput as
-    /// measured (the slower of upload and download); null if not.
+    /// The requests were made smaller for a slow link: what the upload and
+    /// download sustained (the lowest of their throughputs over the whole
+    /// transfer and its second half); null if not.
     pub sized_for_mbps: Option<f64>,
     pub requests: u64,
     pub failed: u64,
@@ -909,7 +913,7 @@ fn transfer_line(t: &TransferReport) -> String {
     };
     match (t.ok, t.bytes, t.duration_ms, t.throughput_mbps) {
         (true, Some(b), Some(d), Some(m)) => format!(
-            "{} in {}: {} ({}{}){cap}",
+            "{} in {}: {} ({}{}{}){cap}",
             fmt_bytes(b),
             fmt_ms(d),
             fmt_mbps(m),
@@ -918,6 +922,11 @@ fn transfer_line(t: &TransferReport) -> String {
                 ", stopped at the time limit"
             } else {
                 ""
+            },
+            // Much slower towards the end: a fast start on a lossy link.
+            match t.second_half_mbps {
+                Some(h) if h < m / 2.0 => format!("; {} in the second half", fmt_mbps(h)),
+                _ => String::new(),
             }
         ),
         _ => format!(

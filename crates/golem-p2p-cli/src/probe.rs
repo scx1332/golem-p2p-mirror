@@ -475,6 +475,70 @@ pub struct Transfer {
     pub path: PathKind,
     /// Ended by the time limit before all bytes were transferred.
     pub by_time: bool,
+    /// Megabits per second over the second half of the transfer (see
+    /// [`ProgressLog`]); `None` if it took less than [`SECOND_HALF_MIN`].
+    pub second_half_mbps: Option<f64>,
+}
+
+/// Transfers shorter than this have no [`Transfer::second_half_mbps`]: too
+/// short to say more than their average (10 MB in 1 s are 80 Mbps).
+pub const SECOND_HALF_MIN: Duration = Duration::from_secs(1);
+
+/// How often [`ProgressLog`] records at most.
+const PROGRESS_STEP: Duration = Duration::from_millis(10);
+
+/// The bytes a transfer had moved over time, to tell its rate in its second
+/// half from its average: on a lossy link a transfer can start fast and
+/// settle far lower (campaign 3, 1 % loss each way: single transfers of
+/// 2-37 Mbps where the link carried 1-2 Mbps for long).
+#[derive(Debug)]
+pub struct ProgressLog {
+    start: Instant,
+    /// (time since `start`, bytes moved by then), at most one per
+    /// [`PROGRESS_STEP`].
+    samples: Vec<(Duration, u64)>,
+}
+
+impl ProgressLog {
+    pub fn new(start: Instant) -> Self {
+        Self {
+            start,
+            samples: vec![(Duration::ZERO, 0)],
+        }
+    }
+
+    /// Records that `bytes` have been moved by now.
+    pub fn record(&mut self, bytes: u64) {
+        self.record_at(self.start.elapsed(), bytes);
+    }
+
+    fn record_at(&mut self, t: Duration, bytes: u64) {
+        if self
+            .samples
+            .last()
+            .is_none_or(|(last, _)| t >= *last + PROGRESS_STEP)
+        {
+            self.samples.push((t, bytes));
+        }
+    }
+
+    /// Megabits per second over the second half of a transfer that had moved
+    /// `bytes` at `end` (since `start`); `None` if `end` is shorter than
+    /// [`SECOND_HALF_MIN`]. The bytes at half time are those of the last
+    /// record before it (at most [`PROGRESS_STEP`] early).
+    pub fn second_half_mbps(&self, end: Duration, bytes: u64) -> Option<f64> {
+        if end < SECOND_HALF_MIN {
+            return None;
+        }
+        let half = end / 2;
+        let at_half = self
+            .samples
+            .iter()
+            .take_while(|(t, _)| *t <= half)
+            .last()
+            .map_or(0, |(_, b)| *b);
+        Some(mbps(bytes.saturating_sub(at_half), end - half))
+    }
 }
 
 /// After an upload was stopped at its time limit, how long to wait at least
@@ -511,6 +575,12 @@ pub fn mbps(bytes: u64, elapsed: Duration) -> f64 {
 /// still on its way, and the listener counts it once it has arrived, which
 /// on a slow path can be after `max_time`. Its count is awaited until
 /// `max_time`, or [`count_wait`] after the write if that is later.
+///
+/// [`Transfer::second_half_mbps`] is the rate at which the stream took the
+/// bytes in the second half of writing. Flow control lets it run at most a
+/// stream window (1.25 MB) ahead of what the listener has received, so once
+/// that window is full (after the first 1.25 MB) it follows the rate at which
+/// they arrive.
 pub async fn upload(
     ep: &Endpoint,
     to: NodeId,
@@ -521,6 +591,7 @@ pub async fn upload(
     let deadline = max_time.map(|t| tokio::time::Instant::from_std(start + t));
     let (mut send, mut recv) = ep.open_bi(to).await?;
     let mut sent = 0u64;
+    let mut progress = ProgressLog::new(start);
     let write = async {
         send.write_all(SINK_MAGIC).await?;
         let chunk = vec![0u8; 64 * 1024];
@@ -529,6 +600,7 @@ pub async fn upload(
             // `write`, not `write_all`: cut off by the time limit, `sent`
             // must still be exactly what the stream took.
             sent += send.write(&chunk[..n]).await? as u64;
+            progress.record(sent);
         }
         send.finish()?;
         Ok::<_, anyhow::Error>(())
@@ -538,6 +610,7 @@ pub async fn upload(
         Some(d) => tokio::time::timeout_at(d, write).await.ok(),
         None => Some(write.await),
     };
+    let second_half_mbps = progress.second_half_mbps(start.elapsed(), sent);
     let by_time = written.is_none();
     // The listener's count is read once: `read_to_end` cut off by a timeout
     // leaves the stream unreadable ("closed stream").
@@ -612,6 +685,7 @@ pub async fn upload(
         mbps: mbps(got, elapsed),
         path: path_to(ep, to),
         by_time,
+        second_half_mbps,
     })
 }
 
@@ -654,6 +728,7 @@ pub async fn download(
         })?;
     let mut got = rest.len() as u64;
     let mut by_time = false;
+    let mut progress = ProgressLog::new(start);
     // `read_chunk` is cancel-safe: cut off by the time limit, nothing read
     // is lost (and the stream is not read again).
     loop {
@@ -669,7 +744,10 @@ pub async fn download(
             None => recv.read_chunk(usize::MAX).await,
         };
         match chunk {
-            Ok(Some(c)) => got += c.len() as u64,
+            Ok(Some(c)) => {
+                got += c.len() as u64;
+                progress.record(got);
+            }
             Ok(None) => break,
             Err(golem_p2p::iroh::endpoint::ReadError::Reset(code)) if code == REFUSED => {
                 return Err(Refused {
@@ -693,6 +771,7 @@ pub async fn download(
         mbps: mbps(got, elapsed),
         path: path_to(ep, to),
         by_time,
+        second_half_mbps: progress.second_half_mbps(elapsed, got),
     })
 }
 
@@ -813,6 +892,42 @@ mod tests {
     }
 
     #[test]
+    fn second_halves() {
+        let ms = Duration::from_millis;
+        let log = |points: &[(u64, u64)]| {
+            let mut l = ProgressLog::new(Instant::now());
+            for (t, b) in points {
+                l.record_at(ms(*t), *b);
+            }
+            l
+        };
+        let close = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 1e-9);
+        // A lucky start: 3 MB in the first second, then 0.125 MB/s (1 Mbps).
+        let mut points = vec![(1000, 3_000_000)];
+        points.extend((2..=8).map(|s| (s * 1000, 3_000_000 + (s - 1) * 125_000)));
+        let l = log(&points);
+        // 3.875 MB in 8 s: 3.875 Mbps on average, 1 Mbps in the second half.
+        assert!(close(l.second_half_mbps(ms(8000), 3_875_000), 1.0));
+        // Steady: the same as the average.
+        let l = log(&(1..=8).map(|s| (s * 1000, s * 125_000)).collect::<Vec<_>>());
+        assert!(close(l.second_half_mbps(ms(8000), 1_000_000), 1.0));
+        // The bytes at half time are those of the last record before it.
+        let l = log(&[(1900, 100_000), (2100, 200_000)]);
+        assert!(close(l.second_half_mbps(ms(4000), 300_000), 0.8));
+        // Nothing recorded before half time: everything is in the second half.
+        let l = log(&[(3000, 500_000)]);
+        assert!(close(l.second_half_mbps(ms(4000), 500_000), 2.0));
+        // Under a second: no second half.
+        assert_eq!(log(&[]).second_half_mbps(ms(999), 10_000_000), None);
+        // At most one record per step.
+        let l = log(&[(10, 1), (15, 2), (20, 3), (31, 4)]);
+        assert_eq!(
+            l.samples,
+            [(ms(0), 0), (ms(10), 1), (ms(20), 3), (ms(31), 4)]
+        );
+    }
+
+    #[test]
     fn refusals() {
         let r = Refused::parse("refused reason=too_large max_bytes=1000\n").unwrap();
         assert_eq!(r.reason, "too_large");
@@ -891,12 +1006,13 @@ mod tests {
     }
 
     /// Accepts one upload on `ep`, reads it as the listener does, waits
-    /// `delay`, then replies with the count. `pace`: read in chunks of at
-    /// most 16 KiB with this pause after each (a slow link).
+    /// `delay`, then replies with the count. `pace` (after, pause): once
+    /// `after` bytes have arrived, pause this long after each read of at
+    /// most 16 KiB (a slow link).
     fn sink(
         ep: &Endpoint,
         delay: Duration,
-        pace: Option<Duration>,
+        pace: Option<(u64, Duration)>,
     ) -> tokio::task::JoinHandle<u64> {
         let ep = ep.clone();
         tokio::spawn(async move {
@@ -916,8 +1032,10 @@ mod tests {
                         }
                         Err(e) => panic!("sink: {e}"),
                     }
-                    if let Some(p) = pace {
-                        tokio::time::sleep(p).await;
+                    if let Some((after, pause)) = pace
+                        && n >= after
+                    {
+                        tokio::time::sleep(pause).await;
                     }
                 }
             }
@@ -954,7 +1072,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn upload_stopped_at_the_time_limit() {
         let (a, b) = pair().await;
-        let counted = sink(&b, Duration::ZERO, Some(Duration::from_millis(20)));
+        let counted = sink(&b, Duration::ZERO, Some((0, Duration::from_millis(20))));
         let t = upload(
             &a,
             b.node_id(),
@@ -967,6 +1085,37 @@ mod tests {
         assert!(t.by_time, "{t:?}");
         assert_eq!(t.bytes, n);
         assert!(n > 0 && n < 50_000_000, "{t:?}");
+        // Under a second.
+        assert_eq!(t.second_half_mbps, None);
+        a.close().await;
+        b.close().await;
+    }
+
+    /// An upload that starts fast and then slows down (a fast start on a
+    /// lossy link): its second half is much slower than its average. The
+    /// stream takes bytes at most a window (1.25 MB) ahead of the listener,
+    /// so the rate of writing follows the listener's.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn upload_second_half() {
+        let (a, b) = pair().await;
+        // 3 MB at once, then 16 KiB per 20 ms (at most 6.6 Mbps).
+        let counted = sink(
+            &b,
+            Duration::ZERO,
+            Some((3_000_000, Duration::from_millis(20))),
+        );
+        let t = upload(
+            &a,
+            b.node_id(),
+            50_000_000,
+            Some(Duration::from_millis(1600)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(counted.await.unwrap(), t.bytes);
+        assert!(t.by_time, "{t:?}");
+        let half = t.second_half_mbps.unwrap();
+        assert!(half > 0.0 && half < 8.0 && half < t.mbps / 2.0, "{t:?}");
         a.close().await;
         b.close().await;
     }

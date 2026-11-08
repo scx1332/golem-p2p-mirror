@@ -313,8 +313,8 @@ discovery (QAD) over UDP, and with HTTPS):
 |---|---|---|
 | `connect` | object | `ok`, `lookup_ms` (directory lookup), `connect_ms` (lookup and both handshakes), `handshake_ms` (`connect_ms - lookup_ms`), `path` and `remote_addr` right after connecting, `peer_endpoint`, `error_kind`, `error` |
 | `latency` | object or null | `duration_ms`, `sent`, `ok`, `failed`, `failed_pct`, `rtt_ms` {`min`, `p50`, `p95`, `max`, `mean`}, `rtt_samples`, `jitter_ms`, `direct_fraction`, `final_path` (as in `summary`), `quic` (below, during this phase), `loss` (packet loss once the path had settled: `from_ms` (when counting started, from the start of the phase), `sent_packets`, `lost_packets`, `lost_pct`, counted like `quic`; null if the selected path changed until the end of the phase, or the connection changed; see **Packet loss**) |
-| `upload`, `download` | object or null | `ok`, `requested_bytes` (after the relay cap), `relay_capped`, `bytes`, `duration_ms`, `throughput_mbps`, `path` (at the end), `limited_by` (`size` or `time`), `error_kind` (`refused` for a listener limit; `no_count`: an upload whose count did not come back in time, see **Bench phases**), `error`, `quic` (during this phase) |
-| `concurrency` | object or null | `ok`, `streams`, `request_bytes` (256 KiB, smaller on a slow link), `sized_for_mbps` (the requests were made smaller for a slow link: the slower of the upload and download throughput they were sized for; null if not), `requests` (correct replies), `failed`, `unfinished` (still running at `--transfer-time`, cut off; not failures), `limited_by` (`size` or `time`), `total_bytes` (payload, each way), `duration_ms` (until the last worker ended), `throughput_mbps` (payload, each way), `rtt_ms` (of these requests), `loaded_rtt_ms` and `loaded_samples` (small requests sent meanwhile), `error_kind`, `error`, `quic` (during this phase) |
+| `upload`, `download` | object or null | `ok`, `requested_bytes` (after the relay cap), `relay_capped`, `bytes`, `duration_ms`, `throughput_mbps`, `second_half_mbps` (throughput in the second half of the transfer; of an upload: of writing, see **Bench phases**; null if it took less than 1 s), `path` (at the end), `limited_by` (`size` or `time`), `error_kind` (`refused` for a listener limit; `no_count`: an upload whose count did not come back in time, see **Bench phases**), `error`, `quic` (during this phase) |
+| `concurrency` | object or null | `ok`, `streams`, `request_bytes` (256 KiB, smaller on a slow link), `sized_for_mbps` (the requests were made smaller for a slow link: the rate they were sized for, the lowest `throughput_mbps` or `second_half_mbps` of the upload and download; null if not), `requests` (correct replies), `failed`, `unfinished` (still running at `--transfer-time`, cut off; not failures), `limited_by` (`size` or `time`), `total_bytes` (payload, each way), `duration_ms` (until the last worker ended), `throughput_mbps` (payload, each way), `rtt_ms` (of these requests), `loaded_rtt_ms` and `loaded_samples` (small requests sent meanwhile), `error_kind`, `error`, `quic` (during this phase) |
 | `idle` | object or null | `idle_ms`, `ok` (a request succeeded afterwards), `survived` (the same connection was still open), `path_before`, `path_after`, `attempts` (at most 3), `recovery_ms` (first request to first reply), `rtt_ms`, `error` |
 | `path` | object | `time_to_direct_ms` (from the start of connecting), `changes`, `final_path` (`unknown` if there was no connection at the end), `final_remote_addr`, `timeline` [{`t_ms`, `path`, `remote_addr`}] (at most 64 entries) |
 | `connection_lost` | object or null | the connection made in the `connect` phase closed before the end of the run: `t_ms` (from the start of connecting), `phase` (the phase running then), `cause` (`closed_here`: this node closed it, usually because a request got no answer and nothing at all arrived from the peer during the request timeout (golem-p2p also closes a connection after a connection error, or when the peer restarted); `idle_timeout`: nothing arrived for QUIC's idle timeout; `closed_by_peer`; `reset`: the peer no longer knew the connection, e.g. it restarted; `error`), `reason` (QUIC's close reason). Null if it stayed open. A loss during the `idle` phase is reported by `idle` instead of the `connection_lost` issue |
@@ -516,15 +516,27 @@ brackets):
    either). A download stops reading (one whose bytes had all arrived counts
    as complete, also if the end of the stream had not). Throughput is the
    bytes over the time from opening the stream to the listener's count (upload) or
-   to the last byte (download).
+   to the last byte (download). `second_half_mbps` is the throughput in the
+   second half of that time (of a download: of what arrived; of an upload:
+   of what the stream took while writing, which flow control keeps at most
+   one stream window ahead of what has arrived, so after the first 1.25 MB
+   it follows the arrival rate, give or take a window update of about
+   160 kB). Null for transfers under 1 s.
 5. `concurrency`: `--streams` (8) workers send echo requests of 256 KiB until
    `--concurrency-size` (8 MB of requests) or `--transfer-time`; requests
    still running at the time limit are cut off (`unfinished`) and not
    counted. On a slow link the requests are smaller (`sized_for_mbps`), so
-   that each stream can finish about four within `--transfer-time` at the
-   slower of the upload and download throughput just measured (whole KiB,
-   at least 4 KiB; below about 8 Mbps with the defaults): with 256 KiB a
-   1-4 Mbps link finished none and gave no throughput. Meanwhile small
+   that each stream can finish about four within `--transfer-time` at what
+   the transfers just measured sustained: the slower of upload and download,
+   each the lower of its `throughput_mbps` and `second_half_mbps` (whole KiB,
+   at least 4 KiB; below about 8 Mbps with the defaults). With 256 KiB a
+   1-4 Mbps link finished none and gave no throughput (campaign 2); sized by
+   the averages alone, 2 of 13 runs on a link with 1 % loss each way still
+   finished none, because a transfer there can start fast (no loss early in
+   slow start) and settle at 1-2 Mbps, and its average (4.7 and 6.7 Mbps)
+   overstated the link (campaign 3). Transfers under 1 s (10 MB at over
+   80 Mbps) are judged by their average, so fast paths keep 256 KiB.
+   Meanwhile small
    requests every `--interval` measure the round trip under load. The phase
    ends when the last worker does (a small request still running then is
    dropped); its duration is taken then. (Up to campaign 3 it ended only

@@ -521,12 +521,12 @@ impl PeerBench<'_> {
         if args.runs(Phase::Concurrency) && args.streams > 0 && args.concurrency_size > 0 {
             self.enter("concurrency");
             let t = Instant::now();
-            // The slower direction of the transfers just measured.
+            // The slower direction of the transfers just measured, each by
+            // what it sustained.
             let link_mbps = [&peer.upload, &peer.download]
                 .into_iter()
                 .flatten()
-                .filter(|t| t.ok)
-                .filter_map(|t| t.throughput_mbps)
+                .filter_map(sustained_mbps)
                 .reduce(f64::min);
             let Some(c) = unless_stopped(self.concurrency(link_mbps), stop).await else {
                 return true;
@@ -987,11 +987,22 @@ struct Requests {
     error: Option<anyhow::Error>,
 }
 
+/// What a successful transfer says the link sustains: the lower of its
+/// throughput and that of its second half. On a lossy link a transfer can
+/// start fast and settle far lower, and its average then overstates the link
+/// (campaign 3, 1 % loss each way: in one run requests sized for an upload's
+/// 4.7 Mbps, in another for a download's 6.7 Mbps, and none of them finished
+/// in 8 s at the 1-2 Mbps the link then carried).
+fn sustained_mbps(t: &TransferReport) -> Option<f64> {
+    let m = t.throughput_mbps.filter(|_| t.ok)?;
+    Some(t.second_half_mbps.map_or(m, |h| m.min(h)))
+}
+
 /// The size of the concurrency phase's requests: `max` (256 KiB, or
 /// `--concurrency-size` if smaller), or less on a link measured at
-/// `link_mbps`, so that each of the `streams` can finish about
-/// [`REQUESTS_PER_STREAM`] echo requests within `time` (in whole KiB, at
-/// least [`MIN_CONCURRENCY_REQUEST`]). Requests still running at the time
+/// `link_mbps` (see [`sustained_mbps`]), so that each of the `streams` can
+/// finish about [`REQUESTS_PER_STREAM`] echo requests within `time` (in
+/// whole KiB, at least [`MIN_CONCURRENCY_REQUEST`]). Requests still running at the time
 /// limit are cut off and not counted, so on a slow link 256 KiB requests
 /// gave no throughput at all (campaign 2: 8 x 256 KiB at ~1-4 Mbps).
 fn concurrency_request_size(
@@ -1083,6 +1094,7 @@ fn transfer_report(
             bytes: Some(t.bytes),
             duration_ms: Some(ms(t.elapsed)),
             throughput_mbps: Some(round3(t.mbps)),
+            second_half_mbps: t.second_half_mbps.map(round3),
             path: Some(path_name(t.path)),
             limited_by: Some(if t.by_time { "time" } else { "size" }),
             error_kind: None,
@@ -1243,6 +1255,27 @@ mod tests {
         assert_eq!(c.settle(), Duration::from_millis(1800));
         c.min_rtt = Some(Duration::from_secs(30));
         assert_eq!(c.settle(), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn sustained_rates() {
+        let t = |mbps: f64, half: Option<f64>| TransferReport {
+            ok: true,
+            throughput_mbps: Some(mbps),
+            second_half_mbps: half,
+            ..Default::default()
+        };
+        // Fast or short: the average.
+        assert_eq!(sustained_mbps(&t(123.0, None)), Some(123.0));
+        assert_eq!(sustained_mbps(&t(30.0, Some(45.0))), Some(30.0));
+        // A fast start that settled lower: the second half.
+        assert_eq!(sustained_mbps(&t(4.7, Some(1.1))), Some(1.1));
+        // Failed: nothing.
+        let failed = TransferReport {
+            ok: false,
+            ..t(4.7, None)
+        };
+        assert_eq!(sustained_mbps(&failed), None);
     }
 
     #[test]

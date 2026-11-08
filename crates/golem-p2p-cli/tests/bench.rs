@@ -78,8 +78,27 @@ fn check_transfer(t: &Value, bytes: u64, path: &str) {
     assert_eq!(t["path"], path, "{t:#}");
     assert_eq!(t["limited_by"], "size", "{t:#}");
     assert!(num(t, "throughput_mbps") > 0.0 && num(t, "duration_ms") > 0.0);
+    // Null for transfers under a second.
+    let half = &t["second_half_mbps"];
+    assert!(
+        half.is_null() || (num(t, "duration_ms") >= 1000.0 && half.as_f64().unwrap() >= 0.0),
+        "{t:#}"
+    );
     assert!(t["error"].is_null());
     check_quic(&t["quic"]);
+}
+
+/// What the concurrency phase sizes its requests for: the slower transfer,
+/// each by the lower of its throughput and that of its second half.
+fn sustained(p: &Value) -> f64 {
+    ["upload", "download"]
+        .iter()
+        .map(|dir| {
+            let t = &p[dir];
+            let m = num(t, "throughput_mbps");
+            t["second_half_mbps"].as_f64().map_or(m, |h| m.min(h))
+        })
+        .fold(f64::INFINITY, f64::min)
 }
 
 /// Checks the QUIC counters of a phase: present, and loss consistent.
@@ -462,9 +481,7 @@ async fn phases_end_at_the_time_limit() {
         assert_eq!(size, 262_144, "{c:#}");
     } else {
         assert!((4096..262_144).contains(&size), "{c:#}");
-        let slower =
-            num(&p["upload"], "throughput_mbps").min(num(&p["download"], "throughput_mbps"));
-        assert_eq!(num(c, "sized_for_mbps"), slower, "{c:#}");
+        assert_eq!(num(c, "sized_for_mbps"), sustained(p), "{c:#}");
     }
     assert!(r["issues"].as_array().unwrap().is_empty(), "{r:#}");
 
@@ -541,9 +558,8 @@ async fn concurrency_requests_fit_a_slow_link() {
     let (code, r, _) = bench(&bench_args(&infra, &a)).await;
     assert_eq!(code, Some(0), "{r:#}");
     let p = &r["peer"];
-    let slower = num(&p["upload"], "throughput_mbps").min(num(&p["download"], "throughput_mbps"));
     let c = &p["concurrency"];
-    assert_eq!(num(c, "sized_for_mbps"), slower, "{c:#}");
+    assert_eq!(num(c, "sized_for_mbps"), sustained(p), "{c:#}");
     let size = c["request_bytes"].as_u64().unwrap();
     assert!((4096..262_144).contains(&size) && size % 1024 == 0, "{c:#}");
     assert_eq!(r["settings"]["concurrency_request_bytes"], 262_144);
