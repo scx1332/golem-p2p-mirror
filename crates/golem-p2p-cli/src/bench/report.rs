@@ -317,10 +317,14 @@ pub struct Concurrency {
     /// download sustained (the lowest of their throughputs over the whole
     /// transfer and its second half); null if not.
     pub sized_for_mbps: Option<f64>,
-    /// None of the first requests finished by half the time limit, so the
-    /// phase started over with smaller ones; null if not. The counts, times
-    /// and throughput are of the requests since.
+    /// None of the first requests finished by half the time limit, and they
+    /// were not about to, so the phase started over with smaller ones; null
+    /// if not. The counts, times and throughput are of the requests since.
     pub restart: Option<Restart>,
+    /// When the first counted reply arrived, from the start of the phase;
+    /// null if none did. Over half the time limit without a `restart`: none
+    /// had finished by then, but they were about to, so the phase went on.
+    pub first_reply_ms: Option<f64>,
     pub requests: u64,
     pub failed: u64,
     /// Requests still running at the time limit, cut off (not failures).

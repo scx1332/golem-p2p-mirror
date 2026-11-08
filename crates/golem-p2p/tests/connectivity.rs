@@ -536,6 +536,142 @@ async fn cancelled_request_is_not_delivered_truncated() {
     .await;
 }
 
+/// A request whose future is dropped after the whole request was written is
+/// abandoned too (`CANCELLED`), not delivered: `write_all` and `finish`
+/// return once QUIC has buffered the request, and before golem-p2p reset
+/// only requests cut off while writing, so QUIC went on delivering (and
+/// retransmitting) the rest (benchmark campaign 4: cut-off requests reached
+/// the listener seconds later).
+///
+/// The request (1 MiB) fits the stream's flow-control window (1.25 MB), so
+/// QUIC takes all of it at once and the request's future then only waits for
+/// the response. On a single-threaded runtime QUIC sends it only while the
+/// test waits; the future is dropped as soon as B has taken the stream, i.e.
+/// when the start of the request has arrived, long before all of it could
+/// have been delivered (once all of it is acknowledged, QUIC can no longer
+/// reset it).
+#[tokio::test]
+async fn cancelled_request_is_not_delivered_once_sent() {
+    with_timeout(60, async {
+        let net = TestNet::new(0).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let a = net
+            .node(&signer, Identities::new(a_id), NodeOpts::default())
+            .await;
+        let b = net
+            .node(&signer, Identities::new(b_id), NodeOpts::default())
+            .await;
+        // B takes the stream, says so, and reads it only when told to.
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel::<()>();
+        let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
+        let (got_tx, got_rx) = tokio::sync::oneshot::channel();
+        {
+            let b = b.clone();
+            tokio::spawn(async move {
+                let mut inc = b.accept().await.unwrap();
+                accepted_tx.send(()).unwrap();
+                let _ = go_rx.await;
+                let r = inc.read_request(2 << 20).await;
+                let _ = got_tx.send(r.map(|v| v.len()));
+            });
+        }
+        a.connect(b_id).await.unwrap();
+
+        let body = vec![7u8; 1 << 20];
+        let mut req = Box::pin(a.request(b_id, &body));
+        tokio::select! {
+            r = &mut req => panic!("the request ended before it was dropped: {r:?}"),
+            r = accepted_rx => r.unwrap(),
+        }
+        drop(req);
+        go_tx.send(()).unwrap();
+        match got_rx.await.unwrap() {
+            Err(golem_p2p::Error::StreamRejected(code)) => {
+                assert_eq!(code, golem_p2p::wire::codes::CANCELLED.into_inner());
+            }
+            other => panic!("the handler got {other:?} instead of a reset"),
+        }
+
+        // The connection still serves requests.
+        spawn_echo(&b);
+        assert_eq!(echo(&a, b_id, "after").await.unwrap().data, "after");
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}
+
+/// A request whose future is dropped while it waits for the response (the
+/// peer is slow to answer) is abandoned: the peer's `respond` fails with
+/// `CANCELLED` instead of sending a response nobody reads. An answered
+/// request's `respond` succeeds.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_dropped_while_waiting_for_the_response_is_abandoned() {
+    with_timeout(60, async {
+        let net = TestNet::new(0).await;
+        let signer = InMemorySigner::new();
+        let (a_id, b_id) = (signer.generate(), signer.generate());
+        let a = net
+            .node(&signer, Identities::new(a_id), NodeOpts::default())
+            .await;
+        let b = net
+            .node(&signer, Identities::new(b_id), NodeOpts::default())
+            .await;
+        // B answers every request at once, except `slow`: that one only once
+        // told to. It reports what `respond` returned.
+        let (got_tx, got_rx) = tokio::sync::oneshot::channel::<()>();
+        let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
+        let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel();
+        {
+            let b = b.clone();
+            tokio::spawn(async move {
+                let (mut got_tx, mut go_rx) = (Some(got_tx), Some(go_rx));
+                while let Some(mut inc) = b.accept().await {
+                    let req = inc.read_request(1024).await.unwrap();
+                    if req == b"slow" {
+                        got_tx.take().unwrap().send(()).unwrap();
+                        let _ = go_rx.take().unwrap().await;
+                    }
+                    let r = inc.respond(&req).await;
+                    done_tx.send((req, r)).unwrap();
+                }
+            });
+        }
+
+        assert_eq!(a.request(b_id, b"now").await.unwrap(), b"now");
+        let (req, r) = done_rx.recv().await.unwrap();
+        assert_eq!(req, b"now");
+        assert!(r.is_ok(), "respond to a request that was answered: {r:?}");
+
+        let mut req = Box::pin(a.request(b_id, b"slow"));
+        tokio::select! {
+            r = &mut req => panic!("the request ended before it was dropped: {r:?}"),
+            r = got_rx => r.unwrap(),
+        }
+        drop(req);
+        go_tx.send(()).unwrap();
+        let (req, r) = done_rx.recv().await.unwrap();
+        assert_eq!(req, b"slow");
+        match r {
+            Err(golem_p2p::Error::StreamRejected(code)) => {
+                assert_eq!(code, golem_p2p::wire::codes::CANCELLED.into_inner());
+            }
+            other => panic!("respond to an abandoned request returned {other:?}"),
+        }
+
+        // The connection still serves requests.
+        assert_eq!(a.request(b_id, b"after").await.unwrap(), b"after");
+        assert!(done_rx.recv().await.unwrap().1.is_ok());
+        assert_eq!(a.connections().len(), 1);
+
+        a.close().await;
+        b.close().await;
+    })
+    .await;
+}
+
 /// What the thread running a hung test node is told to do.
 enum HangCmd {
     /// Block the node's only runtime thread until the sender is dropped.

@@ -409,10 +409,25 @@ newly looked-up record; that is how a peer recovers after the other side
 crashed. Without any request, QUIC's idle timeout (30 s, with keep-alives every
 5 s) closes a connection to a dead peer. A timeout while waiting for a stream
 never closes the connection (the peer is busy, not gone; we sent nothing that
-it would acknowledge). A request abandoned by the caller before it was sent
-completely (its future dropped) is reset (`CANCELLED`): QUIC would otherwise
-finish the stream on drop, and the peer would take the part that arrived for
-the whole request.
+it would acknowledge).
+
+A request abandoned by the caller before its whole response was read (its
+future dropped: a caller's own timeout, `select!`) is abandoned on the wire
+too: its stream is reset and stopped (`CANCELLED`), also when the request
+had been sent completely, and so is a request that failed. Writing a request
+returns as soon as QUIC has buffered it (at once for one within the stream's
+flow-control window, 1.25 MB), and dropped streams are finished, not reset:
+QUIC would go on delivering and retransmitting the abandoned request, the
+peer would take a truncated one for the whole request or handle a complete
+one that nobody waits for, and its response would only then be refused
+(benchmark campaign 4: on a lossy link, requests cut off by the bench took
+most of the uplink and reached the listener up to 3.9 s later). After the
+reset QUIC sends nothing more of the request, and the peer's read fails.
+Only a request that the peer had already received completely (QUIC
+acknowledged all of it, so there is nothing left to reset) or read reaches
+its handler; then the response fails (`IncomingStream::respond` reports the
+stop as `StreamRejected`). A timeout abandons the request the same way, with
+`TIMED_OUT`.
 
 ## 8. Discovery
 
