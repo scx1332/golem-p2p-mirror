@@ -317,6 +317,11 @@ async fn soak_server(net: &TestNet, client_opts: NodeOpts, server_opts: NodeOpts
         let c = Checkpoint::take(done, start, &server);
         assert_idle(&c.stats, "server");
         points.push(c);
+        // The shared discovery store holds 4096 records and, when full,
+        // evicts those that expire soonest: the server's own record, which
+        // it published first, unless it republishes (as it does every 20
+        // minutes in real life, which this test is faster than).
+        server.republish().await.expect("republish");
     }
     // iroh keeps per-remote state for 60 s after the last connection.
     println!("waiting 65 s for idle per-remote state to expire");
