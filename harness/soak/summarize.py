@@ -450,8 +450,19 @@ def summarize(d):
     errors = defaultdict(int)
     for e in load_jsonl(os.path.join(d, "listener.jsonl")):
         if e.get("event") == "error":
-            errors[e.get("kind", "?")] += 1
+            kind = e.get("kind", "?")
+            # The requester gave up on the request (dropped it, timed out,
+            # or exited): a cancellation, not a failure of the listener.
+            # Codes: 10 TIMED_OUT, 11 CANCELLED, 0 a stream dropped unread
+            # (CLIs before requests were reset with CANCELLED).
+            msg = e.get("message", "")
+            if kind == "stream_rejected" and any(f"(code {c})" in msg for c in (0, 10, 11)):
+                kind = "cancelled"
+            errors[kind] += 1
     summary["listener_errors"] = dict(errors)
+    failures = {k: v for k, v in errors.items() if k != "cancelled"}
+    if failures:
+        flags.append(f"listener errors: {failures}")
 
     # --- steady clients
     bins = defaultdict(lambda: {"hist": defaultdict(int), "p50s": [], "p99s": [], "sent": 0, "ok": 0,
