@@ -1,0 +1,9 @@
+{
+ "bench_args": "--relay https://213.163.75.157:56000,quic=56001 --relay-ca /home/ubuntu/.ssh/p2p/p2p-relay1.crt --directory http://127.0.0.1:59835/ --relay-only --skip concurrency --to 0x166464ef477c2cf344f5d96d5fcbfe423d9ba15f",
+ "bencher": "hetzner",
+ "deployed": "d1bc1cd (local build)",
+ "listener": "hetzner",
+ "parallel": "4",
+ "run": "relay-parallel4-r1-3",
+ "to": "0x166464ef477c2cf344f5d96d5fcbfe423d9ba15f"
+}

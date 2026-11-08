@@ -1,0 +1,14 @@
+{
+ "bench_args": "--relay https://213.163.75.157:56000 --directory http://213.163.75.157:56050/ --relay-ca /home/ubuntu/golem-p2p-lab/certs/real-relay.crt  ",
+ "bencher": "real1",
+ "bencher_delay": null,
+ "bencher_jitter": null,
+ "bencher_loss": null,
+ "bencher_profile": "easy",
+ "bencher_rate": null,
+ "bencher_udp_timeout": 120,
+ "bencher_uplink": "real",
+ "deployed": "d1bc1cd 2026-11-07T23:05:37Z",
+ "run": "startup-lab-easy-qad-7842-r1",
+ "to": ""
+}

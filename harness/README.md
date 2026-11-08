@@ -21,14 +21,18 @@ lab/tools/aggregate.py   turns matrix/realworld results.txt into a Markdown tabl
 lab/tools/benchsum.py    one key=value line per `bench --json` run; run metadata
 campaign/campaign1.sh    benchmark campaign 1 (lab matrix, real world, relay, startup)
 campaign/campaign2.sh    campaign 2: the same scenarios after the bench/timeout fixes
+campaign/campaign3.sh    campaign 3: the same scenarios after the loss/relay-fallback/sizing fixes
 campaign/summarize.py    campaign directory -> summary.json + table.md (all bench formats)
-campaign/compare.py      two campaign directories -> compare.json + compare.md
+campaign/compare.py      two campaign directories -> compare.json + compare.md;
+                         --series: several -> compare<N>.json + compare<N>.md
 results/<date>-<name>/   raw data and summaries of campaigns
 ```
 
 Results of benchmark campaign 1: [results/2026-11-07-campaign1/](results/2026-11-07-campaign1/);
 campaign 2 and its comparison with campaign 1: [results/2026-11-07-campaign2/](results/2026-11-07-campaign2/)
-(`compare.md`).
+(`compare.md`); campaign 3, its comparison with campaign 2 (`compare.md`) and
+campaigns 1-3 side by side (`compare3.md`):
+[results/2026-11-08-campaign3/](results/2026-11-08-campaign3/).
 
 ## Requirements
 
@@ -342,9 +346,10 @@ Layout of a campaign directory: `scenarios.jsonl` (one line per scenario:
 (parallel relay runs: `run<r>-<i>`), `relay-metrics.txt` (the real relay's
 byte counters before and after each step that uses it), `notes.json`
 (hand-written observations merged into the summary), `summary.json`,
-`table.md`, `debug/` (extra captures), and for campaign 2 `versions.txt`
-(the binary on each machine) and `compare.json`/`compare.md` (against
-campaign 1). Keys of the local test nodes go to
+`table.md`, `debug/` (extra captures and runs, not summarized), and from
+campaign 2 on `versions.txt` (the binary on each machine) and
+`compare.json`/`compare.md` (against the previous campaign; campaign 3 also
+`compare3.json`/`compare3.md` over campaigns 1-3). Keys of the local test nodes go to
 `DIR/.keys/` (git-ignored). `summary.json` has per scenario the run counts,
 final paths, medians/percentiles of the bench measurements, `bind_ms`, and
 `verdict_checks`: the bench's verdict and net report compared with the known
@@ -373,6 +378,16 @@ which the packet_loss hint judges; `latency_loss` then pools it instead of
 `relay_fallback_degraded`, judged right) and `concurrency.sized_for_mbps`
 (smaller parallel requests on a slow link; `concurrency.sized_runs` and
 `request_bytes` in the summary).
+
+`campaign/campaign3.sh` is `campaign2.sh` with campaign 2's scenarios, run
+counts and checks (default output `results/<date>-campaign3`); only its
+`summarize` step differs: `compare.py` against campaign 2
+(`GPL_COMPARE_WITH`), and `compare.py --series` over campaigns 1, 2 and 3
+(`GPL_COMPARE_SERIES`, the earlier directories oldest first), which writes
+`compare3.json`/`compare3.md`: totals and per-scenario outcomes, verdicts,
+misleading/wrong checks, RTT, throughputs (with the concurrency phase), run
+durations and lost connections of every campaign side by side, highlights
+from the last campaign's `notes.json` key `comparison_series`.
 
 ## Driving it from a controller
 

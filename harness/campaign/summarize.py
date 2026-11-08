@@ -3,7 +3,7 @@
 
   summarize.py <campaign dir> [--copy-to FILE]
 
-Input (written by campaign1.sh / campaign2.sh):
+Input (written by campaign1.sh / campaign2.sh / campaign3.sh):
   scenarios.jsonl                 one scenario per line: id, group, title, a, b, netem, args
   <group>/<scenario>/<run>/       bench.jsonl (ready ... bench_report), bench.exit,
                                   listen.jsonl (peer, optional), meta.json
@@ -30,7 +30,9 @@ rules of its bench (e.g. the packet_loss threshold: 2 % of the whole
 connection in campaign 1, 0.5 % of at least 50 latency-phase packets after,
 counted from when the path had settled once `latency.loss` exists).
 `loss_pct` is always the whole connection's; `latency_loss` (campaign 2 on)
-pools the latency-phase counters the hint judges.
+pools the latency-phase counters the hint judges (with `latency.loss` also
+`runs_unsettled`, runs whose count is null because the path never settled,
+and `from_ms_p50`/`from_ms_max`, when counting started).
 
 summarize_dir() is also used by compare.py.
 """
@@ -343,8 +345,9 @@ def check_run(sc, run):
                 lost, sent, lpct = get(lq, "lost_packets"), get(lq, "sent_packets"), get(lq, "lost_pct")
                 seen = f"{lost} of {sent} latency-phase packets lost ({lpct} %)"
                 if settled:
-                    seen += (f", counted from {fmt(get(lq, 'from_ms'))} ms when the path had settled"
-                             if lq else ", path not settled (no loss count)")
+                    seen = (seen + f", counted from {fmt(get(lq, 'from_ms'))} ms when the path had settled" if lq else
+                            "the path did not settle during the latency phase (latency.loss null, packet_loss listed "
+                            "as unknown)")
                 if "packet_loss" in hints:
                     out.append(("right", "packet_loss", f"packet_loss hint: {seen}"))
                 elif lpct is not None and sent is not None and lpct >= 0.5 and sent >= 50:
@@ -352,9 +355,11 @@ def check_run(sc, run):
                                 f"{seen}, at or above the hint's threshold (0.5 % of >= 50 packets), but no packet_loss hint"))
                 else:
                     out.append(("misleading", "packet_loss_missed",
-                                f"1 % loss each way on the link, no packet_loss hint: {seen}, threshold 0.5 % of >= 50 "
-                                + ("(about 140 packets: one run in four sees no loss at 1 %)" if settled else
-                                   "(about 110 packets: one run in three sees no loss at 1 %)")))
+                                f"1 % loss each way on the link, no packet_loss hint: {seen}"
+                                + ((f", threshold 0.5 % of >= 50 (at 1 % random loss, {0.99 ** sent:.0%} of "
+                                    f"{sent}-packet windows see no loss)" if sent else "") if settled else
+                                   ", threshold 0.5 % of >= 50 (about 110 packets: one run in three sees no loss "
+                                   "at 1 %)")))
             elif "packet_loss" in hints:
                 out.append(("right", "packet_loss", f"packet_loss hint ({q.get('lost_pct')} % lost)"))
             else:
@@ -381,8 +386,17 @@ def latency_loss(peers):
     many runs lost any packet there or got the packet_loss hint's inputs."""
     qs = [latency_loss_counters(p) for p in peers]
     qs = [q for q in qs if q]
+    # Benches after campaign 2: `latency.loss` is null when the path did not
+    # settle; count those runs, and when the count started (from_ms).
+    settled_fmt = any("loss" in (p.get("latency") or {}) for p in peers)
+    extra = {}
+    if settled_fmt:
+        extra = {"runs_unsettled": sum(1 for p in peers if "loss" in (p.get("latency") or {})
+                                       and not p["latency"]["loss"]),
+                 "from_ms_p50": med([q.get("from_ms") for q in qs]),
+                 "from_ms_max": max((q.get("from_ms") for q in qs if q.get("from_ms") is not None), default=None)}
     if not qs:
-        return None
+        return {"runs": 0, **extra} if extra.get("runs_unsettled") else None
     sent = sum(q.get("sent_packets") or 0 for q in qs)
     lost = sum(q.get("lost_packets") or 0 for q in qs)
     return {
@@ -394,6 +408,7 @@ def latency_loss(peers):
         "runs_at_threshold": sum(1 for q in qs if (q.get("sent_packets") or 0) >= 50
                                  and (q.get("lost_pct") or 0) >= 0.5),
         "per_run": [f"{q.get('lost_packets')}/{q.get('sent_packets')}" for q in qs],
+        **extra,
     }
 
 
@@ -509,6 +524,9 @@ def summarize_scenario(sc, runs, notes):
             "connect_ms_p50": med([get(rc, "connect", "connect_ms") for rc in rcs]),
             "ok": sum(1 for rc in rcs if rc.get("ok")),
             "runs": len(rcs),
+            # Newer bench: something got through the relay-only connection.
+            **({"reachable": sum(1 for rc in rcs if rc.get("reachable"))}
+               if any("reachable" in rc for rc in rcs) else {}),
         }
     if idles:
         s["idle"] = {
@@ -702,7 +720,8 @@ def main():
             + (f"{idle['survived']}/{idle['runs']} survived, rec {f(idle['recovery_ms'])} ms" if idle else "-")
             + f" | {' '.join(k + ':' + str(v) for k, v in s['exit_codes'].items())} | "
             + f"{f(get(s, 'run_duration_s', 'p50'), 1)} | "
-            + (f"{f(ll['lost_pct'], 2)} ({ll['lost_packets']}/{ll['sent_packets']})" if ll else "-")
+            + (f"{f(ll.get('lost_pct'), 2)} ({ll.get('lost_packets', 0)}/{ll.get('sent_packets', 0)})" if ll else "-")
+            + (f" +{ll['runs_unsettled']} unsettled" if ll and ll.get("runs_unsettled") else "")
             + f" / {f(s['loss_pct'], 2)} |"
         )
     with open(os.path.join(root, "table.md"), "w") as fh:

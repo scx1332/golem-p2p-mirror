@@ -1,0 +1,9 @@
+{
+ "bench_args": "--relay https://213.163.75.157:56000,quic=56001 --directory http://213.163.75.157:56050/ --to 0xacf3b029cedd63e914db93d8eb94aa7c7eaf4c7b --bind 0.0.0.0:8000",
+ "bencher": "hetzner",
+ "deployed": "d1bc1cd (local build)",
+ "listener": "real1",
+ "listener_profile": "easy",
+ "run": "rw-open-to-easy-r2",
+ "to": "0xacf3b029cedd63e914db93d8eb94aa7c7eaf4c7b"
+}

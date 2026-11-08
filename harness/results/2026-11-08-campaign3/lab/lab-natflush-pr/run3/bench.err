@@ -1,0 +1,2 @@
+2026-11-07T23:31:41.143083Z  INFO golem_p2p::endpoint: golem-p2p endpoint bound node_id=0x09f2322e5db3e148591d5732de3e8ad51051c60c endpoint_id=109907f63f
+2026-11-07T23:32:55.459677Z ERROR iroh::socket::transports::relay::actor: ActiveRelayActor cancelled: JoinError::Cancelled(Id(31))
