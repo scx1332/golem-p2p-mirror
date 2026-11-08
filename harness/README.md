@@ -25,6 +25,7 @@ campaign/campaign3.sh    campaign 3: the same scenarios after the loss/relay-fal
 campaign/campaign4.sh    campaign 4: the same scenarios after the upload-count/concurrency fixes
 campaign/campaign5.sh    campaign 5: the same scenarios after the cancel-on-the-wire/restart fixes
 campaign/summarize.py    campaign directory -> summary.json + table.md (all bench formats)
+campaign/cutoff.py       lossy-link concurrency: restarts, went-on, cut-off requests at the listener
 campaign/compare.py      two campaign directories -> compare.json + compare.md;
                          --series: several -> compare<N>.json + compare<N>.md
 soak/soak.sh             soak tests: many clients against one listener for hours,
