@@ -23,6 +23,7 @@ mod observe;
 mod out;
 mod parse;
 mod probe;
+mod soak;
 
 use std::{
     net::SocketAddr,
@@ -90,6 +91,10 @@ enum Cmd {
         /// Address to listen on.
         #[arg(long, default_value = "127.0.0.1:8080")]
         listen: SocketAddr,
+        /// With `--json`, emit a `stats` event (process resources, stored
+        /// records) this often.
+        #[arg(long, value_parser = parse::duration)]
+        stats_interval: Option<Duration>,
     },
     /// Run a node that answers every request with an echo, and serves the
     /// uploads and downloads of `probe --bulk` and `bench` within limits.
@@ -101,6 +106,10 @@ enum Cmd {
         duration: Option<Duration>,
         #[command(flatten)]
         limits: LimitArgs,
+        /// With `--json`, emit a `stats` event (process resources, connection
+        /// tables, counters) this often.
+        #[arg(long, value_parser = parse::duration)]
+        stats_interval: Option<Duration>,
     },
     /// Send a request to a node and print the reply.
     Send {
@@ -136,6 +145,13 @@ enum Cmd {
     /// connect to the node, 4 connected only through a relay, 5 degraded
     /// (connected, or local check only, but problems were found).
     Bench(bench::BenchArgs),
+    /// Soak test client: echo requests to a node that runs `listen` for a
+    /// long time (and optionally uploads), with a `soak_stats` event per
+    /// `--stats-interval`.
+    ///
+    /// Exit code: 0 if every request succeeded, 1 if none did or setup
+    /// failed, 2 for invalid arguments, 3 if some requests or uploads failed.
+    Soak(soak::SoakArgs),
 }
 
 /// Server-side limits of `listen` for uploads and downloads.
@@ -482,7 +498,10 @@ async fn run(cmd: Cmd, out: &Out) -> anyhow::Result<ExitCode> {
                 println!("{id}");
             }
         }
-        Cmd::Directory { listen } => {
+        Cmd::Directory {
+            listen,
+            stats_interval,
+        } => {
             let listener = tokio::net::TcpListener::bind(listen).await?;
             let url = format!("http://{}/", listener.local_addr()?);
             if out.json() {
@@ -491,6 +510,8 @@ async fn run(cmd: Cmd, out: &Out) -> anyhow::Result<ExitCode> {
                 println!("directory listening on {url}");
             }
             let store = Arc::new(RecordStore::new(100_000));
+            let _stats = stats_interval
+                .map(|i| soak::spawn_stats(out, i, soak::StatsSource::Directory(store.clone())));
             tokio::select! {
                 r = golem_p2p::directory::serve(listener, store) => r?,
                 _ = shutdown_signal() => {}
@@ -500,6 +521,7 @@ async fn run(cmd: Cmd, out: &Out) -> anyhow::Result<ExitCode> {
             node,
             duration,
             limits,
+            stats_interval,
         } => {
             if node.key.is_none() {
                 Cli::command()
@@ -512,6 +534,8 @@ async fn run(cmd: Cmd, out: &Out) -> anyhow::Result<ExitCode> {
             let limits = limits.limits();
             let node = Node::start(&node, out, None, None).await?;
             let ep = &node.ep;
+            let _stats = stats_interval
+                .map(|i| soak::spawn_stats(out, i, soak::StatsSource::Endpoint(ep.clone())));
             if !out.json() {
                 let rec = ep.local_record();
                 println!(
@@ -588,6 +612,7 @@ async fn run(cmd: Cmd, out: &Out) -> anyhow::Result<ExitCode> {
         }
         Cmd::Probe(args) => return run_probe(args, out).await,
         Cmd::Bench(args) => return bench::run(args, out).await,
+        Cmd::Soak(args) => return soak::run(args, out).await,
     }
     Ok(ExitCode::SUCCESS)
 }

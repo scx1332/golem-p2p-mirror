@@ -390,6 +390,67 @@ Loss of packets the peer sends is not measured (`download_loss`).
 `keygen --json` prints `{"event":"keygen", "node_id", "key_file"}`;
 `directory --json` prints `{"event":"directory", "url"}` once it listens.
 
+### `stats` (listen, directory)
+
+With `--stats-interval D`, `listen` and `directory` print one `stats` event
+every `D`, for soak tests (`harness/soak/`): the resources and internal state
+of a long-running process, so that growth over time shows.
+
+| field | type | meaning |
+|---|---|---|
+| `uptime_s` | number | seconds since the stats task started |
+| `proc` | object | this process (Linux, from `/proc/self`; fields null elsewhere): `rss_kb` resident memory, `hwm_kb` its peak, `anon_kb` anonymous resident memory (mostly heap), `threads`, `fds` open file descriptors, `sockets` how many of them are sockets, `cpu_s` user plus system CPU time |
+| `tokio` | object | the async runtime: `workers` threads, `alive_tasks` tasks spawned and not finished, `global_queue` tasks waiting in the global queue |
+| `endpoint` | object | `listen` only: the endpoint's state, see below |
+| `store` | object | `directory` only: `identities` and `endpoints` in its record store (at most 100 000 each; expired records are pruned every minute) |
+
+`endpoint` has the library's `EndpointStats` and a few of iroh's counters.
+Sizes, which return to their idle values when the load ends:
+`open_connections` (not closed), `connections` (the connection table, also
+closed connections not processed yet), `connect_slots` and `dial_locks` (connects and
+dials in progress; the last one is removed lazily), `handshakes` (incoming
+handshakes in progress), `queued_streams` (streams waiting for the
+application), `cached_identities` and `cached_endpoints` (the peer record
+cache, at most 4096 each). Totals since start: `connections_outgoing`,
+`connections_incoming` (completed handshakes), `connections_closed`,
+`handshakes_failed` (incoming connections refused or failed in the
+handshake), `streams_accepted` (requests handed to the application),
+`streams_refused` (reset before: bad header, unknown identity, sender not
+bound, queue full). `iroh`: iroh's socket counters `conns_opened`,
+`conns_closed`, `conns_direct`, `paths_direct`, `paths_relay`,
+`holepunch_attempts`, `ip_paths_added`, `ip_paths_removed`,
+`relay_paths_added`, `relay_paths_removed`, `relay_conns_success`,
+`relay_conns_failed`, `relay_conns_closed`.
+
+### `soak_stats` (soak)
+
+`soak` sends one echo request per `--interval` to a `listen` node (one at a
+time), optionally an upload of `--bulk-size` every `--bulk-every`, and prints
+a `soak_stats` event every `--stats-interval` and a last one when it ends
+(after `--duration`, or on SIGINT/SIGTERM). Counts are per window (since the
+previous `soak_stats`) unless they are in `totals`.
+
+| field | type | meaning |
+|---|---|---|
+| `to` | string | the listener's node ID |
+| `window_ms` | number | length of the window |
+| `sent`, `ok`, `failed` | number | echo requests finished in the window (a request still running when `soak` ends is not counted) |
+| `new_conns` | number | requests that needed a new connection (lookup, dial, handshake) |
+| `direct_fraction` | number or null | fraction of the successful requests over a direct path |
+| `errors` | object | error kind (as in `error` events, plus `mismatch` and `bulk`) to count |
+| `rtt_ms` | object | `p50`, `p90`, `p99`, `max`, `mean` of the round-trip times of successful requests on an existing connection (null without any) |
+| `rtt_hist` | object | the same times as a histogram: bucket upper bound in ms (`0.1`, `0.2`, `0.3`, `0.5`, `0.75`, `1`, `1.5`, `2`, `3`, `5`, `7.5`, `10`, `15`, `20`, `30`, `50`, `75`, `100`, `150`, `200`, `300`, `500`, `750`, `1000`, `2000`, `5000`, `10000`, `inf`) to count, only buckets with samples; sums of histograms of many clients give percentiles over all of them |
+| `bulk` | object | uploads finished in the window: `ok`, `failed`, `bytes` (of the successful ones), `mbps` (their throughput, null without any) |
+| `totals` | object | since start: `sent`, `ok`, `failed`, `new_conns`, `bulk_ok`, `bulk_failed`, `bulk_bytes` |
+| `path` | string | path of the connection to `to` now |
+| `session` | object | `uptime_s`; `bind_ms` (start to `ready`); `first_ok_ms` (start to the first successful reply, null before) |
+| `proc`, `tokio`, `endpoint` | object | as in `stats` |
+| `final` | bool | the last event of the run |
+| `interrupted` | bool | ended by a signal (not by `--duration`) |
+
+A failed echo request or upload also prints an `error` event (`kind` as in
+`errors`, `elapsed_ms`).
+
 ## Exit codes
 
 | code | `probe` | `bench` | other commands |
@@ -403,6 +464,9 @@ Loss of packets the peer sends is not measured (`download_loss`).
 
 For `bench`, 3 wins over 4, and 4 over 5: a relay-only connection with
 failures exits with 4, and its issues are in the report.
+
+`soak` exits with 0 if every request and upload succeeded, 1 if no request
+succeeded (or setup failed), 2 for invalid arguments and 3 if some failed.
 
 SIGINT and SIGTERM stop `listen` and `directory` cleanly (exit 0), end a
 `probe` early with a `summary` and a `bench` early with a `bench_report`
