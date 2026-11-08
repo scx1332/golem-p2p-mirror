@@ -311,17 +311,19 @@ async fn soak_server(net: &TestNet, client_opts: NodeOpts, server_opts: NodeOpts
             let futs: Vec<_> = (0..n).map(|k| session(done + i + k)).collect();
             n0_future::join_all(futs).await;
             i += n;
+            // The shared discovery store holds 4096 records and, when full,
+            // evicts those that expire soonest: the server's own record,
+            // which it published first, unless it republishes (as it does
+            // every 20 minutes in real life, which this test is faster than).
+            if (done + i) % 2000 < n {
+                server.republish().await.expect("republish");
+            }
         }
         done += batch;
         wait_for(30, "connections closed", || server.stats().connections == 0).await;
         let c = Checkpoint::take(done, start, &server);
         assert_idle(&c.stats, "server");
         points.push(c);
-        // The shared discovery store holds 4096 records and, when full,
-        // evicts those that expire soonest: the server's own record, which
-        // it published first, unless it republishes (as it does every 20
-        // minutes in real life, which this test is faster than).
-        server.republish().await.expect("republish");
     }
     // iroh keeps per-remote state for 60 s after the last connection.
     println!("waiting 65 s for idle per-remote state to expire");
@@ -453,16 +455,27 @@ async fn soak_client_many_peers() {
         tokio::time::sleep(Duration::from_secs(65)).await;
         let after = Checkpoint::take(done, start, &client);
         assert_idle(&after.stats, "client after idle");
-        let anon: Vec<(f64, f64)> = points
+        let mem: Vec<(f64, f64)> = points
             .iter()
             .skip(points.len() / 5)
-            .map(|c| (c.cycles as f64, c.anon_kb as f64))
+            .map(|c| (c.cycles as f64, c.mem_kb() as f64))
             .collect();
-        let per_peer = slope(&anon) * 1024.0;
+        let running = slope(&mem) * 1024.0;
+        let per_peer = (after.mem_kb() as f64 - base.mem_kb() as f64) * 1024.0 / cycles as f64;
         println!(
-            "baseline: anon_kb={} tasks={} fds={}; after {cycles} peers and idle: anon_kb={} \
-             tasks={} fds={}; anon growth per peer after warm-up: {per_peer:.0} B",
-            base.anon_kb, base.tasks, base.fds, after.anon_kb, after.tasks, after.fds
+            "baseline: anon_kb={} heap={:?} tasks={} fds={}; after {cycles} peers and idle: \
+             anon_kb={} heap={:?} tasks={} fds={} cached={}/{}; memory (heap in use, or \
+             anon) per peer while running {running:.0} B, retained after idle {per_peer:.0} B",
+            base.anon_kb,
+            base.heap,
+            base.tasks,
+            base.fds,
+            after.anon_kb,
+            after.heap,
+            after.tasks,
+            after.fds,
+            after.stats.cached_identities,
+            after.stats.cached_endpoints,
         );
         assert!(
             after.tasks <= base.tasks + 4,
@@ -478,4 +491,183 @@ async fn soak_client_many_peers() {
         client.close().await;
     })
     .await;
+}
+
+/// Many requests on one long-lived connection: memory, tasks and tables of
+/// both ends do not grow with the number of requests (streams) served.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "soak test, minutes; run with --ignored"]
+async fn soak_requests_one_connection() {
+    with_timeout(3600, async {
+        let net = TestNet::new(0).await;
+        let requests = soak_cycles(200_000);
+        let (server, _s) = node(&net, NodeOpts::default()).await;
+        let _echo = spawn_echo(&server);
+        let (client, _c) = node(&net, NodeOpts::default()).await;
+        let to = server.node_id();
+        const PARALLEL: u64 = 16;
+        let start = Instant::now();
+        let burst = async |from: u64, n: u64| {
+            let mut i = 0;
+            while i < n {
+                let k = PARALLEL.min(n - i);
+                let futs: Vec<_> = (0..k)
+                    .map(|j| {
+                        let (client, data) = (&client, format!("{}", from + i + j));
+                        async move { echo(client, to, &data).await }
+                    })
+                    .collect();
+                for r in n0_future::join_all(futs).await {
+                    r.expect("echo");
+                }
+                i += k;
+            }
+        };
+        burst(0, 1000).await;
+        let base = Checkpoint::take(0, start, &server);
+        let mut points = vec![];
+        let step = (requests / 10).max(1);
+        let mut done = 0;
+        while done < requests {
+            let n = step.min(requests - done);
+            burst(done, n).await;
+            done += n;
+            points.push(Checkpoint::take(done, start, &server));
+        }
+        let s = server.stats();
+        assert_eq!(s.connections_incoming, 1, "one connection: {s:?}");
+        assert_eq!(client.stats().connections_outgoing, 1);
+        let tail: Vec<(f64, f64)> = points
+            .iter()
+            .skip(points.len() / 5)
+            .map(|c| (c.cycles as f64, c.mem_kb() as f64))
+            .collect();
+        let per_request = slope(&tail) * 1024.0;
+        let last = points.last().expect("checkpoints");
+        println!(
+            "baseline: heap={:?} anon_kb={} tasks={}; after {requests} requests: heap={:?} \
+             anon_kb={} tasks={}; memory (heap in use, or anon) per request after warm-up \
+             {per_request:.2} B",
+            base.heap, base.anon_kb, base.tasks, last.heap, last.anon_kb, last.tasks
+        );
+        assert!(
+            last.tasks <= base.tasks + 4,
+            "{} -> {}",
+            base.tasks,
+            last.tasks
+        );
+        assert!(
+            per_request < 16.0,
+            "memory grows by {per_request:.1} B per request"
+        );
+        client.close().await;
+        server.close().await;
+    })
+    .await;
+}
+
+/// Long-lived endpoints that are mostly idle, as yagna nodes are: `N` nodes
+/// homed on a local relay, each connected to a hub node and sending one
+/// request every 5 s, for `GOLEM_P2P_SOAK_MINUTES` (default 10). Prints the
+/// heap in use and tasks every minute: they must not grow with time. With
+/// `qad`, the nodes also learn their public address from the relay over
+/// QUIC (QAD) on every net report (every 20 to 26 s), as in production.
+async fn soak_idle(qad: bool) {
+    const N: usize = 20;
+    let minutes: u64 = std::env::var("GOLEM_P2P_SOAK_MINUTES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let net = TestNet::new(1).await;
+    let relay = &net.relays[0];
+    let relay_config = if qad {
+        relay.config.clone()
+    } else {
+        golem_p2p::iroh::RelayConfig::new(relay.url.clone(), None)
+    };
+    let bind = async || {
+        let signer = InMemorySigner::new();
+        let id = signer.generate();
+        Endpoint::builder(signer, Identities::new(id))
+            .discovery(net.discovery.clone())
+            .relay_tls(net.relay_tls())
+            .relay_config(relay_config.clone())
+            .bind_addr((std::net::Ipv4Addr::LOCALHOST, 0).into())
+            .online_timeout(Duration::from_secs(10))
+            .bind()
+            .await
+            .expect("bind")
+    };
+    let hub = bind().await;
+    let _echo = spawn_echo(&hub);
+    let mut nodes = Vec::new();
+    for _ in 0..N {
+        nodes.push(bind().await);
+    }
+    let to = hub.node_id();
+    let traffic: Vec<_> = nodes
+        .iter()
+        .map(|n| {
+            let n = n.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_secs(5));
+                loop {
+                    tick.tick().await;
+                    echo_eventually(&n, to, "idle", 20).await;
+                }
+            })
+        })
+        .collect();
+    let start = Instant::now();
+    let mut points = Vec::new();
+    for m in 0..=minutes {
+        if m > 0 {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+        points.push(Checkpoint::take(m, start, &hub));
+    }
+    for t in &traffic {
+        t.abort();
+    }
+    let tail: Vec<(f64, f64)> = points
+        .iter()
+        .skip(2)
+        .map(|c| (c.cycles as f64, c.mem_kb() as f64))
+        .collect();
+    let per_minute = slope(&tail);
+    let first = &points[2.min(points.len() - 1)];
+    let last = points.last().expect("checkpoints");
+    println!(
+        "qad={qad}: {N} nodes for {minutes} min: heap {:?} at minute 2, {:?} at the end; \
+         tasks {} -> {}; growth {per_minute:.1} KiB per minute ({:.0} B per node and minute)",
+        first.heap,
+        last.heap,
+        first.tasks,
+        last.tasks,
+        per_minute * 1024.0 / (N + 1) as f64,
+    );
+    assert!(
+        last.tasks <= first.tasks + 4,
+        "{} -> {}",
+        first.tasks,
+        last.tasks
+    );
+    for n in &nodes {
+        n.close().await;
+    }
+    hub.close().await;
+}
+
+/// Idle nodes with QUIC address discovery, see [`soak_idle`].
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "soak test, minutes; run with --ignored"]
+async fn soak_idle_nodes_qad() {
+    with_timeout(7200, soak_idle(true)).await;
+}
+
+/// Idle nodes without QUIC address discovery, see [`soak_idle`].
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "soak test, minutes; run with --ignored"]
+async fn soak_idle_nodes_no_qad() {
+    with_timeout(7200, soak_idle(false)).await;
 }
