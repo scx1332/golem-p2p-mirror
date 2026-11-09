@@ -15,6 +15,13 @@ What it reads (all optional except phases.jsonl):
   clients/*.jsonl       `soak_stats` events of the steady clients
   churn/*.jsonl         `soak_stats` (one per session), errors, session_exit
 
+Clients and churn workers named with a tag (client-TAG-<i>, churn-TAG-<w>:
+soak.sh with SOAK_TAG, e.g. one tag per NAT type) are also summarized per
+tag (`clients.groups`, `churn.groups`): requests, failures, reconnects
+(`new_conns`), the share of replies over a direct path, path changes seen
+between stats events, latency percentiles; `plot/paths.csv` has the direct
+share per tag per 5-minute bin.
+
 Growth analysis: for every series (RSS, anonymous memory, threads, file
 descriptors, sockets of each process; tokio tasks and connection tables of
 the listener; store size of the directory) it reports the idle baseline, the
@@ -258,6 +265,13 @@ def pct(vals, p):
     return s[k - 1]
 
 
+def group_of(path):
+    """client-TAG-3.jsonl -> client-TAG; churn-2.jsonl -> churn."""
+    name = os.path.basename(path).split(".")[0]
+    head, _, tail = name.rpartition("-")
+    return head if head and tail.isdigit() else name
+
+
 def summarize(d):
     ph = Phases(d)
     meta = {}
@@ -490,15 +504,43 @@ def summarize(d):
     client_files = jsonl_files(os.path.join(d, "clients"))
     totals_c = {"sent": 0, "ok": 0, "failed": 0, "bulk_ok": 0, "bulk_failed": 0, "new_conns": 0}
     clients_final = 0
+    # Per tag (client-TAG-<i>): totals, direct share, path changes, latency.
+    groups = defaultdict(lambda: {"clients": 0, "sent": 0, "ok": 0, "failed": 0, "new_conns": 0,
+                                  "direct_ok": 0.0, "bulk_ok": 0, "bulk_failed": 0, "path_changes": 0,
+                                  "clients_with_path_change": 0, "final_paths": defaultdict(int),
+                                  "errors": defaultdict(int), "hist": defaultdict(int)})
+    gbins = defaultdict(lambda: defaultdict(lambda: [0, 0.0]))  # bin -> tag -> [ok, direct ok]
     for path in client_files:
         evs = load_jsonl(path)
         last_tot = None
+        tag = group_of(path)
+        g = groups[tag]
+        g["clients"] += 1
+        prev_path, changes = None, 0
         for e in evs:
             if e.get("event") != "soak_stats":
                 continue
             t = ts_epoch(e["ts"])
             b = int((t - t0) // BIN_S) if t0 else 0
             x = bins[b]
+            ok, df = e.get("ok", 0), e.get("direct_fraction")
+            for k in ("sent", "ok", "failed", "new_conns"):
+                g[k] += e.get(k, 0)
+            if df is not None:
+                g["direct_ok"] += ok * df
+                gbins[b][tag][1] += ok * df
+            gbins[b][tag][0] += ok
+            for k, v in (e.get("rtt_hist") or {}).items():
+                g["hist"][k] += v
+            for k, v in (e.get("errors") or {}).items():
+                g["errors"][k] += v
+            bl = e.get("bulk") or {}
+            g["bulk_ok"] += bl.get("ok", 0)
+            g["bulk_failed"] += bl.get("failed", 0)
+            pth = e.get("path")
+            if pth and prev_path and pth != prev_path:
+                changes += 1
+            prev_path = pth or prev_path
             for k, v in (e.get("rtt_hist") or {}).items():
                 x["hist"][k] += v
             rt = e.get("rtt_ms") or {}
@@ -526,6 +568,10 @@ def summarize(d):
         if last_tot:
             for k in totals_c:
                 totals_c[k] += last_tot.get(k, 0)
+        g["path_changes"] += changes
+        g["clients_with_path_change"] += bool(changes)
+        if prev_path:
+            g["final_paths"][prev_path] += 1
     lat_rows = []
     lat_p50, lat_p99 = [], []
     for b in sorted(bins):
@@ -598,6 +644,27 @@ def summarize(d):
                 alive.append(a["slope_per_h"])
         if alive:
             lat["client_alive_tasks_slope_per_h"] = {"median": r(statistics.median(alive)), "max": r(max(alive))}
+    if lat is not None and (len(groups) > 1 or any(k != "client" for k in groups)):
+        out_g = {}
+        for tag, g in sorted(groups.items()):
+            out_g[tag] = {
+                "clients": g["clients"], "sent": g["sent"], "ok": g["ok"], "failed": g["failed"],
+                "new_conns": g["new_conns"], "bulk_ok": g["bulk_ok"], "bulk_failed": g["bulk_failed"],
+                "direct_share": r(g["direct_ok"] / g["ok"]) if g["ok"] else None,
+                "path_changes": g["path_changes"], "clients_with_path_change": g["clients_with_path_change"],
+                "final_paths": dict(g["final_paths"]), "errors": dict(g["errors"]),
+                "hist_p50_ms": hist_percentile(g["hist"], 50), "hist_p99_ms": hist_percentile(g["hist"], 99),
+                "hist_p999_ms": hist_percentile(g["hist"], 99.9),
+            }
+        lat["groups"] = out_g
+        tags = sorted(groups)
+        with open(os.path.join(plot, "paths.csv"), "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["t_min"] + [f"{t}_ok" for t in tags] + [f"{t}_direct_share" for t in tags])
+            for b in sorted(gbins):
+                row = [b * BIN_S / 60] + [gbins[b][t][0] for t in tags]
+                row += [r(gbins[b][t][1] / gbins[b][t][0]) if gbins[b][t][0] else None for t in tags]
+                w.writerow(row)
     summary["clients"] = lat
 
     # --- churn
@@ -607,9 +674,29 @@ def summarize(d):
         exits = defaultdict(int)
         cerr = defaultdict(int)
         cbins = defaultdict(lambda: {"n": 0, "fail": 0, "bind": [], "first": [], "fresh": 0, "reuse": 0})
+        cgroups = defaultdict(lambda: {"sessions": 0, "failed": 0, "bind": [], "first": [], "requests": 0,
+                                       "requests_failed": 0, "direct_ok": 0.0, "ok": 0, "errors": defaultdict(int)})
         for path in churn_files:
+            cg = cgroups[group_of(path)]
             for e in load_jsonl(path):
                 ev = e.get("event")
+                if ev == "session_exit":
+                    cg["sessions"] += 1
+                    cg["failed"] += e.get("code") != 0
+                elif ev == "soak_stats" and e.get("final"):
+                    s_ = e.get("session") or {}
+                    if s_.get("bind_ms") is not None:
+                        cg["bind"].append(s_["bind_ms"])
+                    if s_.get("first_ok_ms") is not None:
+                        cg["first"].append(s_["first_ok_ms"])
+                    tot = e.get("totals") or {}
+                    cg["requests"] += tot.get("sent", 0)
+                    cg["requests_failed"] += tot.get("failed", 0)
+                    if e.get("direct_fraction") is not None:
+                        cg["direct_ok"] += e.get("ok", 0) * e["direct_fraction"]
+                    cg["ok"] += e.get("ok", 0)
+                elif ev == "error":
+                    cg["errors"][e.get("kind", "?")] += 1
                 if ev == "session_exit":
                     t = float(e["ts"])
                     exits[e.get("code")] += 1
@@ -667,6 +754,13 @@ def summarize(d):
                     flags.append(f"churn {name} grows {r(f[0] * 3600, 1)} ms/h (R2 {r(f[2])})")
         if nsess and exits.get(0, 0) < nsess:
             ch["failed_sessions"] = nsess - exits.get(0, 0)
+        if len(cgroups) > 1 or any(k != "churn" for k in cgroups):
+            ch["groups"] = {tag: {"sessions": g["sessions"], "failed": g["failed"], "requests": g["requests"],
+                                  "requests_failed": g["requests_failed"], "errors": dict(g["errors"]),
+                                  "direct_share_last_window": r(g["direct_ok"] / g["ok"]) if g["ok"] else None,
+                                  "bind_ms": {"p50": pct(g["bind"], 50), "p99": pct(g["bind"], 99)},
+                                  "first_ok_ms": {"p50": pct(g["first"], 50), "p99": pct(g["first"], 99)}}
+                            for tag, g in sorted(cgroups.items())}
         summary["churn"] = ch
 
     summary["flags"] = flags

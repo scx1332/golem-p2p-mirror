@@ -23,13 +23,16 @@ campaign/campaign1.sh    benchmark campaign 1 (lab matrix, real world, relay, st
 campaign/campaign2.sh    campaign 2: the same scenarios after the bench/timeout fixes
 campaign/campaign3.sh    campaign 3: the same scenarios after the loss/relay-fallback/sizing fixes
 campaign/campaign4.sh    campaign 4: the same scenarios after the upload-count/concurrency fixes
+campaign/campaign5.sh    campaign 5: the same scenarios after the cancel-on-the-wire/restart fixes
 campaign/summarize.py    campaign directory -> summary.json + table.md (all bench formats)
+campaign/cutoff.py       lossy-link concurrency: restarts, went-on, cut-off requests at the listener
 campaign/compare.py      two campaign directories -> compare.json + compare.md;
                          --series: several -> compare<N>.json + compare<N>.md
 soak/soak.sh             soak tests: many clients against one listener for hours,
                          resources sampled over time (section "Soak tests")
 soak/sampler.py          samples RSS, heap, threads, fds, sockets, CPU of the run's processes
 soak/summarize.py        soak run -> summary.json, table.md, plot/*.csv (growth fits)
+soak/remote-lab.sh       remote soak: services here, clients in NAT lab nodes, real relay(s)
 results/<date>-<name>/   raw data and summaries of campaigns and soak runs
 ```
 
@@ -507,6 +510,29 @@ soak.sh churn --out ~/soak/r1 --workers 6 --session 3s     # or churn
 # at the end, on every host
 soak.sh stop --out ~/soak/r1
 ```
+
+`soak.sh phase <idle|load_start|load_end|cooldown|end> --out DIR` records the
+phases of such a split run (`run` does it itself). `SOAK_TAG=<tag>` names the
+clients and churn workers of one call `client-<tag>-<i>` / `churn-<tag>-<w>`,
+so several calls (one per lab node or NAT type) share a run directory; the
+sampler aggregates them per tag, and `summarize.py` adds per-tag totals,
+direct share, path changes and latency (`clients.groups`, `churn.groups`,
+`plot/paths.csv`). `SOAK_DIRECTORY_PORT` fixes the directory's TCP port, and
+`--relay-only` given to `clients`/`churn` wins over the listener's setting
+in `DIR/env`.
+
+`soak/remote-lab.sh --out DIR setup services load stop collect cleanup` is
+the remote soak of 2026-11-08 ([results/2026-11-08-soak-remote/](results/2026-11-08-soak-remote/)):
+listener and directory on the build machine (UDP and TCP port 8000, open in
+its firewall), clients and churn in NAT lab nodes with `uplink=real`
+(`topologies/soak-real.topo`: easy, port-restricted, symmetric, udp-blocked,
+relay-only, a 20 s NAT timeout), the real relay, and a second iroh-relay on
+the relay VM (port 56010, small `key_cache_capacity`) serving only a
+relay-only churn stream against a second, relay-only listener, to compare the
+relays' memory per new client key. `stop` waits for the cool-down; `collect`
+merges the lab VM's and relay VM's samples and the clients' events into
+`DIR/main` and `DIR/keycache` and summarizes them; `cleanup` takes the lab
+down and removes the second relay, the samplers and their files.
 
 ## Driving it from a controller
 
