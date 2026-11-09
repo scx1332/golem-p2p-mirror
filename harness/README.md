@@ -33,6 +33,7 @@ soak/soak.sh             soak tests: many clients against one listener for hours
 soak/sampler.py          samples RSS, heap, threads, fds, sockets, CPU of the run's processes
 soak/summarize.py        soak run -> summary.json, table.md, plot/*.csv (growth fits)
 soak/remote-lab.sh       remote soak: services here, clients in NAT lab nodes, real relay(s)
+soak/remote_summary.py   remote soak run -> DIR/summary.json (relays' memory per new client key, hosts)
 results/<date>-<name>/   raw data and summaries of campaigns and soak runs
 ```
 
@@ -522,7 +523,7 @@ direct share, path changes and latency (`clients.groups`, `churn.groups`,
 in `DIR/env`.
 
 `soak/remote-lab.sh --out DIR setup services load stop collect cleanup` is
-the remote soak of 2026-11-08 ([results/2026-11-08-soak-remote/](results/2026-11-08-soak-remote/)):
+the remote soak (its results are not in the repository yet):
 listener and directory on the build machine (UDP and TCP port 8000, open in
 its firewall), clients and churn in NAT lab nodes with `uplink=real`
 (`topologies/soak-real.topo`: easy, port-restricted, symmetric, udp-blocked,

@@ -26,7 +26,8 @@ debug/lossy-extra/run*/), from bench.jsonl and the listener's listen.jsonl:
   campaigns up to 4; code 11: CANCELLED, the bench reset the request).
 
 Campaign 4 found that cut-off requests reached the listener up to 3.9 s
-after the phase (7 of 13 runs); from campaign 5 on golem-p2p resets them.
+after the phase (in 9 of 13 runs, more than 200 ms after it in 5); from
+campaign 5 on golem-p2p resets them.
 """
 
 import argparse
